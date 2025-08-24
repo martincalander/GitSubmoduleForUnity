@@ -1,0 +1,19 @@
+{
+  "name": "com.martincalander.submodulehelper",
+  "version": "0.1.0",
+  "displayName": "Submodule Helper",
+  "description": "A small helper tool for submodule through git.",
+  "unity": "2021.3",
+  "unityRelease": "0b1",
+  "keywords": [
+    "GitHub",
+	"Submodule"
+  ],
+  "author": {
+    "name": "Martin Calander",
+	"email": "martin.calander@gmail.com",
+	"url": "https://martincalander.com"
+  },
+  "dependencies": {
+  }
+}
