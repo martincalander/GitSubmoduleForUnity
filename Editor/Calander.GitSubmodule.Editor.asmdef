@@ -1,6 +1,6 @@
 {
-    "name": "MartinCalander.SubmoduleHelper.Editor",
-    "rootNamespace": "",
+    "name": "Calander.GitSubmodule.Editor",
+    "rootNamespace": "Calander.GitSubmodule.Editor",
     "references": [],
     "includePlatforms": [
         "Editor"

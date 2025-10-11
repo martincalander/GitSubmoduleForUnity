@@ -5,7 +5,9 @@ using System.Collections.Generic;
 using System.Text.RegularExpressions;
 using System.Diagnostics;
 
-public class GitSubmodulesWindow : EditorWindow
+namespace Calander.SubmodulePackageManager.Editor
+{
+	public class GitSubmodulesWindow : EditorWindow
 {
 	private Vector2 scrollPos;
 	private List<GitSubmodule> submodules;
@@ -14,13 +16,7 @@ public class GitSubmodulesWindow : EditorWindow
 	private string addBranch = "main";
 	private string addName = "";
 
-	[MenuItem("Help/Git Submodules")]
-	public static void ShowWindow()
-	{
-		var window = GetWindow<GitSubmodulesWindow>("Git Submodules");
-		window.RefreshSubmodules();
-		window.Show();
-	}
+
 
 	private void OnGUI()
 	{
@@ -79,7 +75,7 @@ public class GitSubmodulesWindow : EditorWindow
 	}
 
 	// ---------- Core ----------
-	private void RefreshSubmodules()
+	internal void RefreshSubmodules()
 	{
 		submodules = new List<GitSubmodule>();
 
@@ -130,7 +126,7 @@ public class GitSubmodulesWindow : EditorWindow
 		var result = new Dictionary<string, string>();
 		try
 		{
-			string output = RunGitCommand("submodule status", workingDir);
+			string output = GitUtility.RunGitCommand("submodule status", workingDir);
 
 			var lineRegex = new Regex(@"^[ +-]?([0-9a-f]{7,40})\s+([^\s]+)", RegexOptions.Multiline);
 			foreach (Match match in lineRegex.Matches(output))
@@ -159,7 +155,7 @@ public class GitSubmodulesWindow : EditorWindow
 		string packagePath = GetPackagePath(name, url);
 
 		string args = $"submodule add -b {branch} {url} {packagePath}";
-		string output = RunGitCommand(args, Directory.GetCurrentDirectory());
+		string output = GitUtility.RunGitCommand(args, Directory.GetCurrentDirectory());
 		UnityEngine.Debug.Log($"Added submodule '{name}' → {packagePath}\n{output}");
 	}
 
@@ -191,8 +187,8 @@ public class GitSubmodulesWindow : EditorWindow
 	{
 		string root = Directory.GetCurrentDirectory();
 
-		RunGitCommand($"submodule deinit -f -- {path}", root);
-		RunGitCommand($"rm -f {path}", root);
+		GitUtility.RunGitCommand($"submodule deinit -f -- {path}", root);
+		GitUtility.RunGitCommand($"rm -f {path}", root);
 
 		string moduleMeta = Path.Combine(root, ".git/modules", path.Replace("\\", "/"));
 		if (Directory.Exists(moduleMeta))
@@ -202,39 +198,15 @@ public class GitSubmodulesWindow : EditorWindow
 
 		UnityEngine.Debug.Log($"Removed submodule at {path}");
 	}
-
-	// ---------- Util ----------
-	private string RunGitCommand(string arguments, string workingDir)
-	{
-		ProcessStartInfo psi = new ProcessStartInfo
-		{
-			FileName = "git",
-			Arguments = arguments,
-			WorkingDirectory = workingDir,
-			RedirectStandardOutput = true,
-			RedirectStandardError = true,
-			UseShellExecute = false,
-			CreateNoWindow = true
-		};
-
-		using (Process process = Process.Start(psi))
-		{
-			string output = process.StandardOutput.ReadToEnd();
-			string error = process.StandardError.ReadToEnd();
-			process.WaitForExit();
-
-			if (!string.IsNullOrEmpty(error))
-				UnityEngine.Debug.LogWarning(error);
-
-			return output;
-		}
-	}
-
-	private class GitSubmodule
+	
+	public class GitSubmodule
 	{
 		public string Name;
 		public string Path;
 		public string Url;
 		public string CommitHash;
 	}
+
+
+}
 }
