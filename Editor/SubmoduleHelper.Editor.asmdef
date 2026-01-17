@@ -1,6 +1,6 @@
 {
-    "name": "GitModuleForUnity.Editor",
-    "rootNamespace": "GitModuleForUnity.Editor",
+    "name": "SubmoduleHelper.Editor",
+    "rootNamespace": "SubmoduleHelper.Editor",
     "references": [],
     "includePlatforms": [
         "Editor"
