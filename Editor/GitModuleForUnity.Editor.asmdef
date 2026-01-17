@@ -1,6 +1,6 @@
 {
-    "name": "Calander.GitSubmodule.Editor",
-    "rootNamespace": "Calander.GitSubmodule.Editor",
+    "name": "GitModuleForUnity.Editor",
+    "rootNamespace": "GitModuleForUnity.Editor",
     "references": [],
     "includePlatforms": [
         "Editor"
