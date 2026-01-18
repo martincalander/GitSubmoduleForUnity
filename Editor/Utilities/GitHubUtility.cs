@@ -19,7 +19,7 @@ namespace Calander.SubmodulePackageManager.Editor
 
     internal static class GitHubUtility
     {
-        private static readonly Regex GitHubRepoRegex = new Regex(@"github\.com[:/](?<owner>[^/]+)/(?<repo>[^/]+?)(?:\.git)?/?$", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+        private static readonly Regex GitHubRepoRegex = new Regex(@"github\.com[:/](?<owner>[^/]+)/(?<repo>[^/]+?)(?:\.git)?(?=/|$)", RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
         internal static bool IsGhAvailable(out string version, out string error)
         {

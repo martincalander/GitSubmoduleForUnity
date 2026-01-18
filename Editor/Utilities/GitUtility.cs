@@ -185,6 +185,45 @@ namespace Calander.SubmodulePackageManager.Editor
             return true;
         }
 
+        internal static bool TryUpdateSubmodule(string path, out string error)
+        {
+            error = string.Empty;
+            string root = ProjectRoot;
+            string normalizedPath = NormalizePath(path);
+
+            var result = RunGit($"submodule update --remote --merge -- {Quote(normalizedPath)}", root);
+            if (!result.IsSuccess)
+            {
+                error = BuildError("Failed to update submodule", result);
+                return false;
+            }
+
+            return true;
+        }
+
+        internal static bool TrySetSubmoduleBranch(string path, string branch, out string error)
+        {
+            error = string.Empty;
+            if (string.IsNullOrWhiteSpace(branch))
+            {
+                error = "Branch name is required.";
+                return false;
+            }
+
+            string root = ProjectRoot;
+            string normalizedPath = NormalizePath(path);
+            string trimmedBranch = branch.Trim();
+
+            var result = RunGit($"submodule set-branch --branch {Quote(trimmedBranch)} -- {Quote(normalizedPath)}", root);
+            if (!result.IsSuccess)
+            {
+                error = BuildError("Failed to change submodule branch", result);
+                return false;
+            }
+
+            return true;
+        }
+
         internal static CommandResult RunGit(string arguments, string workingDir)
         {
             return CliCommandRunner.Run("git", arguments, workingDir);

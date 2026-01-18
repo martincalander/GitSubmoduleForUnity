@@ -57,13 +57,18 @@ namespace Calander.SubmodulePackageManager.Editor
         private string selectedRepoPackageName = string.Empty;
         private string selectedRepoBranch = string.Empty;
 
+        private int lastInstalledIndex = -1;
+        private string installedBranchInput = string.Empty;
+        private string installedActionStatus = string.Empty;
+        private MessageType installedActionStatusType = MessageType.None;
+
+        private AddFromUrlPopup activeAddPopup;
+
         private void OnEnable()
         {
             RefreshDependencies();
             RefreshInstalled();
         }
-
-        private bool showAddFromUrl = true;
 
         private void OnGUI()
         {
@@ -91,6 +96,12 @@ namespace Calander.SubmodulePackageManager.Editor
         {
             EditorGUILayout.BeginHorizontal(EditorStyles.toolbar);
 
+            Rect addButtonRect = GUILayoutUtility.GetRect(new GUIContent("+ Add"), EditorStyles.toolbarButton);
+            if (GUI.Button(addButtonRect, "+ Add", EditorStyles.toolbarButton))
+            {
+                ShowAddFromUrlPopup(addButtonRect);
+            }
+
             Tab previousTab = currentTab;
             int selected = GUILayout.Toolbar((int)currentTab, new[] { "Installed", "Discover" }, EditorStyles.toolbarButton);
             currentTab = (Tab)selected;
@@ -102,15 +113,6 @@ namespace Calander.SubmodulePackageManager.Editor
             }
 
             GUILayout.FlexibleSpace();
-
-            if (currentTab == Tab.Discover)
-            {
-                if (GUILayout.Button("+ Add from URL", EditorStyles.toolbarButton))
-                {
-                    showAddFromUrl = !showAddFromUrl;
-                    Repaint();
-                }
-            }
 
             if (GUILayout.Button("Refresh", EditorStyles.toolbarButton))
             {
@@ -164,7 +166,7 @@ namespace Calander.SubmodulePackageManager.Editor
 
         private void DrawDependencyCard(string title, string error, ToolKind tool, Action installAction)
         {
-            EditorGUILayout.BeginVertical("box");
+            EditorGUILayout.BeginVertical(EditorStyles.helpBox);
             EditorGUILayout.LabelField($"{title} is required.", EditorStyles.boldLabel);
             if (!string.IsNullOrWhiteSpace(error))
             {
@@ -352,7 +354,7 @@ namespace Calander.SubmodulePackageManager.Editor
                 string suffix = submodule.HasPackageJson ? string.Empty : " (missing package.json)";
                 bool selected = i == selectedInstalledIndex;
 
-                if (GUILayout.Toggle(selected, label + suffix, "Button"))
+                if (GUILayout.Toggle(selected, label + suffix, EditorStyles.toolbarButton))
                 {
                     selectedInstalledIndex = i;
                 }
@@ -364,7 +366,7 @@ namespace Calander.SubmodulePackageManager.Editor
 
         private void DrawInstalledDetails()
         {
-            EditorGUILayout.BeginVertical("box");
+            EditorGUILayout.BeginVertical(EditorStyles.helpBox);
 
             if (selectedInstalledIndex < 0 || selectedInstalledIndex >= installedSubmodules.Count)
             {
@@ -374,6 +376,14 @@ namespace Calander.SubmodulePackageManager.Editor
             }
 
             SubmoduleInfo submodule = installedSubmodules[selectedInstalledIndex];
+            if (lastInstalledIndex != selectedInstalledIndex)
+            {
+                installedBranchInput = string.IsNullOrWhiteSpace(submodule.Branch) ? "main" : submodule.Branch;
+                installedActionStatus = string.Empty;
+                installedActionStatusType = MessageType.None;
+                lastInstalledIndex = selectedInstalledIndex;
+            }
+
             detailsScroll = EditorGUILayout.BeginScrollView(detailsScroll);
 
             EditorGUILayout.LabelField(submodule.PackageName ?? submodule.Name, EditorStyles.boldLabel);
@@ -395,11 +405,78 @@ namespace Calander.SubmodulePackageManager.Editor
                 EditorGUILayout.HelpBox("This submodule does not contain a package.json at its root.", MessageType.Warning);
             }
 
+            EditorGUILayout.Space();
+            EditorGUILayout.LabelField("Actions", EditorStyles.boldLabel);
+            installedBranchInput = EditorGUILayout.TextField("Branch", installedBranchInput);
+
+            if (!string.IsNullOrWhiteSpace(installedActionStatus))
+            {
+                EditorGUILayout.HelpBox(installedActionStatus, installedActionStatusType);
+            }
+
             EditorGUILayout.EndScrollView();
             GUILayout.FlexibleSpace();
 
             using (new EditorGUI.DisabledScope(!gitAvailable))
             {
+                EditorGUILayout.BeginHorizontal();
+                if (GUILayout.Button("Update"))
+                {
+                    if (EditorUtility.DisplayDialog("Update Submodule", $"Fetch and update:\n{submodule.Path} ?", "Update", "Cancel"))
+                    {
+                        if (!GitUtility.TryUpdateSubmodule(submodule.Path, out string error))
+                        {
+                            installedActionStatus = error;
+                            installedActionStatusType = MessageType.Error;
+                        }
+                        else
+                        {
+                            installedActionStatus = "Submodule updated.";
+                            installedActionStatusType = MessageType.Info;
+                            RefreshInstalled();
+                        }
+                    }
+                }
+
+                if (GUILayout.Button("Apply Branch"))
+                {
+                    string branch = installedBranchInput.Trim();
+                    if (string.IsNullOrWhiteSpace(branch))
+                    {
+                        installedActionStatus = "Branch name is required.";
+                        installedActionStatusType = MessageType.Warning;
+                    }
+                    else if (EditorUtility.DisplayDialog("Change Branch", $"Change branch for:\n{submodule.Path}\n\nNew branch: {branch}", "Change", "Cancel"))
+                    {
+                        if (!GitUtility.TrySetSubmoduleBranch(submodule.Path, branch, out string error))
+                        {
+                            installedActionStatus = error;
+                            installedActionStatusType = MessageType.Error;
+                        }
+                        else
+                        {
+                            installedActionStatus = $"Branch set to {branch}.";
+                            installedActionStatusType = MessageType.Info;
+                            RefreshInstalled();
+                            if (EditorUtility.DisplayDialog("Update Submodule", "Update to the new branch now?", "Update", "Later"))
+                            {
+                                if (!GitUtility.TryUpdateSubmodule(submodule.Path, out string updateError))
+                                {
+                                    installedActionStatus = updateError;
+                                    installedActionStatusType = MessageType.Error;
+                                }
+                                else
+                                {
+                                    installedActionStatus = "Submodule updated.";
+                                    installedActionStatusType = MessageType.Info;
+                                    RefreshInstalled();
+                                }
+                            }
+                        }
+                    }
+                }
+                EditorGUILayout.EndHorizontal();
+
                 if (GUILayout.Button("Remove Submodule"))
                 {
                     if (EditorUtility.DisplayDialog("Remove Submodule", $"Remove submodule at {submodule.Path}?", "Remove", "Cancel"))
@@ -420,12 +497,6 @@ namespace Calander.SubmodulePackageManager.Editor
 
         private void DrawDiscoverTab()
         {
-            if (showAddFromUrl)
-            {
-                DrawAddByUrl();
-                EditorGUILayout.Space();
-            }
-
             if (!string.IsNullOrWhiteSpace(discoverStatus))
             {
                 EditorGUILayout.HelpBox(discoverStatus, discoverStatusType);
@@ -445,7 +516,7 @@ namespace Calander.SubmodulePackageManager.Editor
 
         private void DrawAddByUrl()
         {
-            EditorGUILayout.BeginVertical("box");
+            EditorGUILayout.BeginVertical(EditorStyles.helpBox);
             EditorGUILayout.LabelField("Add package from Git URL", EditorStyles.boldLabel);
 
             EditorGUI.BeginChangeCheck();
@@ -460,6 +531,14 @@ namespace Calander.SubmodulePackageManager.Editor
 
             addBranch = EditorGUILayout.TextField("Branch", addBranch);
             addPackageName = EditorGUILayout.TextField("Package Name", addPackageName);
+
+            if (TryDerivePackageNameFromUrl(addUrl, out string autoName))
+            {
+                if (string.IsNullOrWhiteSpace(addPackageName) || !GitUtility.IsValidPackageName(addPackageName))
+                {
+                    addPackageName = autoName;
+                }
+            }
 
             string validationError = ValidatePackageInput(addUrl, addPackageName);
             if (!string.IsNullOrWhiteSpace(validationError))
@@ -526,7 +605,7 @@ namespace Calander.SubmodulePackageManager.Editor
                 }
 
                 bool selected = i == selectedRepoIndex;
-                if (GUILayout.Toggle(selected, label, "Button"))
+                if (GUILayout.Toggle(selected, label, EditorStyles.toolbarButton))
                 {
                     if (selectedRepoIndex != i)
                     {
@@ -542,7 +621,7 @@ namespace Calander.SubmodulePackageManager.Editor
 
         private void DrawRepoDetails()
         {
-            EditorGUILayout.BeginVertical("box");
+            EditorGUILayout.BeginVertical(EditorStyles.helpBox);
 
             if (selectedRepoIndex < 0 || selectedRepoIndex >= availableRepos.Count)
             {
@@ -735,6 +814,12 @@ namespace Calander.SubmodulePackageManager.Editor
             addStatusType = MessageType.Info;
             RefreshInstalled();
             RefreshAvailable();
+
+            if (activeAddPopup != null)
+            {
+                activeAddPopup.ClosePopup();
+                activeAddPopup = null;
+            }
         }
 
         private void RollbackSubmodule(string path, string message)
@@ -757,6 +842,44 @@ namespace Calander.SubmodulePackageManager.Editor
         private static string GetPackagePath(string packageName)
         {
             return $"Packages/{packageName}";
+        }
+
+        private void ShowAddFromUrlPopup(Rect buttonRect)
+        {
+            addStatus = string.Empty;
+            addStatusType = MessageType.None;
+            activeAddPopup = new AddFromUrlPopup(this);
+            PopupWindow.Show(buttonRect, activeAddPopup);
+        }
+
+        private sealed class AddFromUrlPopup : PopupWindowContent
+        {
+            private readonly GitSubmodulesWindow owner;
+
+            public AddFromUrlPopup(GitSubmodulesWindow owner)
+            {
+                this.owner = owner;
+            }
+
+            public override Vector2 GetWindowSize()
+            {
+                return new Vector2(420f, 260f);
+            }
+
+            public override void OnGUI(Rect rect)
+            {
+                owner.DrawAddByUrl();
+            }
+
+            public override void OnClose()
+            {
+                owner.activeAddPopup = null;
+            }
+
+            public void ClosePopup()
+            {
+                editorWindow?.Close();
+            }
         }
     }
 }
