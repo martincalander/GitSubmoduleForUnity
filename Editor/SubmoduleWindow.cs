@@ -14,14 +14,146 @@ namespace Calander.SubmodulePackageManager.Editor
             Discover
         }
 
+        private enum SortOption
+        {
+            Name,
+            RecentlyUpdated
+        }
+
+        private enum FilterOption
+        {
+            All,
+            ValidPackagesOnly,
+            PublicOnly,
+            PrivateOnly
+        }
+
         private const string PackageNameRule = "Package name must follow com.author.package (lowercase).";
-        private const float ListPaneRatio = 0.35f;
-        private const double AutoRefreshIntervalSeconds = 300.0; // 5 minutes
+        private const float ListPaneWidth = 320f;
+        private const double AutoRefreshIntervalSeconds = 300.0;
+
+        private static class Styles
+        {
+            public static GUIStyle ListItem;
+            public static GUIStyle ListItemSelected;
+            public static GUIStyle HeaderLabel;
+            public static GUIStyle TitleLabel;
+            public static GUIStyle SubtitleLabel;
+            public static GUIStyle DescriptionLabel;
+            public static GUIStyle InfoBox;
+            public static GUIStyle InfoLabel;
+            public static GUIStyle InfoValue;
+            public static GUIStyle FooterLabel;
+            public static GUIStyle LinkButton;
+            public static GUIStyle SectionHeader;
+            public static GUIStyle DisabledLabel;
+            public static bool Initialized;
+
+            public static void Initialize()
+            {
+                if (Initialized) return;
+
+                ListItem = new GUIStyle(EditorStyles.label)
+                {
+                    padding = new RectOffset(8, 8, 6, 6),
+                    margin = new RectOffset(0, 0, 0, 0),
+                    fixedHeight = 0,
+                    stretchWidth = true
+                };
+
+                ListItemSelected = new GUIStyle(ListItem);
+                ListItemSelected.normal.background = CreateColorTexture(new Color(0.17f, 0.36f, 0.53f, 1f));
+                ListItemSelected.normal.textColor = Color.white;
+
+                HeaderLabel = new GUIStyle(EditorStyles.boldLabel)
+                {
+                    fontSize = 11,
+                    padding = new RectOffset(4, 4, 4, 4)
+                };
+
+                TitleLabel = new GUIStyle(EditorStyles.largeLabel)
+                {
+                    fontSize = 18,
+                    fontStyle = FontStyle.Bold,
+                    wordWrap = true,
+                    margin = new RectOffset(0, 0, 0, 4)
+                };
+
+                SubtitleLabel = new GUIStyle(EditorStyles.label)
+                {
+                    fontSize = 11,
+                    normal = { textColor = new Color(0.6f, 0.6f, 0.6f) },
+                    margin = new RectOffset(0, 0, 0, 2)
+                };
+
+                DescriptionLabel = new GUIStyle(EditorStyles.label)
+                {
+                    wordWrap = true,
+                    fontSize = 12,
+                    margin = new RectOffset(0, 0, 8, 8)
+                };
+
+                InfoBox = new GUIStyle()
+                {
+                    padding = new RectOffset(12, 12, 10, 10),
+                    margin = new RectOffset(0, 0, 8, 8)
+                };
+                InfoBox.normal.background = CreateColorTexture(new Color(0.22f, 0.22f, 0.22f, 1f));
+
+                InfoLabel = new GUIStyle(EditorStyles.label)
+                {
+                    fontSize = 11,
+                    normal = { textColor = new Color(0.65f, 0.65f, 0.65f) },
+                    alignment = TextAnchor.MiddleLeft
+                };
+
+                InfoValue = new GUIStyle(EditorStyles.label)
+                {
+                    fontSize = 11,
+                    alignment = TextAnchor.MiddleLeft,
+                    wordWrap = true
+                };
+
+                FooterLabel = new GUIStyle(EditorStyles.miniLabel)
+                {
+                    fontSize = 10,
+                    normal = { textColor = new Color(0.5f, 0.5f, 0.5f) },
+                    padding = new RectOffset(8, 8, 4, 4)
+                };
+
+                LinkButton = new GUIStyle(EditorStyles.linkLabel)
+                {
+                    fontSize = 11,
+                    margin = new RectOffset(0, 12, 0, 0)
+                };
+
+                SectionHeader = new GUIStyle(EditorStyles.label)
+                {
+                    fontSize = 11,
+                    fontStyle = FontStyle.Bold,
+                    padding = new RectOffset(0, 0, 8, 4)
+                };
+
+                DisabledLabel = new GUIStyle(EditorStyles.label)
+                {
+                    normal = { textColor = new Color(0.5f, 0.5f, 0.5f) }
+                };
+
+                Initialized = true;
+            }
+
+            private static Texture2D CreateColorTexture(Color color)
+            {
+                var tex = new Texture2D(1, 1);
+                tex.SetPixel(0, 0, color);
+                tex.Apply();
+                return tex;
+            }
+        }
 
         private Tab currentTab = Tab.Installed;
 
-        private Vector2 installedScroll;
-        private Vector2 discoverScroll;
+        private Vector2 listScroll;
         private Vector2 detailsScroll;
 
         private List<SubmoduleInfo> installedSubmodules = new List<SubmoduleInfo>();
@@ -54,15 +186,21 @@ namespace Calander.SubmodulePackageManager.Editor
         private string addStatus = string.Empty;
         private MessageType addStatusType = MessageType.None;
 
-        private string repoSearch = string.Empty;
+        private string searchFilter = string.Empty;
         private string selectedRepoPackageName = string.Empty;
         private string selectedRepoBranch = string.Empty;
 
+        private SortOption currentSort = SortOption.Name;
+        private FilterOption currentFilter = FilterOption.All;
+
         private RepoListHandle repoListHandle;
         private bool isLoadingRepos;
+        private bool isCheckingPackageJson;
+        private int packageJsonCheckIndex;
 
         private double lastInstalledRefreshTime;
         private double lastDiscoverRefreshTime;
+        private DateTime lastRefreshDateTime;
 
         private int lastInstalledIndex = -1;
         private string installedBranchInput = string.Empty;
@@ -79,20 +217,24 @@ namespace Calander.SubmodulePackageManager.Editor
 
         private void OnGUI()
         {
+            Styles.Initialize();
             UpdateRepoLoading();
 
+            EditorGUILayout.BeginVertical();
             DrawToolbar();
-            DrawDependencyGate();
 
-            switch (currentTab)
+            if (!DrawDependencyGate())
             {
-                case Tab.Installed:
-                    DrawInstalledTab();
-                    break;
-                case Tab.Discover:
-                    DrawDiscoverTab();
-                    break;
+                EditorGUILayout.EndVertical();
+                return;
             }
+
+            EditorGUILayout.BeginHorizontal();
+            DrawListPane();
+            DrawDetailsPane();
+            EditorGUILayout.EndHorizontal();
+
+            EditorGUILayout.EndVertical();
         }
 
         internal void RefreshSubmodules()
@@ -105,44 +247,122 @@ namespace Calander.SubmodulePackageManager.Editor
         {
             EditorGUILayout.BeginHorizontal(EditorStyles.toolbar);
 
-            Rect addButtonRect = GUILayoutUtility.GetRect(new GUIContent("+ Add"), EditorStyles.toolbarButton);
-            if (GUI.Button(addButtonRect, "+ Add", EditorStyles.toolbarButton))
+            // Plus dropdown button
+            Rect addButtonRect = GUILayoutUtility.GetRect(new GUIContent("+"), EditorStyles.toolbarDropDown, GUILayout.Width(24));
+            if (EditorGUI.DropdownButton(addButtonRect, new GUIContent("+"), FocusType.Passive, EditorStyles.toolbarDropDown))
             {
-                ShowAddFromUrlPopup(addButtonRect);
+                var menu = new GenericMenu();
+                menu.AddItem(new GUIContent("Add package from git URL..."), false, () => ShowAddFromUrlPopup(addButtonRect));
+                menu.DropDown(addButtonRect);
             }
 
+            GUILayout.Space(8);
+
+            // Tab selector styled like filters
+            EditorGUI.BeginChangeCheck();
             Tab previousTab = currentTab;
-            int selected = GUILayout.Toolbar((int)currentTab, new[] { "Installed", "Discover" }, EditorStyles.toolbarButton);
-            currentTab = (Tab)selected;
+
+            if (GUILayout.Toggle(currentTab == Tab.Installed, "In Project", EditorStyles.toolbarButton))
+                currentTab = Tab.Installed;
+            if (GUILayout.Toggle(currentTab == Tab.Discover, "GitHub", EditorStyles.toolbarButton))
+                currentTab = Tab.Discover;
 
             if (previousTab != currentTab)
             {
                 RefreshCurrentTabIfStale();
+                searchFilter = string.Empty;
                 Repaint();
+            }
+
+            GUILayout.Space(8);
+
+            // Sort dropdown (GitHub tab only)
+            if (currentTab == Tab.Discover)
+            {
+                string sortLabel = currentSort == SortOption.Name ? "Sort: Name" : "Sort: Recent";
+                Rect sortRect = GUILayoutUtility.GetRect(new GUIContent(sortLabel), EditorStyles.toolbarDropDown, GUILayout.Width(90));
+                if (EditorGUI.DropdownButton(sortRect, new GUIContent(sortLabel), FocusType.Passive, EditorStyles.toolbarDropDown))
+                {
+                    var menu = new GenericMenu();
+                    menu.AddItem(new GUIContent("Name"), currentSort == SortOption.Name, () => { currentSort = SortOption.Name; SortRepos(); });
+                    menu.AddItem(new GUIContent("Recently Updated"), currentSort == SortOption.RecentlyUpdated, () => { currentSort = SortOption.RecentlyUpdated; SortRepos(); });
+                    menu.DropDown(sortRect);
+                }
+
+                // Filter dropdown
+                string filterLabel = GetFilterLabel();
+                Rect filterRect = GUILayoutUtility.GetRect(new GUIContent(filterLabel), EditorStyles.toolbarDropDown, GUILayout.Width(120));
+                if (EditorGUI.DropdownButton(filterRect, new GUIContent(filterLabel), FocusType.Passive, EditorStyles.toolbarDropDown))
+                {
+                    var menu = new GenericMenu();
+                    menu.AddItem(new GUIContent("All Repositories"), currentFilter == FilterOption.All, () => { currentFilter = FilterOption.All; Repaint(); });
+                    menu.AddItem(new GUIContent("Valid Packages Only"), currentFilter == FilterOption.ValidPackagesOnly, () => { currentFilter = FilterOption.ValidPackagesOnly; Repaint(); });
+                    menu.AddSeparator("");
+                    menu.AddItem(new GUIContent("Public Only"), currentFilter == FilterOption.PublicOnly, () => { currentFilter = FilterOption.PublicOnly; Repaint(); });
+                    menu.AddItem(new GUIContent("Private Only"), currentFilter == FilterOption.PrivateOnly, () => { currentFilter = FilterOption.PrivateOnly; Repaint(); });
+                    menu.DropDown(filterRect);
+                }
             }
 
             GUILayout.FlexibleSpace();
 
-            if (GUILayout.Button("Refresh", EditorStyles.toolbarButton))
+            // Kebab menu
+            Rect menuRect = GUILayoutUtility.GetRect(new GUIContent("..."), EditorStyles.toolbarButton, GUILayout.Width(24));
+            if (GUI.Button(menuRect, ":", EditorStyles.toolbarButton))
             {
-                RefreshCurrentTab();
+                var menu = new GenericMenu();
+                menu.AddItem(new GUIContent("Refresh"), false, RefreshCurrentTab);
+                menu.AddSeparator("");
+                menu.AddItem(new GUIContent("Reset Window"), false, () => {
+                    selectedInstalledIndex = -1;
+                    selectedRepoIndex = -1;
+                    searchFilter = string.Empty;
+                    currentFilter = FilterOption.All;
+                    currentSort = SortOption.Name;
+                    RefreshCurrentTab();
+                });
+                menu.DropDown(menuRect);
             }
 
             EditorGUILayout.EndHorizontal();
+        }
+
+        private string GetFilterLabel()
+        {
+            switch (currentFilter)
+            {
+                case FilterOption.ValidPackagesOnly: return "Filter: Packages";
+                case FilterOption.PublicOnly: return "Filter: Public";
+                case FilterOption.PrivateOnly: return "Filter: Private";
+                default: return "Filter: All";
+            }
+        }
+
+        private void SortRepos()
+        {
+            if (availableRepos == null || availableRepos.Count == 0) return;
+
+            switch (currentSort)
+            {
+                case SortOption.Name:
+                    availableRepos.Sort((a, b) => string.Compare(a.Name, b.Name, StringComparison.OrdinalIgnoreCase));
+                    break;
+                case SortOption.RecentlyUpdated:
+                    // Keep original order from GitHub API (already sorted by recent)
+                    break;
+            }
+
+            selectedRepoIndex = -1;
+            Repaint();
         }
 
         private bool DrawDependencyGate()
         {
             if (gitAvailable && ghAvailable)
             {
-                EditorGUILayout.BeginHorizontal(EditorStyles.helpBox);
-                EditorGUILayout.LabelField($"Git: {gitVersion}", EditorStyles.miniLabel);
-                EditorGUILayout.LabelField($"GitHub CLI: {ghVersion}", EditorStyles.miniLabel);
-                EditorGUILayout.EndHorizontal();
-
-                if (!ghAuthenticated)
+                if (!ghAuthenticated && currentTab == Tab.Discover)
                 {
-                    EditorGUILayout.HelpBox("GitHub CLI is installed but not authenticated. Run `gh auth login` to list your repositories.", MessageType.Warning);
+                    EditorGUILayout.HelpBox("GitHub CLI is not authenticated. Run 'gh auth login' in terminal to discover your repositories.", MessageType.Warning);
                 }
 
                 if (!string.IsNullOrWhiteSpace(installStatus))
@@ -153,7 +373,7 @@ namespace Calander.SubmodulePackageManager.Editor
                 return true;
             }
 
-            EditorGUILayout.Space();
+            EditorGUILayout.Space(20);
 
             if (!gitAvailable)
             {
@@ -198,6 +418,553 @@ namespace Calander.SubmodulePackageManager.Editor
             }
 
             EditorGUILayout.EndVertical();
+        }
+
+        private void DrawListPane()
+        {
+            EditorGUILayout.BeginVertical(GUILayout.Width(ListPaneWidth));
+
+            // Search bar
+            EditorGUILayout.BeginHorizontal(EditorStyles.toolbar);
+
+            EditorGUI.BeginChangeCheck();
+            searchFilter = EditorGUILayout.TextField(searchFilter, EditorStyles.toolbarSearchField);
+            if (EditorGUI.EndChangeCheck())
+            {
+                Repaint();
+            }
+
+            if (GUILayout.Button("", GUI.skin.FindStyle("ToolbarSearchCancelButton") ?? EditorStyles.toolbarButton, GUILayout.Width(18)))
+            {
+                searchFilter = string.Empty;
+                GUI.FocusControl(null);
+            }
+            EditorGUILayout.EndHorizontal();
+
+            // Header
+            EditorGUILayout.BeginHorizontal();
+            GUILayout.Label(currentTab == Tab.Installed ? "Packages" : "Repositories", Styles.HeaderLabel);
+            GUILayout.FlexibleSpace();
+            EditorGUILayout.EndHorizontal();
+
+            // Separator line
+            Rect lineRect = GUILayoutUtility.GetRect(1, 1, GUILayout.ExpandWidth(true));
+            EditorGUI.DrawRect(lineRect, new Color(0.15f, 0.15f, 0.15f));
+
+            // List content
+            listScroll = EditorGUILayout.BeginScrollView(listScroll, GUILayout.ExpandHeight(true));
+
+            if (currentTab == Tab.Installed)
+            {
+                DrawInstalledList();
+            }
+            else
+            {
+                DrawDiscoverList();
+            }
+
+            EditorGUILayout.EndScrollView();
+
+            // Footer with last refresh time
+            DrawListFooter();
+
+            EditorGUILayout.EndVertical();
+        }
+
+        private void DrawInstalledList()
+        {
+            if (!string.IsNullOrWhiteSpace(installedStatus))
+            {
+                EditorGUILayout.HelpBox(installedStatus, installedStatusType);
+                return;
+            }
+
+            if (installedSubmodules == null || installedSubmodules.Count == 0)
+            {
+                GUILayout.Label("No packages installed via git submodules.", EditorStyles.centeredGreyMiniLabel);
+                return;
+            }
+
+            for (int i = 0; i < installedSubmodules.Count; i++)
+            {
+                SubmoduleInfo submodule = installedSubmodules[i];
+                string displayName = string.IsNullOrWhiteSpace(submodule.PackageName) ? submodule.Name : submodule.PackageName;
+
+                if (!string.IsNullOrWhiteSpace(searchFilter) &&
+                    displayName.IndexOf(searchFilter, StringComparison.OrdinalIgnoreCase) < 0)
+                {
+                    continue;
+                }
+
+                bool isSelected = i == selectedInstalledIndex;
+                string versionText = !string.IsNullOrWhiteSpace(submodule.Branch) ? submodule.Branch : "main";
+
+                Rect itemRect = GUILayoutUtility.GetRect(GUIContent.none, EditorStyles.label, GUILayout.ExpandWidth(true), GUILayout.Height(24));
+
+                // Draw selection background
+                if (Event.current.type == EventType.Repaint)
+                {
+                    if (isSelected)
+                    {
+                        EditorGUI.DrawRect(itemRect, new Color(0.17f, 0.36f, 0.53f, 1f));
+                    }
+                }
+
+                // Package name on left
+                Rect nameRect = new Rect(itemRect.x + 8, itemRect.y + 4, itemRect.width - 70, itemRect.height - 8);
+                var nameStyle = new GUIStyle(EditorStyles.label);
+                if (isSelected) nameStyle.normal.textColor = Color.white;
+                GUI.Label(nameRect, displayName, nameStyle);
+
+                // Branch on right
+                Rect versionRect = new Rect(itemRect.xMax - 60, itemRect.y + 4, 52, itemRect.height - 8);
+                GUI.Label(versionRect, versionText, Styles.SubtitleLabel);
+
+                // Handle click
+                if (Event.current.type == EventType.MouseDown && itemRect.Contains(Event.current.mousePosition))
+                {
+                    selectedInstalledIndex = i;
+                    Event.current.Use();
+                    Repaint();
+                }
+            }
+        }
+
+        private void DrawDiscoverList()
+        {
+            if (isLoadingRepos && repoListHandle != null)
+            {
+                EditorGUILayout.Space(20);
+                EditorGUILayout.LabelField(repoListHandle.StatusMessage, EditorStyles.centeredGreyMiniLabel);
+                Rect progressRect = GUILayoutUtility.GetRect(0, 4, GUILayout.ExpandWidth(true));
+                EditorGUI.ProgressBar(progressRect, repoListHandle.Progress, "");
+                return;
+            }
+
+            if (isCheckingPackageJson)
+            {
+                EditorGUILayout.Space(20);
+                string checkMsg = $"Checking package.json ({packageJsonCheckIndex}/{availableRepos.Count})...";
+                EditorGUILayout.LabelField(checkMsg, EditorStyles.centeredGreyMiniLabel);
+                float checkProgress = availableRepos.Count > 0 ? (float)packageJsonCheckIndex / availableRepos.Count : 0f;
+                Rect progressRect = GUILayoutUtility.GetRect(0, 4, GUILayout.ExpandWidth(true));
+                EditorGUI.ProgressBar(progressRect, checkProgress, "");
+                return;
+            }
+
+            if (!string.IsNullOrWhiteSpace(discoverStatus))
+            {
+                EditorGUILayout.HelpBox(discoverStatus, discoverStatusType);
+                return;
+            }
+
+            if (availableRepos == null || availableRepos.Count == 0)
+            {
+                GUILayout.Label("No repositories found. Click refresh to load.", EditorStyles.centeredGreyMiniLabel);
+                return;
+            }
+
+            for (int i = 0; i < availableRepos.Count; i++)
+            {
+                GitHubRepo repo = availableRepos[i];
+
+                // Apply filter
+                if (!PassesFilter(repo))
+                {
+                    continue;
+                }
+
+                string displayName = repo.Name;
+
+                if (!string.IsNullOrWhiteSpace(searchFilter) &&
+                    displayName.IndexOf(searchFilter, StringComparison.OrdinalIgnoreCase) < 0 &&
+                    repo.Owner.IndexOf(searchFilter, StringComparison.OrdinalIgnoreCase) < 0)
+                {
+                    continue;
+                }
+
+                bool isSelected = i == selectedRepoIndex;
+                bool isValidPackage = repo.PackageJsonChecked && repo.HasPackageJson;
+                bool isInvalidPackage = repo.PackageJsonChecked && !repo.HasPackageJson;
+                string statusText = repo.IsInstalled ? "(installed)" :
+                                   isInvalidPackage ? "(no package.json)" :
+                                   !repo.PackageJsonChecked ? "(checking...)" :
+                                   repo.IsPrivate ? "(private)" : "";
+
+                Rect itemRect = GUILayoutUtility.GetRect(GUIContent.none, EditorStyles.label, GUILayout.ExpandWidth(true), GUILayout.Height(36));
+
+                // Draw selection background
+                if (Event.current.type == EventType.Repaint && isSelected)
+                {
+                    EditorGUI.DrawRect(itemRect, new Color(0.17f, 0.36f, 0.53f, 1f));
+                }
+
+                // Repo name on first line - grey if no package.json
+                Rect nameRect = new Rect(itemRect.x + 8, itemRect.y + 2, itemRect.width - 16, 16);
+                var nameStyle = new GUIStyle(EditorStyles.label);
+                if (isSelected)
+                {
+                    nameStyle.normal.textColor = Color.white;
+                }
+                else if (isInvalidPackage)
+                {
+                    nameStyle.normal.textColor = new Color(0.5f, 0.5f, 0.5f);
+                }
+                GUI.Label(nameRect, displayName, nameStyle);
+
+                // Status on second line
+                Rect statusRect = new Rect(itemRect.x + 8, itemRect.y + 18, itemRect.width - 16, 14);
+                GUI.Label(statusRect, statusText, Styles.SubtitleLabel);
+
+                // Handle click
+                if (Event.current.type == EventType.MouseDown && itemRect.Contains(Event.current.mousePosition))
+                {
+                    if (selectedRepoIndex != i)
+                    {
+                        selectedRepoIndex = i;
+                        InitializeRepoDefaults(repo);
+                    }
+                    Event.current.Use();
+                    Repaint();
+                }
+            }
+        }
+
+        private bool PassesFilter(GitHubRepo repo)
+        {
+            switch (currentFilter)
+            {
+                case FilterOption.ValidPackagesOnly:
+                    // If not yet checked, show it (will be filtered later once checked)
+                    return !repo.PackageJsonChecked || repo.HasPackageJson;
+                case FilterOption.PublicOnly:
+                    return !repo.IsPrivate;
+                case FilterOption.PrivateOnly:
+                    return repo.IsPrivate;
+                default:
+                    return true;
+            }
+        }
+
+        private void DrawListFooter()
+        {
+            Rect footerRect = GUILayoutUtility.GetRect(1, 1, GUILayout.ExpandWidth(true));
+            EditorGUI.DrawRect(footerRect, new Color(0.15f, 0.15f, 0.15f));
+
+            EditorGUILayout.BeginHorizontal();
+
+            string refreshText = lastRefreshDateTime != default
+                ? $"Last refresh {lastRefreshDateTime:MMM d, HH:mm}"
+                : "Not refreshed";
+            GUILayout.Label(refreshText, Styles.FooterLabel);
+
+            GUILayout.FlexibleSpace();
+
+            if (GUILayout.Button(EditorGUIUtility.IconContent("Refresh"), EditorStyles.iconButton, GUILayout.Width(20), GUILayout.Height(20)))
+            {
+                RefreshCurrentTab();
+            }
+
+            EditorGUILayout.EndHorizontal();
+        }
+
+        private void DrawDetailsPane()
+        {
+            EditorGUILayout.BeginVertical();
+
+            detailsScroll = EditorGUILayout.BeginScrollView(detailsScroll, GUILayout.ExpandWidth(true), GUILayout.ExpandHeight(true));
+
+            if (currentTab == Tab.Installed)
+            {
+                DrawInstalledDetails();
+            }
+            else
+            {
+                DrawDiscoverDetails();
+            }
+
+            EditorGUILayout.EndScrollView();
+
+            EditorGUILayout.EndVertical();
+        }
+
+        private void DrawInstalledDetails()
+        {
+            if (selectedInstalledIndex < 0 || selectedInstalledIndex >= installedSubmodules.Count)
+            {
+                EditorGUILayout.Space(40);
+                GUILayout.Label("Select a package to view details", EditorStyles.centeredGreyMiniLabel);
+                return;
+            }
+
+            SubmoduleInfo submodule = installedSubmodules[selectedInstalledIndex];
+            if (lastInstalledIndex != selectedInstalledIndex)
+            {
+                installedBranchInput = string.IsNullOrWhiteSpace(submodule.Branch) ? "main" : submodule.Branch;
+                installedActionStatus = string.Empty;
+                installedActionStatusType = MessageType.None;
+                lastInstalledIndex = selectedInstalledIndex;
+            }
+
+            EditorGUILayout.Space(8);
+
+            // Title
+            string displayName = submodule.PackageName ?? submodule.Name;
+            GUILayout.Label(displayName, Styles.TitleLabel);
+
+            // Subtitle
+            string branchInfo = !string.IsNullOrWhiteSpace(submodule.Branch) ? submodule.Branch : "main";
+            GUILayout.Label($"{branchInfo} · Git Submodule", Styles.SubtitleLabel);
+
+            EditorGUILayout.Space(4);
+
+            // Link buttons
+            EditorGUILayout.BeginHorizontal();
+            if (!string.IsNullOrWhiteSpace(submodule.Url) && GUILayout.Button("Repository", Styles.LinkButton))
+            {
+                Application.OpenURL(submodule.Url);
+            }
+            if (GUILayout.Button("Show in Explorer", Styles.LinkButton))
+            {
+                string fullPath = Path.Combine(GitUtility.ProjectRoot, submodule.Path);
+                EditorUtility.RevealInFinder(fullPath);
+            }
+            GUILayout.FlexibleSpace();
+            EditorGUILayout.EndHorizontal();
+
+            EditorGUILayout.Space(8);
+
+            // Action buttons
+            EditorGUILayout.BeginHorizontal();
+            using (new EditorGUI.DisabledScope(!gitAvailable))
+            {
+                if (GUILayout.Button("Update", GUILayout.Height(24)))
+                {
+                    if (EditorUtility.DisplayDialog("Update Submodule", $"Fetch and update:\n{submodule.Path}?", "Update", "Cancel"))
+                    {
+                        PerformUpdate(submodule);
+                    }
+                }
+
+                if (GUILayout.Button("Remove", GUILayout.Height(24)))
+                {
+                    if (EditorUtility.DisplayDialog("Remove Submodule", $"Remove submodule at {submodule.Path}?", "Remove", "Cancel"))
+                    {
+                        PerformRemove(submodule);
+                    }
+                }
+            }
+            GUILayout.FlexibleSpace();
+            EditorGUILayout.EndHorizontal();
+
+            EditorGUILayout.Space(12);
+
+            // Info box
+            EditorGUILayout.BeginVertical(Styles.InfoBox);
+            DrawInfoRow("Path", submodule.Path);
+            DrawInfoRow("URL", submodule.Url);
+            if (!string.IsNullOrWhiteSpace(submodule.Branch))
+            {
+                DrawInfoRow("Branch", submodule.Branch);
+            }
+            if (!string.IsNullOrWhiteSpace(submodule.CommitHash))
+            {
+                DrawInfoRow("Commit", submodule.CommitHash.Length > 7 ? submodule.CommitHash.Substring(0, 7) : submodule.CommitHash);
+            }
+            EditorGUILayout.EndVertical();
+
+            // Warnings
+            if (!submodule.HasPackageJson)
+            {
+                EditorGUILayout.HelpBox("This submodule does not contain a package.json at its root.", MessageType.Warning);
+            }
+
+            if (!string.IsNullOrWhiteSpace(installedActionStatus))
+            {
+                EditorGUILayout.HelpBox(installedActionStatus, installedActionStatusType);
+            }
+
+            // Branch change section
+            EditorGUILayout.Space(12);
+            GUILayout.Label("Change Branch", Styles.SectionHeader);
+            EditorGUILayout.BeginHorizontal();
+            installedBranchInput = EditorGUILayout.TextField(installedBranchInput, GUILayout.Height(20));
+            using (new EditorGUI.DisabledScope(!gitAvailable || string.IsNullOrWhiteSpace(installedBranchInput)))
+            {
+                if (GUILayout.Button("Apply", GUILayout.Width(60), GUILayout.Height(20)))
+                {
+                    PerformBranchChange(submodule, installedBranchInput.Trim());
+                }
+            }
+            EditorGUILayout.EndHorizontal();
+        }
+
+        private void DrawDiscoverDetails()
+        {
+            if (selectedRepoIndex < 0 || selectedRepoIndex >= availableRepos.Count)
+            {
+                EditorGUILayout.Space(40);
+                GUILayout.Label("Select a repository to view details", EditorStyles.centeredGreyMiniLabel);
+                return;
+            }
+
+            GitHubRepo repo = availableRepos[selectedRepoIndex];
+
+            EditorGUILayout.Space(8);
+
+            // Title
+            GUILayout.Label(repo.Name, Styles.TitleLabel);
+
+            // Subtitle
+            string subtitle = !string.IsNullOrWhiteSpace(repo.Description) ? repo.Description : $"Repository by {repo.Owner}";
+            GUILayout.Label(subtitle, Styles.SubtitleLabel);
+
+            EditorGUILayout.Space(4);
+
+            // Link buttons
+            EditorGUILayout.BeginHorizontal();
+            if (GUILayout.Button("View on GitHub", Styles.LinkButton))
+            {
+                Application.OpenURL(repo.Url);
+            }
+            GUILayout.FlexibleSpace();
+            EditorGUILayout.EndHorizontal();
+
+            EditorGUILayout.Space(8);
+
+            // Info box
+            EditorGUILayout.BeginVertical(Styles.InfoBox);
+            DrawInfoRow("Owner", repo.Owner);
+            DrawInfoRow("URL", repo.Url);
+            if (!string.IsNullOrWhiteSpace(repo.DefaultBranch))
+            {
+                DrawInfoRow("Default Branch", repo.DefaultBranch);
+            }
+            DrawInfoRow("Visibility", repo.IsPrivate ? "Private" : "Public");
+            string packageStatus = !repo.PackageJsonChecked ? "Checking..." : repo.HasPackageJson ? "Yes" : "No";
+            DrawInfoRow("Unity Package", packageStatus);
+            EditorGUILayout.EndVertical();
+
+            // Warning for repos without package.json
+            if (repo.PackageJsonChecked && !repo.HasPackageJson)
+            {
+                EditorGUILayout.HelpBox("This repository does not contain a package.json at its root. It may not be a valid Unity package.", MessageType.Warning);
+            }
+
+            // Warning for private repos
+            if (repo.IsPrivate)
+            {
+                EditorGUILayout.HelpBox("Private repository. Collaborators will need access to clone this submodule.", MessageType.Warning);
+            }
+
+            if (repo.IsInstalled)
+            {
+                EditorGUILayout.HelpBox("This repository is already installed.", MessageType.Info);
+            }
+
+            // Add package section
+            if (!repo.IsInstalled)
+            {
+                EditorGUILayout.Space(12);
+                GUILayout.Label("Add as Package", Styles.SectionHeader);
+
+                EditorGUILayout.BeginVertical(Styles.InfoBox);
+
+                EditorGUILayout.BeginHorizontal();
+                GUILayout.Label("Package Name", Styles.InfoLabel, GUILayout.Width(100));
+                selectedRepoPackageName = EditorGUILayout.TextField(selectedRepoPackageName);
+                EditorGUILayout.EndHorizontal();
+
+                EditorGUILayout.BeginHorizontal();
+                GUILayout.Label("Branch", Styles.InfoLabel, GUILayout.Width(100));
+                selectedRepoBranch = EditorGUILayout.TextField(selectedRepoBranch);
+                EditorGUILayout.EndHorizontal();
+
+                EditorGUILayout.EndVertical();
+
+                string validationError = ValidatePackageInput(repo.Url, selectedRepoPackageName);
+                if (!string.IsNullOrWhiteSpace(validationError))
+                {
+                    EditorGUILayout.HelpBox(validationError, MessageType.Warning);
+                }
+                else
+                {
+                    GUILayout.Label(PackageNameRule, Styles.FooterLabel);
+                }
+
+                EditorGUILayout.Space(8);
+
+                using (new EditorGUI.DisabledScope(!string.IsNullOrWhiteSpace(validationError)))
+                {
+                    if (GUILayout.Button("Add Package", GUILayout.Height(28)))
+                    {
+                        TryAddSubmodule(repo.Url, selectedRepoBranch, selectedRepoPackageName);
+                    }
+                }
+            }
+
+            if (!string.IsNullOrWhiteSpace(addStatus))
+            {
+                EditorGUILayout.HelpBox(addStatus, addStatusType);
+            }
+        }
+
+        private void DrawInfoRow(string label, string value)
+        {
+            EditorGUILayout.BeginHorizontal();
+            GUILayout.Label(label, Styles.InfoLabel, GUILayout.Width(100));
+            EditorGUILayout.SelectableLabel(value, Styles.InfoValue, GUILayout.Height(16));
+            EditorGUILayout.EndHorizontal();
+        }
+
+        private void PerformUpdate(SubmoduleInfo submodule)
+        {
+            if (!GitUtility.TryUpdateSubmodule(submodule.Path, out string error))
+            {
+                installedActionStatus = error;
+                installedActionStatusType = MessageType.Error;
+            }
+            else
+            {
+                installedActionStatus = "Submodule updated successfully.";
+                installedActionStatusType = MessageType.Info;
+                RefreshInstalled();
+            }
+        }
+
+        private void PerformRemove(SubmoduleInfo submodule)
+        {
+            if (!GitUtility.TryRemoveSubmodule(submodule.Path, out string error))
+            {
+                installedStatus = error;
+                installedStatusType = MessageType.Error;
+            }
+            else
+            {
+                selectedInstalledIndex = -1;
+            }
+            RefreshInstalled();
+            RefreshAvailable();
+        }
+
+        private void PerformBranchChange(SubmoduleInfo submodule, string branch)
+        {
+            if (!GitUtility.TrySetSubmoduleBranch(submodule.Path, branch, out string error))
+            {
+                installedActionStatus = error;
+                installedActionStatusType = MessageType.Error;
+            }
+            else
+            {
+                installedActionStatus = $"Branch set to {branch}.";
+                installedActionStatusType = MessageType.Info;
+                RefreshInstalled();
+
+                if (EditorUtility.DisplayDialog("Update Submodule", "Update to the new branch now?", "Update", "Later"))
+                {
+                    PerformUpdate(submodule);
+                }
+            }
         }
 
         private void RefreshDependencies()
@@ -304,6 +1071,7 @@ namespace Calander.SubmodulePackageManager.Editor
 
             selectedInstalledIndex = Mathf.Clamp(selectedInstalledIndex, -1, installedSubmodules.Count - 1);
             lastInstalledRefreshTime = EditorApplication.timeSinceStartup;
+            lastRefreshDateTime = DateTime.Now;
         }
 
         private void RefreshAvailable()
@@ -326,7 +1094,6 @@ namespace Calander.SubmodulePackageManager.Editor
                 return;
             }
 
-            // Start async loading
             isLoadingRepos = true;
             repoListHandle = GitHubUtility.StartListReposAsync();
         }
@@ -335,6 +1102,7 @@ namespace Calander.SubmodulePackageManager.Editor
         {
             if (!isLoadingRepos || repoListHandle == null)
             {
+                UpdatePackageJsonChecking();
                 return;
             }
 
@@ -359,10 +1127,63 @@ namespace Calander.SubmodulePackageManager.Editor
 
             availableRepos = repoListHandle.Repos;
             MarkInstalledRepos();
+            SortRepos();
             selectedRepoIndex = Mathf.Clamp(selectedRepoIndex, -1, availableRepos.Count - 1);
             repoListHandle = null;
             lastDiscoverRefreshTime = EditorApplication.timeSinceStartup;
+            lastRefreshDateTime = DateTime.Now;
+
+            // Start checking package.json for each repo
+            StartPackageJsonChecking();
+
             Repaint();
+        }
+
+        private void StartPackageJsonChecking()
+        {
+            if (availableRepos == null || availableRepos.Count == 0)
+            {
+                return;
+            }
+
+            isCheckingPackageJson = true;
+            packageJsonCheckIndex = 0;
+            EditorApplication.update += ProcessNextPackageJsonCheck;
+        }
+
+        private void ProcessNextPackageJsonCheck()
+        {
+            if (!isCheckingPackageJson || availableRepos == null)
+            {
+                EditorApplication.update -= ProcessNextPackageJsonCheck;
+                isCheckingPackageJson = false;
+                return;
+            }
+
+            if (packageJsonCheckIndex >= availableRepos.Count)
+            {
+                EditorApplication.update -= ProcessNextPackageJsonCheck;
+                isCheckingPackageJson = false;
+                Repaint();
+                return;
+            }
+
+            var repo = availableRepos[packageJsonCheckIndex];
+
+            // Check if repo has package.json via GitHub API
+            if (GitHubUtility.TryRepoHasPackageJson(repo.Owner, repo.Name, out bool hasPackageJson, out _))
+            {
+                repo.HasPackageJson = hasPackageJson;
+            }
+            repo.PackageJsonChecked = true;
+
+            packageJsonCheckIndex++;
+            Repaint();
+        }
+
+        private void UpdatePackageJsonChecking()
+        {
+            // This is handled by EditorApplication.update callback
         }
 
         private void MarkInstalledRepos()
@@ -382,392 +1203,11 @@ namespace Calander.SubmodulePackageManager.Editor
             }
         }
 
-        private void DrawInstalledTab()
-        {
-            EditorGUILayout.Space();
-
-            if (!string.IsNullOrWhiteSpace(installedStatus))
-            {
-                EditorGUILayout.HelpBox(installedStatus, installedStatusType);
-            }
-
-            if (installedSubmodules == null || installedSubmodules.Count == 0)
-            {
-                EditorGUILayout.HelpBox("No git submodules found.", MessageType.Info);
-                return;
-            }
-
-            EditorGUILayout.BeginHorizontal();
-            DrawInstalledList();
-            DrawInstalledDetails();
-            EditorGUILayout.EndHorizontal();
-        }
-
-        private void DrawInstalledList()
-        {
-            float listWidth = Mathf.Max(220f, position.width * ListPaneRatio);
-            EditorGUILayout.BeginVertical(GUILayout.Width(listWidth));
-
-            installedScroll = EditorGUILayout.BeginScrollView(installedScroll);
-            for (int i = 0; i < installedSubmodules.Count; i++)
-            {
-                SubmoduleInfo submodule = installedSubmodules[i];
-                string label = string.IsNullOrWhiteSpace(submodule.PackageName) ? submodule.Name : submodule.PackageName;
-                string suffix = submodule.HasPackageJson ? string.Empty : " (missing package.json)";
-                bool selected = i == selectedInstalledIndex;
-
-                if (GUILayout.Toggle(selected, label + suffix, EditorStyles.toolbarButton))
-                {
-                    selectedInstalledIndex = i;
-                }
-            }
-            EditorGUILayout.EndScrollView();
-
-            EditorGUILayout.EndVertical();
-        }
-
-        private void DrawInstalledDetails()
-        {
-            EditorGUILayout.BeginVertical(EditorStyles.helpBox);
-
-            if (selectedInstalledIndex < 0 || selectedInstalledIndex >= installedSubmodules.Count)
-            {
-                EditorGUILayout.LabelField("Select a submodule to view details.");
-                EditorGUILayout.EndVertical();
-                return;
-            }
-
-            SubmoduleInfo submodule = installedSubmodules[selectedInstalledIndex];
-            if (lastInstalledIndex != selectedInstalledIndex)
-            {
-                installedBranchInput = string.IsNullOrWhiteSpace(submodule.Branch) ? "main" : submodule.Branch;
-                installedActionStatus = string.Empty;
-                installedActionStatusType = MessageType.None;
-                lastInstalledIndex = selectedInstalledIndex;
-            }
-
-            detailsScroll = EditorGUILayout.BeginScrollView(detailsScroll);
-
-            EditorGUILayout.LabelField(submodule.PackageName ?? submodule.Name, EditorStyles.boldLabel);
-            EditorGUILayout.Space();
-
-            EditorGUILayout.LabelField("Path", submodule.Path);
-            EditorGUILayout.LabelField("URL", submodule.Url);
-            if (!string.IsNullOrWhiteSpace(submodule.Branch))
-            {
-                EditorGUILayout.LabelField("Branch", submodule.Branch);
-            }
-            if (!string.IsNullOrWhiteSpace(submodule.CommitHash))
-            {
-                EditorGUILayout.LabelField("Commit", submodule.CommitHash);
-            }
-
-            if (!submodule.HasPackageJson)
-            {
-                EditorGUILayout.HelpBox("This submodule does not contain a package.json at its root.", MessageType.Warning);
-            }
-
-            EditorGUILayout.Space();
-            EditorGUILayout.LabelField("Actions", EditorStyles.boldLabel);
-            installedBranchInput = EditorGUILayout.TextField("Branch", installedBranchInput);
-
-            if (!string.IsNullOrWhiteSpace(installedActionStatus))
-            {
-                EditorGUILayout.HelpBox(installedActionStatus, installedActionStatusType);
-            }
-
-            EditorGUILayout.EndScrollView();
-            GUILayout.FlexibleSpace();
-
-            using (new EditorGUI.DisabledScope(!gitAvailable))
-            {
-                EditorGUILayout.BeginHorizontal();
-                if (GUILayout.Button("Update"))
-                {
-                    if (EditorUtility.DisplayDialog("Update Submodule", $"Fetch and update:\n{submodule.Path} ?", "Update", "Cancel"))
-                    {
-                        if (!GitUtility.TryUpdateSubmodule(submodule.Path, out string error))
-                        {
-                            installedActionStatus = error;
-                            installedActionStatusType = MessageType.Error;
-                        }
-                        else
-                        {
-                            installedActionStatus = "Submodule updated.";
-                            installedActionStatusType = MessageType.Info;
-                            RefreshInstalled();
-                        }
-                    }
-                }
-
-                if (GUILayout.Button("Apply Branch"))
-                {
-                    string branch = installedBranchInput.Trim();
-                    if (string.IsNullOrWhiteSpace(branch))
-                    {
-                        installedActionStatus = "Branch name is required.";
-                        installedActionStatusType = MessageType.Warning;
-                    }
-                    else if (EditorUtility.DisplayDialog("Change Branch", $"Change branch for:\n{submodule.Path}\n\nNew branch: {branch}", "Change", "Cancel"))
-                    {
-                        if (!GitUtility.TrySetSubmoduleBranch(submodule.Path, branch, out string error))
-                        {
-                            installedActionStatus = error;
-                            installedActionStatusType = MessageType.Error;
-                        }
-                        else
-                        {
-                            installedActionStatus = $"Branch set to {branch}.";
-                            installedActionStatusType = MessageType.Info;
-                            RefreshInstalled();
-                            if (EditorUtility.DisplayDialog("Update Submodule", "Update to the new branch now?", "Update", "Later"))
-                            {
-                                if (!GitUtility.TryUpdateSubmodule(submodule.Path, out string updateError))
-                                {
-                                    installedActionStatus = updateError;
-                                    installedActionStatusType = MessageType.Error;
-                                }
-                                else
-                                {
-                                    installedActionStatus = "Submodule updated.";
-                                    installedActionStatusType = MessageType.Info;
-                                    RefreshInstalled();
-                                }
-                            }
-                        }
-                    }
-                }
-                EditorGUILayout.EndHorizontal();
-
-                if (GUILayout.Button("Remove Submodule"))
-                {
-                    if (EditorUtility.DisplayDialog("Remove Submodule", $"Remove submodule at {submodule.Path}?", "Remove", "Cancel"))
-                    {
-                        if (!GitUtility.TryRemoveSubmodule(submodule.Path, out string error))
-                        {
-                            installedStatus = error;
-                            installedStatusType = MessageType.Error;
-                        }
-                        RefreshInstalled();
-                        RefreshAvailable();
-                    }
-                }
-            }
-
-            EditorGUILayout.EndVertical();
-        }
-
-        private void DrawDiscoverTab()
-        {
-            if (isLoadingRepos && repoListHandle != null)
-            {
-                EditorGUILayout.Space();
-                EditorGUILayout.BeginVertical(EditorStyles.helpBox);
-                EditorGUILayout.LabelField(repoListHandle.StatusMessage, EditorStyles.boldLabel);
-                Rect progressRect = GUILayoutUtility.GetRect(0, 20, GUILayout.ExpandWidth(true));
-                EditorGUI.ProgressBar(progressRect, repoListHandle.Progress, $"{Mathf.RoundToInt(repoListHandle.Progress * 100)}%");
-                EditorGUILayout.EndVertical();
-                EditorGUILayout.Space();
-            }
-
-            if (!string.IsNullOrWhiteSpace(discoverStatus))
-            {
-                EditorGUILayout.HelpBox(discoverStatus, discoverStatusType);
-            }
-
-            if (!isLoadingRepos && (availableRepos == null || availableRepos.Count == 0))
-            {
-                EditorGUILayout.HelpBox("No repositories loaded. Press Refresh to fetch your GitHub repos.", MessageType.Info);
-            }
-
-            DrawRepoSearch();
-            EditorGUILayout.BeginHorizontal();
-            DrawRepoList();
-            DrawRepoDetails();
-            EditorGUILayout.EndHorizontal();
-        }
-
-        private void DrawAddByUrl()
-        {
-            EditorGUILayout.BeginVertical(EditorStyles.helpBox);
-            EditorGUILayout.LabelField("Add package from Git URL", EditorStyles.boldLabel);
-
-            EditorGUI.BeginChangeCheck();
-            addUrl = EditorGUILayout.TextField("Git URL", addUrl);
-            if (EditorGUI.EndChangeCheck())
-            {
-                if (TryDerivePackageNameFromUrl(addUrl, out string derivedName))
-                {
-                    addPackageName = derivedName;
-                }
-            }
-
-            addBranch = EditorGUILayout.TextField("Branch", addBranch);
-            addPackageName = EditorGUILayout.TextField("Package Name", addPackageName);
-
-            if (TryDerivePackageNameFromUrl(addUrl, out string autoName))
-            {
-                if (string.IsNullOrWhiteSpace(addPackageName) || !GitUtility.IsValidPackageName(addPackageName))
-                {
-                    addPackageName = autoName;
-                }
-            }
-
-            string validationError = ValidatePackageInput(addUrl, addPackageName);
-            if (!string.IsNullOrWhiteSpace(validationError))
-            {
-                EditorGUILayout.HelpBox(validationError, MessageType.Warning);
-            }
-            else
-            {
-                EditorGUILayout.LabelField(PackageNameRule, EditorStyles.miniLabel);
-            }
-
-            if (!string.IsNullOrWhiteSpace(addStatus))
-            {
-                EditorGUILayout.HelpBox(addStatus, addStatusType);
-            }
-
-            using (new EditorGUI.DisabledScope(!gitAvailable || !string.IsNullOrWhiteSpace(validationError)))
-            {
-                if (GUILayout.Button("Add Package"))
-                {
-                    TryAddSubmodule(addUrl, addBranch, addPackageName);
-                }
-            }
-
-            EditorGUILayout.EndVertical();
-        }
-
-        private void DrawRepoSearch()
-        {
-            EditorGUILayout.BeginHorizontal(EditorStyles.toolbar);
-            GUILayout.Label("My Repositories", EditorStyles.boldLabel);
-            GUILayout.FlexibleSpace();
-            repoSearch = EditorGUILayout.TextField(repoSearch, EditorStyles.toolbarSearchField, GUILayout.MaxWidth(200f));
-            if (GUILayout.Button("x", EditorStyles.toolbarButton, GUILayout.Width(20f)))
-            {
-                repoSearch = string.Empty;
-                GUI.FocusControl(null);
-            }
-            EditorGUILayout.EndHorizontal();
-        }
-
-        private void DrawRepoList()
-        {
-            float listWidth = Mathf.Max(220f, position.width * ListPaneRatio);
-            EditorGUILayout.BeginVertical(GUILayout.Width(listWidth));
-
-            discoverScroll = EditorGUILayout.BeginScrollView(discoverScroll);
-            for (int i = 0; i < availableRepos.Count; i++)
-            {
-                GitHubRepo repo = availableRepos[i];
-                if (!IsRepoVisible(repo))
-                {
-                    continue;
-                }
-
-                string label = $"{repo.Owner}/{repo.Name}";
-                if (repo.IsPrivate)
-                {
-                    label += " (private)";
-                }
-                else if (repo.IsInstalled)
-                {
-                    label += " (installed)";
-                }
-
-                bool selected = i == selectedRepoIndex;
-                if (GUILayout.Toggle(selected, label, EditorStyles.toolbarButton))
-                {
-                    if (selectedRepoIndex != i)
-                    {
-                        selectedRepoIndex = i;
-                        InitializeRepoDefaults(repo);
-                    }
-                }
-            }
-            EditorGUILayout.EndScrollView();
-
-            EditorGUILayout.EndVertical();
-        }
-
-        private void DrawRepoDetails()
-        {
-            EditorGUILayout.BeginVertical(EditorStyles.helpBox);
-
-            if (selectedRepoIndex < 0 || selectedRepoIndex >= availableRepos.Count)
-            {
-                EditorGUILayout.LabelField("Select a repository to view details.");
-                EditorGUILayout.EndVertical();
-                return;
-            }
-
-            GitHubRepo repo = availableRepos[selectedRepoIndex];
-            detailsScroll = EditorGUILayout.BeginScrollView(detailsScroll);
-
-            EditorGUILayout.LabelField($"{repo.Owner}/{repo.Name}", EditorStyles.boldLabel);
-            if (!string.IsNullOrWhiteSpace(repo.Description))
-            {
-                EditorGUILayout.LabelField(repo.Description, EditorStyles.wordWrappedLabel);
-                EditorGUILayout.Space();
-            }
-
-            EditorGUILayout.LabelField("URL", repo.Url);
-            if (!string.IsNullOrWhiteSpace(repo.DefaultBranch))
-            {
-                EditorGUILayout.LabelField("Default Branch", repo.DefaultBranch);
-            }
-
-            if (repo.IsPrivate)
-            {
-                EditorGUILayout.HelpBox("Private repository. Collaborators will need access to clone this submodule.", MessageType.Warning);
-            }
-
-            selectedRepoPackageName = EditorGUILayout.TextField("Package Name", selectedRepoPackageName);
-            selectedRepoBranch = EditorGUILayout.TextField("Branch", selectedRepoBranch);
-
-            string validationError = ValidatePackageInput(repo.Url, selectedRepoPackageName);
-            if (!string.IsNullOrWhiteSpace(validationError))
-            {
-                EditorGUILayout.HelpBox(validationError, MessageType.Warning);
-            }
-            else
-            {
-                EditorGUILayout.LabelField(PackageNameRule, EditorStyles.miniLabel);
-            }
-
-            EditorGUILayout.EndScrollView();
-            GUILayout.FlexibleSpace();
-
-            bool canAdd = !repo.IsInstalled && string.IsNullOrWhiteSpace(validationError);
-            using (new EditorGUI.DisabledScope(!canAdd))
-            {
-                if (GUILayout.Button("Add Package"))
-                {
-                    TryAddSubmodule(repo.Url, selectedRepoBranch, selectedRepoPackageName);
-                }
-            }
-
-            EditorGUILayout.EndVertical();
-        }
-
-        private bool IsRepoVisible(GitHubRepo repo)
-        {
-            if (string.IsNullOrWhiteSpace(repoSearch))
-            {
-                return true;
-            }
-
-            string needle = repoSearch.Trim();
-            string haystack = $"{repo.Owner}/{repo.Name}";
-            return haystack.IndexOf(needle, StringComparison.OrdinalIgnoreCase) >= 0;
-        }
-
         private void InitializeRepoDefaults(GitHubRepo repo)
         {
             selectedRepoPackageName = GitHubUtility.DerivePackageNameSuggestion(repo.Owner, repo.Name);
             selectedRepoBranch = string.IsNullOrWhiteSpace(repo.DefaultBranch) ? "main" : repo.DefaultBranch;
+            addStatus = string.Empty;
         }
 
         private string ValidatePackageInput(string url, string packageName)
@@ -870,7 +1310,7 @@ namespace Calander.SubmodulePackageManager.Editor
                 return;
             }
 
-            addStatus = $"Added {packageName} to {path}.";
+            addStatus = $"Successfully added {packageName}.";
             addStatusType = MessageType.Info;
             RefreshInstalled();
             RefreshAvailable();
@@ -912,6 +1352,71 @@ namespace Calander.SubmodulePackageManager.Editor
             PopupWindow.Show(buttonRect, activeAddPopup);
         }
 
+        private void DrawAddByUrl()
+        {
+            EditorGUILayout.Space(8);
+            GUILayout.Label("Add package from git URL", Styles.TitleLabel);
+            EditorGUILayout.Space(8);
+
+            EditorGUI.BeginChangeCheck();
+            EditorGUILayout.BeginHorizontal();
+            GUILayout.Label("URL", Styles.InfoLabel, GUILayout.Width(80));
+            addUrl = EditorGUILayout.TextField(addUrl);
+            EditorGUILayout.EndHorizontal();
+            if (EditorGUI.EndChangeCheck())
+            {
+                if (TryDerivePackageNameFromUrl(addUrl, out string derivedName))
+                {
+                    addPackageName = derivedName;
+                }
+            }
+
+            EditorGUILayout.BeginHorizontal();
+            GUILayout.Label("Branch", Styles.InfoLabel, GUILayout.Width(80));
+            addBranch = EditorGUILayout.TextField(addBranch);
+            EditorGUILayout.EndHorizontal();
+
+            EditorGUILayout.BeginHorizontal();
+            GUILayout.Label("Package Name", Styles.InfoLabel, GUILayout.Width(80));
+            addPackageName = EditorGUILayout.TextField(addPackageName);
+            EditorGUILayout.EndHorizontal();
+
+            if (TryDerivePackageNameFromUrl(addUrl, out string autoName))
+            {
+                if (string.IsNullOrWhiteSpace(addPackageName) || !GitUtility.IsValidPackageName(addPackageName))
+                {
+                    addPackageName = autoName;
+                }
+            }
+
+            EditorGUILayout.Space(8);
+
+            string validationError = ValidatePackageInput(addUrl, addPackageName);
+            if (!string.IsNullOrWhiteSpace(validationError))
+            {
+                EditorGUILayout.HelpBox(validationError, MessageType.Warning);
+            }
+            else
+            {
+                GUILayout.Label(PackageNameRule, Styles.FooterLabel);
+            }
+
+            if (!string.IsNullOrWhiteSpace(addStatus))
+            {
+                EditorGUILayout.HelpBox(addStatus, addStatusType);
+            }
+
+            EditorGUILayout.Space(8);
+
+            using (new EditorGUI.DisabledScope(!gitAvailable || !string.IsNullOrWhiteSpace(validationError)))
+            {
+                if (GUILayout.Button("Add", GUILayout.Height(24)))
+                {
+                    TryAddSubmodule(addUrl, addBranch, addPackageName);
+                }
+            }
+        }
+
         private sealed class AddFromUrlPopup : PopupWindowContent
         {
             private readonly GitSubmodulesWindow owner;
@@ -923,11 +1428,12 @@ namespace Calander.SubmodulePackageManager.Editor
 
             public override Vector2 GetWindowSize()
             {
-                return new Vector2(420f, 260f);
+                return new Vector2(400f, 220f);
             }
 
             public override void OnGUI(Rect rect)
             {
+                Styles.Initialize();
                 owner.DrawAddByUrl();
             }
 
