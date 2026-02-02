@@ -16,6 +16,7 @@ namespace Calander.SubmodulePackageManager.Editor
 
         private const string PackageNameRule = "Package name must follow com.author.package (lowercase).";
         private const float ListPaneRatio = 0.35f;
+        private const double AutoRefreshIntervalSeconds = 300.0; // 5 minutes
 
         private Tab currentTab = Tab.Installed;
 
@@ -59,6 +60,9 @@ namespace Calander.SubmodulePackageManager.Editor
 
         private RepoListHandle repoListHandle;
         private bool isLoadingRepos;
+
+        private double lastInstalledRefreshTime;
+        private double lastDiscoverRefreshTime;
 
         private int lastInstalledIndex = -1;
         private string installedBranchInput = string.Empty;
@@ -113,7 +117,7 @@ namespace Calander.SubmodulePackageManager.Editor
 
             if (previousTab != currentTab)
             {
-                RefreshCurrentTab();
+                RefreshCurrentTabIfStale();
                 Repaint();
             }
 
@@ -254,6 +258,31 @@ namespace Calander.SubmodulePackageManager.Editor
             }
         }
 
+        private void RefreshCurrentTabIfStale()
+        {
+            double now = EditorApplication.timeSinceStartup;
+
+            switch (currentTab)
+            {
+                case Tab.Installed:
+                    bool installedNeedsRefresh = installedSubmodules.Count == 0 ||
+                        (now - lastInstalledRefreshTime) > AutoRefreshIntervalSeconds;
+                    if (installedNeedsRefresh)
+                    {
+                        RefreshInstalled();
+                    }
+                    break;
+                case Tab.Discover:
+                    bool discoverNeedsRefresh = availableRepos.Count == 0 ||
+                        (now - lastDiscoverRefreshTime) > AutoRefreshIntervalSeconds;
+                    if (discoverNeedsRefresh && !isLoadingRepos)
+                    {
+                        RefreshAvailable();
+                    }
+                    break;
+            }
+        }
+
         private void RefreshInstalled()
         {
             installedStatus = string.Empty;
@@ -274,6 +303,7 @@ namespace Calander.SubmodulePackageManager.Editor
             }
 
             selectedInstalledIndex = Mathf.Clamp(selectedInstalledIndex, -1, installedSubmodules.Count - 1);
+            lastInstalledRefreshTime = EditorApplication.timeSinceStartup;
         }
 
         private void RefreshAvailable()
@@ -331,6 +361,7 @@ namespace Calander.SubmodulePackageManager.Editor
             MarkInstalledRepos();
             selectedRepoIndex = Mathf.Clamp(selectedRepoIndex, -1, availableRepos.Count - 1);
             repoListHandle = null;
+            lastDiscoverRefreshTime = EditorApplication.timeSinceStartup;
             Repaint();
         }
 
