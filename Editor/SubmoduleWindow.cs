@@ -57,6 +57,9 @@ namespace Calander.SubmodulePackageManager.Editor
         private string selectedRepoPackageName = string.Empty;
         private string selectedRepoBranch = string.Empty;
 
+        private RepoListHandle repoListHandle;
+        private bool isLoadingRepos;
+
         private int lastInstalledIndex = -1;
         private string installedBranchInput = string.Empty;
         private string installedActionStatus = string.Empty;
@@ -72,6 +75,8 @@ namespace Calander.SubmodulePackageManager.Editor
 
         private void OnGUI()
         {
+            UpdateRepoLoading();
+
             DrawToolbar();
             DrawDependencyGate();
 
@@ -291,16 +296,42 @@ namespace Calander.SubmodulePackageManager.Editor
                 return;
             }
 
-            if (!GitHubUtility.TryListRepos(out availableRepos, out string error))
+            // Start async loading
+            isLoadingRepos = true;
+            repoListHandle = GitHubUtility.StartListReposAsync();
+        }
+
+        private void UpdateRepoLoading()
+        {
+            if (!isLoadingRepos || repoListHandle == null)
             {
-                discoverStatus = error;
-                discoverStatusType = MessageType.Error;
-                availableRepos = new List<GitHubRepo>();
                 return;
             }
 
+            repoListHandle.Update();
+
+            if (!repoListHandle.IsComplete)
+            {
+                Repaint();
+                return;
+            }
+
+            isLoadingRepos = false;
+
+            if (!repoListHandle.IsSuccess)
+            {
+                discoverStatus = repoListHandle.Error;
+                discoverStatusType = MessageType.Error;
+                availableRepos = new List<GitHubRepo>();
+                repoListHandle = null;
+                return;
+            }
+
+            availableRepos = repoListHandle.Repos;
             MarkInstalledRepos();
             selectedRepoIndex = Mathf.Clamp(selectedRepoIndex, -1, availableRepos.Count - 1);
+            repoListHandle = null;
+            Repaint();
         }
 
         private void MarkInstalledRepos()
@@ -497,12 +528,23 @@ namespace Calander.SubmodulePackageManager.Editor
 
         private void DrawDiscoverTab()
         {
+            if (isLoadingRepos && repoListHandle != null)
+            {
+                EditorGUILayout.Space();
+                EditorGUILayout.BeginVertical(EditorStyles.helpBox);
+                EditorGUILayout.LabelField(repoListHandle.StatusMessage, EditorStyles.boldLabel);
+                Rect progressRect = GUILayoutUtility.GetRect(0, 20, GUILayout.ExpandWidth(true));
+                EditorGUI.ProgressBar(progressRect, repoListHandle.Progress, $"{Mathf.RoundToInt(repoListHandle.Progress * 100)}%");
+                EditorGUILayout.EndVertical();
+                EditorGUILayout.Space();
+            }
+
             if (!string.IsNullOrWhiteSpace(discoverStatus))
             {
                 EditorGUILayout.HelpBox(discoverStatus, discoverStatusType);
             }
 
-            if (availableRepos == null || availableRepos.Count == 0)
+            if (!isLoadingRepos && (availableRepos == null || availableRepos.Count == 0))
             {
                 EditorGUILayout.HelpBox("No repositories loaded. Press Refresh to fetch your GitHub repos.", MessageType.Info);
             }
@@ -648,7 +690,7 @@ namespace Calander.SubmodulePackageManager.Editor
 
             if (repo.IsPrivate)
             {
-                EditorGUILayout.HelpBox("Private repositories are not supported for public submodule installs.", MessageType.Info);
+                EditorGUILayout.HelpBox("Private repository. Collaborators will need access to clone this submodule.", MessageType.Warning);
             }
 
             selectedRepoPackageName = EditorGUILayout.TextField("Package Name", selectedRepoPackageName);
@@ -667,7 +709,7 @@ namespace Calander.SubmodulePackageManager.Editor
             EditorGUILayout.EndScrollView();
             GUILayout.FlexibleSpace();
 
-            bool canAdd = !repo.IsPrivate && !repo.IsInstalled && string.IsNullOrWhiteSpace(validationError);
+            bool canAdd = !repo.IsInstalled && string.IsNullOrWhiteSpace(validationError);
             using (new EditorGUI.DisabledScope(!canAdd))
             {
                 if (GUILayout.Button("Add Package"))
@@ -693,15 +735,7 @@ namespace Calander.SubmodulePackageManager.Editor
 
         private void InitializeRepoDefaults(GitHubRepo repo)
         {
-            if (GitUtility.IsValidPackageName(repo.Name))
-            {
-                selectedRepoPackageName = repo.Name;
-            }
-            else
-            {
-                selectedRepoPackageName = string.Empty;
-            }
-
+            selectedRepoPackageName = GitHubUtility.DerivePackageNameSuggestion(repo.Owner, repo.Name);
             selectedRepoBranch = string.IsNullOrWhiteSpace(repo.DefaultBranch) ? "main" : repo.DefaultBranch;
         }
 
@@ -738,18 +772,13 @@ namespace Calander.SubmodulePackageManager.Editor
         private bool TryDerivePackageNameFromUrl(string url, out string packageName)
         {
             packageName = string.Empty;
-            if (!GitHubUtility.TryParseGitHubRepo(url, out _, out string repo))
+            if (!GitHubUtility.TryParseGitHubRepo(url, out string owner, out string repo))
             {
                 return false;
             }
 
-            if (GitUtility.IsValidPackageName(repo))
-            {
-                packageName = repo;
-                return true;
-            }
-
-            return false;
+            packageName = GitHubUtility.DerivePackageNameSuggestion(owner, repo);
+            return !string.IsNullOrEmpty(packageName);
         }
 
         private void TryAddSubmodule(string url, string branch, string packageName)

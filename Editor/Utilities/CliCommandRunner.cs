@@ -2,6 +2,8 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
+using System.Text;
+using System.Threading;
 using UnityEngine;
 using Debug = UnityEngine.Debug;
 
@@ -16,8 +18,57 @@ namespace Calander.SubmodulePackageManager.Editor
         public bool IsSuccess => ExitCode == 0;
     }
 
+    internal sealed class AsyncCommandHandle
+    {
+        public bool IsComplete { get; private set; }
+        public CommandResult Result { get; private set; }
+        public float Progress { get; private set; }
+        public string StatusMessage { get; private set; }
+
+        private Thread workerThread;
+        private readonly string fileName;
+        private readonly string arguments;
+        private readonly string workingDir;
+
+        public AsyncCommandHandle(string fileName, string arguments, string workingDir)
+        {
+            this.fileName = fileName;
+            this.arguments = arguments;
+            this.workingDir = workingDir;
+            StatusMessage = "Starting...";
+        }
+
+        public void Start()
+        {
+            workerThread = new Thread(RunCommand)
+            {
+                IsBackground = true
+            };
+            workerThread.Start();
+        }
+
+        private void RunCommand()
+        {
+            StatusMessage = "Connecting to GitHub...";
+            Progress = 0.1f;
+
+            Result = CliCommandRunner.Run(fileName, arguments, workingDir);
+
+            Progress = 1f;
+            StatusMessage = "Complete";
+            IsComplete = true;
+        }
+    }
+
     internal static class CliCommandRunner
     {
+        internal static AsyncCommandHandle RunAsync(string fileName, string arguments, string workingDir)
+        {
+            var handle = new AsyncCommandHandle(fileName, arguments, workingDir);
+            handle.Start();
+            return handle;
+        }
+
         internal static CommandResult Run(string fileName, string arguments, string workingDir)
         {
             if (!TryResolveCommand(fileName, out string resolvedPath))
