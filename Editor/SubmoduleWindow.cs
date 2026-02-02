@@ -212,7 +212,7 @@ namespace Calander.SubmodulePackageManager.Editor
         private void OnEnable()
         {
             RefreshDependencies();
-            RefreshInstalled();
+            RefreshCurrentTab();
         }
 
         private void OnGUI()
