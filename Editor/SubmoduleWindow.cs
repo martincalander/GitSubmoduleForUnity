@@ -207,6 +207,12 @@ namespace Calander.SubmodulePackageManager.Editor
         private string installedActionStatus = string.Empty;
         private MessageType installedActionStatusType = MessageType.None;
 
+        // Branch cache: keyed by repo URL
+        private Dictionary<string, List<string>> branchCache = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
+        private string branchFetchUrl = string.Empty;
+        private bool isFetchingBranches;
+        private AsyncCommandHandle branchFetchHandle;
+
         private AddFromUrlPopup activeAddPopup;
 
         private void OnEnable()
@@ -219,6 +225,7 @@ namespace Calander.SubmodulePackageManager.Editor
         {
             Styles.Initialize();
             UpdateRepoLoading();
+            UpdateBranchFetching();
 
             EditorGUILayout.BeginVertical();
             DrawToolbar();
@@ -788,7 +795,7 @@ namespace Calander.SubmodulePackageManager.Editor
             EditorGUILayout.Space(12);
             GUILayout.Label("Change Branch", Styles.SectionHeader);
             EditorGUILayout.BeginHorizontal();
-            installedBranchInput = EditorGUILayout.TextField(installedBranchInput, GUILayout.Height(20));
+            DrawBranchDropdown(submodule.Url, installedBranchInput, branch => { installedBranchInput = branch; });
             using (new EditorGUI.DisabledScope(!gitAvailable || string.IsNullOrWhiteSpace(installedBranchInput)))
             {
                 if (GUILayout.Button("Apply", GUILayout.Width(60), GUILayout.Height(20)))
@@ -877,7 +884,7 @@ namespace Calander.SubmodulePackageManager.Editor
 
                 EditorGUILayout.BeginHorizontal();
                 GUILayout.Label("Branch", Styles.InfoLabel, GUILayout.Width(100));
-                selectedRepoBranch = EditorGUILayout.TextField(selectedRepoBranch);
+                DrawBranchDropdown(repo.Url, selectedRepoBranch, branch => { selectedRepoBranch = branch; });
                 EditorGUILayout.EndHorizontal();
 
                 EditorGUILayout.EndVertical();
@@ -1184,6 +1191,120 @@ namespace Calander.SubmodulePackageManager.Editor
         private void UpdatePackageJsonChecking()
         {
             // This is handled by EditorApplication.update callback
+        }
+
+        private void FetchBranchesForUrl(string url)
+        {
+            if (string.IsNullOrWhiteSpace(url))
+            {
+                return;
+            }
+
+            // Already cached
+            if (branchCache.ContainsKey(url))
+            {
+                return;
+            }
+
+            // Already fetching this URL
+            if (isFetchingBranches && string.Equals(branchFetchUrl, url, StringComparison.OrdinalIgnoreCase))
+            {
+                return;
+            }
+
+            // Cancel any previous fetch
+            isFetchingBranches = true;
+            branchFetchUrl = url;
+            branchFetchHandle = CliCommandRunner.RunAsync("git", $"ls-remote --heads {url}", GitUtility.ProjectRoot);
+        }
+
+        private void UpdateBranchFetching()
+        {
+            if (!isFetchingBranches || branchFetchHandle == null)
+            {
+                return;
+            }
+
+            if (!branchFetchHandle.IsComplete)
+            {
+                return;
+            }
+
+            var result = branchFetchHandle.Result;
+            var branches = new List<string>();
+
+            if (result.IsSuccess)
+            {
+                string[] lines = result.StdOut.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries);
+                foreach (string line in lines)
+                {
+                    int refsIndex = line.IndexOf("refs/heads/", StringComparison.Ordinal);
+                    if (refsIndex >= 0)
+                    {
+                        string branch = line.Substring(refsIndex + "refs/heads/".Length).Trim();
+                        if (!string.IsNullOrEmpty(branch))
+                        {
+                            branches.Add(branch);
+                        }
+                    }
+                }
+                branches.Sort(StringComparer.OrdinalIgnoreCase);
+            }
+
+            if (!string.IsNullOrWhiteSpace(branchFetchUrl))
+            {
+                branchCache[branchFetchUrl] = branches;
+            }
+
+            branchFetchHandle = null;
+            isFetchingBranches = false;
+            Repaint();
+        }
+
+        private void DrawBranchDropdown(string url, string currentBranch, System.Action<string> onBranchSelected)
+        {
+            // Trigger fetch if not cached
+            FetchBranchesForUrl(url);
+
+            List<string> branches = null;
+            bool hasCachedBranches = !string.IsNullOrWhiteSpace(url) && branchCache.TryGetValue(url, out branches) && branches != null && branches.Count > 0;
+            bool isFetchingThisUrl = isFetchingBranches && string.Equals(branchFetchUrl, url, StringComparison.OrdinalIgnoreCase);
+            bool isLoading = isFetchingThisUrl && !hasCachedBranches;
+
+            string buttonLabel = string.IsNullOrWhiteSpace(currentBranch) ? "Select branch..." : currentBranch;
+            string tooltip = isLoading ? "Fetching branches from remote..." : "";
+
+            using (new EditorGUI.DisabledScope(isLoading))
+            {
+                Rect dropdownRect = GUILayoutUtility.GetRect(new GUIContent(buttonLabel), EditorStyles.popup, GUILayout.Height(20));
+                if (EditorGUI.DropdownButton(dropdownRect, new GUIContent(buttonLabel, tooltip), FocusType.Passive, EditorStyles.popup))
+                {
+                    if (hasCachedBranches)
+                    {
+                        var menu = new GenericMenu();
+                        foreach (string branch in branches)
+                        {
+                            bool isActive = string.Equals(branch, currentBranch, StringComparison.OrdinalIgnoreCase);
+                            string branchCapture = branch;
+                            menu.AddItem(new GUIContent(branch), isActive, () =>
+                            {
+                                onBranchSelected?.Invoke(branchCapture);
+                                Repaint();
+                            });
+                        }
+                        menu.DropDown(dropdownRect);
+                    }
+                    else
+                    {
+                        // Force re-fetch
+                        if (!string.IsNullOrWhiteSpace(url))
+                        {
+                            branchCache.Remove(url);
+                        }
+                        FetchBranchesForUrl(url);
+                    }
+                }
+            }
         }
 
         private void MarkInstalledRepos()

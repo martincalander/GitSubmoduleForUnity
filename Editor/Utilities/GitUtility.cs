@@ -224,6 +224,43 @@ namespace Calander.SubmodulePackageManager.Editor
             return true;
         }
 
+        internal static bool TryListRemoteBranches(string url, out List<string> branches, out string error)
+        {
+            branches = new List<string>();
+            error = string.Empty;
+
+            if (string.IsNullOrWhiteSpace(url))
+            {
+                error = "URL is required.";
+                return false;
+            }
+
+            var result = RunGit($"ls-remote --heads {Quote(url)}", ProjectRoot);
+            if (!result.IsSuccess)
+            {
+                error = BuildError("Failed to list remote branches", result);
+                return false;
+            }
+
+            string[] lines = result.StdOut.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries);
+            foreach (string line in lines)
+            {
+                // Format: <hash>\trefs/heads/<branch>
+                int refsIndex = line.IndexOf("refs/heads/", StringComparison.Ordinal);
+                if (refsIndex >= 0)
+                {
+                    string branch = line.Substring(refsIndex + "refs/heads/".Length).Trim();
+                    if (!string.IsNullOrEmpty(branch))
+                    {
+                        branches.Add(branch);
+                    }
+                }
+            }
+
+            branches.Sort(StringComparer.OrdinalIgnoreCase);
+            return true;
+        }
+
         internal static CommandResult RunGit(string arguments, string workingDir)
         {
             return CliCommandRunner.Run("git", arguments, workingDir);
