@@ -221,6 +221,14 @@ namespace Calander.SubmodulePackageManager.Editor
             RefreshCurrentTab();
         }
 
+        private void OnDisable()
+        {
+            EditorApplication.update -= ProcessNextPackageJsonCheck;
+            isCheckingPackageJson = false;
+            isFetchingBranches = false;
+            branchFetchHandle = null;
+        }
+
         private void OnGUI()
         {
             Styles.Initialize();
