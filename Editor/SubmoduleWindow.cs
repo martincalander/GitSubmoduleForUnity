@@ -365,31 +365,30 @@ namespace Calander.SubmodulePackageManager.Editor
 
         private bool DrawDependencyGate()
         {
-            if (gitAvailable && ghAvailable)
+            if (!gitAvailable)
             {
-                if (!ghAuthenticated && currentTab == Tab.Discover)
-                {
-                    EditorGUILayout.HelpBox("GitHub CLI is not authenticated. Run 'gh auth login' in terminal to discover your repositories.", MessageType.Warning);
-                }
+                EditorGUILayout.Space(20);
+                DrawDependencyCard("Git", gitError, ToolKind.Git, TryInstallGit);
 
                 if (!string.IsNullOrWhiteSpace(installStatus))
                 {
                     EditorGUILayout.HelpBox(installStatus, installStatusType);
                 }
 
-                return true;
+                return false;
             }
 
-            EditorGUILayout.Space(20);
-
-            if (!gitAvailable)
+            // Git is available — show gh warnings inline but don't block the UI
+            if (!ghAvailable && currentTab == Tab.Discover)
             {
-                DrawDependencyCard("Git", gitError, ToolKind.Git, TryInstallGit);
+                EditorGUILayout.HelpBox(
+                    "GitHub CLI is not installed. Install it to discover your repositories.\n" +
+                    "You can still add packages manually via the + button using a git URL.",
+                    MessageType.Info);
             }
-
-            if (!ghAvailable)
+            else if (ghAvailable && !ghAuthenticated && currentTab == Tab.Discover)
             {
-                DrawDependencyCard("GitHub CLI", ghError, ToolKind.GitHubCli, TryInstallGh);
+                EditorGUILayout.HelpBox("GitHub CLI is not authenticated. Run 'gh auth login' in terminal to discover your repositories.", MessageType.Warning);
             }
 
             if (!string.IsNullOrWhiteSpace(installStatus))
@@ -397,7 +396,7 @@ namespace Calander.SubmodulePackageManager.Editor
                 EditorGUILayout.HelpBox(installStatus, installStatusType);
             }
 
-            return false;
+            return true;
         }
 
         private void DrawDependencyCard(string title, string error, ToolKind tool, Action installAction)
@@ -567,7 +566,18 @@ namespace Calander.SubmodulePackageManager.Editor
 
             if (availableRepos == null || availableRepos.Count == 0)
             {
-                GUILayout.Label("No repositories found. Click refresh to load.", EditorStyles.centeredGreyMiniLabel);
+                if (!ghAvailable)
+                {
+                    GUILayout.Label("Install GitHub CLI to discover repositories.", EditorStyles.centeredGreyMiniLabel);
+                }
+                else if (!ghAuthenticated)
+                {
+                    GUILayout.Label("Authenticate GitHub CLI to discover repositories.", EditorStyles.centeredGreyMiniLabel);
+                }
+                else
+                {
+                    GUILayout.Label("No repositories found. Click refresh to load.", EditorStyles.centeredGreyMiniLabel);
+                }
                 return;
             }
 
@@ -1088,15 +1098,12 @@ namespace Calander.SubmodulePackageManager.Editor
 
             if (!ghAvailable)
             {
-                discoverStatus = "GitHub CLI is required to list your repositories.";
-                discoverStatusType = MessageType.Warning;
+                availableRepos = new List<GitHubRepo>();
                 return;
             }
 
             if (!ghAuthenticated)
             {
-                discoverStatus = string.IsNullOrWhiteSpace(ghAuthError) ? "GitHub CLI is not authenticated." : ghAuthError.Trim();
-                discoverStatusType = MessageType.Warning;
                 availableRepos = new List<GitHubRepo>();
                 return;
             }
