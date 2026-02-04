@@ -389,10 +389,7 @@ namespace Calander.SubmodulePackageManager.Editor
             // Git is available — show gh warnings inline but don't block the UI
             if (!ghAvailable && currentTab == Tab.Discover)
             {
-                EditorGUILayout.HelpBox(
-                    "GitHub CLI is not installed. Install it to discover your repositories.\n" +
-                    "You can still add packages manually via the + button using a git URL.",
-                    MessageType.Info);
+                DrawGhInstallCard();
             }
             else if (ghAvailable && !ghAuthenticated && currentTab == Tab.Discover)
             {
@@ -429,6 +426,76 @@ namespace Calander.SubmodulePackageManager.Editor
                 {
                     installAction?.Invoke();
                 }
+            }
+
+            EditorGUILayout.EndVertical();
+        }
+
+        private void DrawGhInstallCard()
+        {
+            bool isMac = Application.platform == RuntimePlatform.OSXEditor;
+            bool needsBrew = isMac && !CliInstaller.IsBrewAvailable();
+
+            EditorGUILayout.BeginVertical(EditorStyles.helpBox);
+            EditorGUILayout.LabelField("GitHub CLI is not installed.", EditorStyles.boldLabel);
+            EditorGUILayout.LabelField("Install it to discover your repositories. You can still add packages manually via the + button.", EditorStyles.wordWrappedLabel);
+
+            if (needsBrew)
+            {
+                EditorGUILayout.Space(4);
+                EditorGUILayout.LabelField("Homebrew is required to install GitHub CLI on macOS.", Styles.SubtitleLabel);
+
+                EditorGUILayout.BeginHorizontal();
+                if (GUILayout.Button("Install Homebrew", GUILayout.Height(22)))
+                {
+                    if (EditorUtility.DisplayDialog("Install Homebrew",
+                        "This will download and install Homebrew from https://brew.sh/\n\nProceed?",
+                        "Install", "Cancel"))
+                    {
+                        installStatus = "Installing Homebrew... this may take a minute.";
+                        installStatusType = MessageType.Info;
+                        Repaint();
+
+                        if (CliInstaller.TryInstallBrew(out string brewOut, out string brewErr))
+                        {
+                            installStatus = "Homebrew installed. You can now install GitHub CLI.";
+                            installStatusType = MessageType.Info;
+                        }
+                        else
+                        {
+                            string detail = string.IsNullOrWhiteSpace(brewErr) ? brewOut : brewErr;
+                            installStatus = "Homebrew installation failed. Install manually from https://brew.sh/\n" +
+                                (string.IsNullOrWhiteSpace(detail) ? "" : detail.Trim());
+                            installStatusType = MessageType.Error;
+                        }
+                    }
+                }
+
+                if (GUILayout.Button("Copy brew install command", GUILayout.Height(22)))
+                {
+                    EditorGUIUtility.systemCopyBuffer = "/bin/bash -c \"$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)\"";
+                    installStatus = "Homebrew install command copied to clipboard. Paste in Terminal.";
+                    installStatusType = MessageType.Info;
+                }
+
+                GUILayout.FlexibleSpace();
+                EditorGUILayout.EndHorizontal();
+            }
+            else
+            {
+                EditorGUILayout.BeginHorizontal();
+                if (GUILayout.Button("Install GitHub CLI", GUILayout.Height(22)))
+                {
+                    if (EditorUtility.DisplayDialog("Install GitHub CLI",
+                        "Allow this tool to install GitHub CLI using your system package manager?\n\n" +
+                        CliInstaller.GetInstallHint(ToolKind.GitHubCli),
+                        "Install", "Cancel"))
+                    {
+                        TryInstallGh();
+                    }
+                }
+                GUILayout.FlexibleSpace();
+                EditorGUILayout.EndHorizontal();
             }
 
             EditorGUILayout.EndVertical();
@@ -1025,16 +1092,27 @@ namespace Calander.SubmodulePackageManager.Editor
 
             if (CliInstaller.TryInstallGh(out string output, out string error))
             {
-                installStatus = string.IsNullOrWhiteSpace(output) ? "GitHub CLI installation completed." : output.Trim();
-                installStatusType = MessageType.Info;
+                RefreshDependencies();
+
+                if (ghAvailable)
+                {
+                    installStatus = "GitHub CLI installed successfully. Run 'gh auth login' in terminal to authenticate.";
+                    installStatusType = MessageType.Info;
+                }
+                else
+                {
+                    installStatus = "GitHub CLI install finished but could not be detected. You may need to restart Unity.";
+                    installStatusType = MessageType.Warning;
+                }
             }
             else
             {
                 installStatus = string.IsNullOrWhiteSpace(error) ? "GitHub CLI installation failed." : error.Trim();
                 installStatusType = MessageType.Error;
+                RefreshDependencies();
             }
 
-            RefreshDependencies();
+            Repaint();
         }
 
         private void RefreshCurrentTab()

@@ -49,6 +49,22 @@ namespace Calander.SubmodulePackageManager.Editor
             }
         }
 
+        internal static bool IsBrewAvailable()
+        {
+            return CliCommandRunner.IsCommandAvailable("brew");
+        }
+
+        internal static bool TryInstallBrew(out string output, out string error)
+        {
+            output = string.Empty;
+            error = string.Empty;
+
+            var result = CliCommandRunner.Run("bash", "-c \"/bin/bash -c \\\"$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)\\\"\"", GitUtility.ProjectRoot);
+            output = result.StdOut;
+            error = result.StdErr;
+            return result.IsSuccess;
+        }
+
         private static bool TryInstallWithBrew(ToolKind tool, out string output, out string error)
         {
             output = string.Empty;
@@ -56,7 +72,7 @@ namespace Calander.SubmodulePackageManager.Editor
 
             if (!CliCommandRunner.IsCommandAvailable("brew"))
             {
-                error = "Homebrew was not found. Install it from https://brew.sh/ and try again.";
+                error = "Homebrew is not installed. Install Homebrew first, then try again.";
                 return false;
             }
 
