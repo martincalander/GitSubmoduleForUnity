@@ -1524,8 +1524,12 @@ namespace Calander.SubmodulePackageManager.Editor
                 return;
             }
 
-            addStatus = $"Successfully added {packageName}.";
+            addStatus = $"Successfully added {packageName}. Refreshing assets...";
             addStatusType = MessageType.Info;
+
+            // Trigger asset database refresh to recognize the new package and recompile
+            AssetDatabase.Refresh(ImportAssetOptions.ForceUpdate);
+
             RefreshInstalled();
             RefreshAvailable();
 

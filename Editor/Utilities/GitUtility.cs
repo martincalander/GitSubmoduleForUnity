@@ -86,6 +86,13 @@ namespace Calander.SubmodulePackageManager.Editor
             var listResult = RunGit("config --file .gitmodules --name-only --get-regexp path", root);
             if (!listResult.IsSuccess)
             {
+                // Exit code 1 with no stderr typically means no matches found (empty .gitmodules or no path entries)
+                // This is not an error - it just means there are no submodules configured
+                if (listResult.ExitCode == 1 && string.IsNullOrWhiteSpace(listResult.StdErr))
+                {
+                    return true;
+                }
+
                 error = BuildError("Failed to read .gitmodules", listResult);
                 return false;
             }
