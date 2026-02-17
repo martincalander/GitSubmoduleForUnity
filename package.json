@@ -11,11 +11,10 @@
   ],
   "author": {
     "name": "Martin Calander",
-    "email": "martin.calander@gmail.com",
-    "url": "https://martincalander.com"
+    "url": "https://martincalander.com",
+    "email": "martin.calander@gmail.com"
   },
   "dependencies": {
     "com.unity.modules.imgui": "1.0.0"
-  },
-  "hideInEditor": false
+  }
 }
