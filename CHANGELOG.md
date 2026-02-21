@@ -57,6 +57,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Automatic recovery for fresh clones by initializing uninitialized submodules (`git submodule update --init --recursive`) on editor load.
+
 ### Planned
 
 - Package version display and comparison

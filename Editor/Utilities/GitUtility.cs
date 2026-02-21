@@ -83,6 +83,11 @@ namespace Calander.SubmodulePackageManager.Editor
                 return true;
             }
 
+            if (!TryEnsureSubmodulesInitialized(out _, out error))
+            {
+                return false;
+            }
+
             var listResult = RunGit("config --file .gitmodules --name-only --get-regexp path", root);
             if (!listResult.IsSuccess)
             {
@@ -136,6 +141,41 @@ namespace Calander.SubmodulePackageManager.Editor
                 submodules.Add(info);
             }
 
+            return true;
+        }
+
+        internal static bool TryEnsureSubmodulesInitialized(out bool initializedAny, out string error)
+        {
+            initializedAny = false;
+            error = string.Empty;
+
+            string root = ProjectRoot;
+            string gitModulesPath = Path.Combine(root, ".gitmodules");
+            if (!File.Exists(gitModulesPath))
+            {
+                return true;
+            }
+
+            var statusResult = RunGit("submodule status --recursive", root);
+            if (!statusResult.IsSuccess)
+            {
+                error = BuildError("Failed to read submodule status", statusResult);
+                return false;
+            }
+
+            if (!HasUninitializedSubmodules(statusResult.StdOut))
+            {
+                return true;
+            }
+
+            var initResult = RunGit("submodule update --init --recursive", root);
+            if (!initResult.IsSuccess)
+            {
+                error = BuildError("Failed to initialize missing submodules", initResult);
+                return false;
+            }
+
+            initializedAny = true;
             return true;
         }
 
@@ -290,6 +330,25 @@ namespace Calander.SubmodulePackageManager.Editor
             }
 
             return commits;
+        }
+
+        private static bool HasUninitializedSubmodules(string submoduleStatusOutput)
+        {
+            if (string.IsNullOrWhiteSpace(submoduleStatusOutput))
+            {
+                return false;
+            }
+
+            string[] lines = submoduleStatusOutput.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries);
+            foreach (string line in lines)
+            {
+                if (!string.IsNullOrEmpty(line) && line[0] == '-')
+                {
+                    return true;
+                }
+            }
+
+            return false;
         }
 
         private static string ExtractSubmoduleName(string line)

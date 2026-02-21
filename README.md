@@ -12,6 +12,7 @@ A Unity Editor tool that provides a visual interface for managing Git submodules
 - **Sorting & Filtering** - Filter by valid packages, public/private repos, and sort by name or recent activity
 - **Branch Management** - Switch branches and update submodules with ease
 - **Private Repo Support** - Works with private repositories (collaborators need access)
+- **Fresh Clone Recovery** - Automatically initializes missing submodules on editor load
 
 ## Requirements
 
@@ -102,6 +103,14 @@ gh auth login
 
 ### Repository doesn't appear as valid package
 Ensure your repository has a valid `package.json` in the root directory with the required Unity package fields.
+
+### Package folders are empty on a fresh clone
+Submodule Helper now auto-runs `git submodule update --init --recursive` when it detects uninitialized submodules.
+
+If your environment blocks that command (for example no network or missing access), run it manually in your project root:
+```bash
+git submodule update --init --recursive
+```
 
 ## License
 
