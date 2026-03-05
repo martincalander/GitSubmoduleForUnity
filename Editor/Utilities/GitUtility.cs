@@ -18,6 +18,12 @@ namespace Calander.SubmodulePackageManager.Editor
         public bool IsUnderPackages;
     }
 
+    [Serializable]
+    internal sealed class PackageJsonMetadata
+    {
+        public string name;
+    }
+
     internal static class GitUtility
     {
         private static readonly Regex PackageNameRegex = new Regex(@"^com\.[a-z0-9]+(\.[a-z0-9]+)+$", RegexOptions.Compiled);
@@ -45,15 +51,40 @@ namespace Calander.SubmodulePackageManager.Editor
                 return false;
             }
 
-            string content = File.ReadAllText(packageJsonPath);
-            var match = Regex.Match(content, "\"name\"\\s*:\\s*\"(?<name>[^\"]+)\"");
-            if (!match.Success)
+            try
+            {
+                string content = File.ReadAllText(packageJsonPath);
+                return TryReadPackageNameFromJson(content, out packageName);
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        internal static bool TryReadPackageNameFromJson(string packageJsonContent, out string packageName)
+        {
+            packageName = string.Empty;
+            if (string.IsNullOrWhiteSpace(packageJsonContent))
             {
                 return false;
             }
 
-            packageName = match.Groups["name"].Value.Trim();
-            return !string.IsNullOrEmpty(packageName);
+            try
+            {
+                var metadata = JsonUtility.FromJson<PackageJsonMetadata>(packageJsonContent);
+                if (metadata == null || string.IsNullOrWhiteSpace(metadata.name))
+                {
+                    return false;
+                }
+
+                packageName = metadata.name.Trim();
+                return !string.IsNullOrEmpty(packageName);
+            }
+            catch
+            {
+                return false;
+            }
         }
 
         internal static bool IsGitAvailable(out string version, out string error)
@@ -289,22 +320,7 @@ namespace Calander.SubmodulePackageManager.Editor
                 return false;
             }
 
-            string[] lines = result.StdOut.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries);
-            foreach (string line in lines)
-            {
-                // Format: <hash>\trefs/heads/<branch>
-                int refsIndex = line.IndexOf("refs/heads/", StringComparison.Ordinal);
-                if (refsIndex >= 0)
-                {
-                    string branch = line.Substring(refsIndex + "refs/heads/".Length).Trim();
-                    if (!string.IsNullOrEmpty(branch))
-                    {
-                        branches.Add(branch);
-                    }
-                }
-            }
-
-            branches.Sort(StringComparer.OrdinalIgnoreCase);
+            branches = ParseRemoteBranches(result.StdOut);
             return true;
         }
 
@@ -322,14 +338,7 @@ namespace Calander.SubmodulePackageManager.Editor
                 return commits;
             }
 
-            foreach (Match match in SubmoduleStatusRegex.Matches(statusResult.StdOut))
-            {
-                string commit = match.Groups[1].Value;
-                string path = NormalizePath(match.Groups[2].Value);
-                commits[path] = commit;
-            }
-
-            return commits;
+            return ParseSubmoduleCommitMap(statusResult.StdOut);
         }
 
         private static bool HasUninitializedSubmodules(string submoduleStatusOutput)
@@ -368,7 +377,56 @@ namespace Calander.SubmodulePackageManager.Editor
             return line.Substring(prefix.Length, line.Length - prefix.Length - suffix.Length);
         }
 
-        private static string NormalizePath(string path)
+        internal static Dictionary<string, string> ParseSubmoduleCommitMap(string submoduleStatusOutput)
+        {
+            var commits = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            if (string.IsNullOrWhiteSpace(submoduleStatusOutput))
+            {
+                return commits;
+            }
+
+            foreach (Match match in SubmoduleStatusRegex.Matches(submoduleStatusOutput))
+            {
+                string commit = match.Groups[1].Value;
+                string path = NormalizePath(match.Groups[2].Value);
+                if (!string.IsNullOrEmpty(path))
+                {
+                    commits[path] = commit;
+                }
+            }
+
+            return commits;
+        }
+
+        internal static List<string> ParseRemoteBranches(string lsRemoteOutput)
+        {
+            var branches = new List<string>();
+            if (string.IsNullOrWhiteSpace(lsRemoteOutput))
+            {
+                return branches;
+            }
+
+            string[] lines = lsRemoteOutput.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries);
+            foreach (string line in lines)
+            {
+                int refsIndex = line.IndexOf("refs/heads/", StringComparison.Ordinal);
+                if (refsIndex < 0)
+                {
+                    continue;
+                }
+
+                string branch = line.Substring(refsIndex + "refs/heads/".Length).Trim();
+                if (!string.IsNullOrEmpty(branch))
+                {
+                    branches.Add(branch);
+                }
+            }
+
+            branches.Sort(StringComparer.OrdinalIgnoreCase);
+            return branches;
+        }
+
+        internal static string NormalizePath(string path)
         {
             return (path ?? string.Empty).Replace("\\", "/").Trim();
         }

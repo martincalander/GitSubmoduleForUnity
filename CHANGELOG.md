@@ -60,6 +60,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - Automatic recovery for fresh clones by initializing uninitialized submodules (`git submodule update --init --recursive`) on editor load.
+- Window internals were split into focused partials plus a repository coordinator to separate IMGUI rendering from Git and GitHub refresh state.
+- GitHub repository discovery now follows paged `gh api` results until the list is exhausted or the package cap is reached.
+- Package name detection now parses `package.json` through Unity JSON deserialization instead of regex matching.
+
+### Changed
+
+- CLI execution now streams stdout/stderr asynchronously and applies a timeout instead of blocking on sequential `ReadToEnd()` calls.
+- Package metadata now links directly to the embedded README, changelog, and license files.
 
 ### Planned
 

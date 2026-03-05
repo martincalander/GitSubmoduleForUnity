@@ -2,9 +2,12 @@
   "name": "com.martincalander.submodulehelper",
   "version": "0.1.0",
   "displayName": "Submodule Helper",
-  "description": "A small helper tool for submodule through git.",
+  "description": "Unity Editor tooling for discovering, adding, updating, and removing Git submodule packages.",
   "unity": "2021.3",
   "unityRelease": "0b1",
+  "documentationUrl": "https://github.com/martincalander/com.martincalander.submodulehelper/blob/main/README.md",
+  "changelogUrl": "https://github.com/martincalander/com.martincalander.submodulehelper/blob/main/CHANGELOG.md",
+  "licensesUrl": "https://github.com/martincalander/com.martincalander.submodulehelper/blob/main/LICENSE.md",
   "keywords": [
     "GitHub",
     "Submodule"

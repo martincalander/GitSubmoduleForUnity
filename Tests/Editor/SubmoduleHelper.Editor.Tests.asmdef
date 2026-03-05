@@ -1,0 +1,21 @@
+{
+    "name": "SubmoduleHelper.Editor.Tests",
+    "rootNamespace": "SubmoduleHelper.Editor.Tests",
+    "references": [
+        "SubmoduleHelper.Editor"
+    ],
+    "includePlatforms": [
+        "Editor"
+    ],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": false,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false,
+    "optionalUnityReferences": [
+        "TestAssemblies"
+    ]
+}

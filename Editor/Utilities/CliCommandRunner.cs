@@ -9,6 +9,14 @@ using Debug = UnityEngine.Debug;
 
 namespace Calander.SubmodulePackageManager.Editor
 {
+    internal sealed class CommandSpec
+    {
+        public string FileName;
+        public string Arguments;
+        public string WorkingDirectory;
+        public int TimeoutMs = CliCommandRunner.DefaultTimeoutMs;
+    }
+
     internal sealed class CommandResult
     {
         public int ExitCode;
@@ -18,6 +26,11 @@ namespace Calander.SubmodulePackageManager.Editor
         public bool IsSuccess => ExitCode == 0;
     }
 
+    internal interface ICommandRunner
+    {
+        CommandResult Run(CommandSpec spec);
+    }
+
     internal sealed class AsyncCommandHandle
     {
         public bool IsComplete { get; private set; }
@@ -25,16 +38,14 @@ namespace Calander.SubmodulePackageManager.Editor
         public float Progress { get; private set; }
         public string StatusMessage { get; private set; }
 
+        private readonly ICommandRunner runner;
+        private readonly CommandSpec spec;
         private Thread workerThread;
-        private readonly string fileName;
-        private readonly string arguments;
-        private readonly string workingDir;
 
-        public AsyncCommandHandle(string fileName, string arguments, string workingDir)
+        public AsyncCommandHandle(ICommandRunner runner, CommandSpec spec)
         {
-            this.fileName = fileName;
-            this.arguments = arguments;
-            this.workingDir = workingDir;
+            this.runner = runner;
+            this.spec = spec;
             StatusMessage = "Starting...";
         }
 
@@ -49,10 +60,10 @@ namespace Calander.SubmodulePackageManager.Editor
 
         private void RunCommand()
         {
-            StatusMessage = "Connecting to GitHub...";
+            StatusMessage = "Running command...";
             Progress = 0.1f;
 
-            Result = CliCommandRunner.Run(fileName, arguments, workingDir);
+            Result = runner.Run(spec);
 
             Progress = 1f;
             StatusMessage = "Complete";
@@ -62,22 +73,71 @@ namespace Calander.SubmodulePackageManager.Editor
 
     internal static class CliCommandRunner
     {
-        internal static AsyncCommandHandle RunAsync(string fileName, string arguments, string workingDir)
+        internal const int DefaultTimeoutMs = 30000;
+        private static ICommandRunner s_currentRunner = new ProcessCommandRunner();
+
+        internal static ICommandRunner CurrentRunner
         {
-            var handle = new AsyncCommandHandle(fileName, arguments, workingDir);
+            get => s_currentRunner;
+            set => s_currentRunner = value ?? new ProcessCommandRunner();
+        }
+
+        internal static AsyncCommandHandle RunAsync(string fileName, string arguments, string workingDir, int timeoutMs = DefaultTimeoutMs)
+        {
+            var handle = new AsyncCommandHandle(CurrentRunner, new CommandSpec
+            {
+                FileName = fileName,
+                Arguments = arguments,
+                WorkingDirectory = workingDir,
+                TimeoutMs = timeoutMs
+            });
             handle.Start();
             return handle;
         }
 
-        internal static CommandResult Run(string fileName, string arguments, string workingDir)
+        internal static CommandResult Run(string fileName, string arguments, string workingDir, int timeoutMs = DefaultTimeoutMs)
         {
-            if (!TryResolveCommand(fileName, out string resolvedPath))
+            return CurrentRunner.Run(new CommandSpec
+            {
+                FileName = fileName,
+                Arguments = arguments,
+                WorkingDirectory = workingDir,
+                TimeoutMs = timeoutMs
+            });
+        }
+
+        internal static bool IsCommandAvailable(string fileName)
+        {
+            return ProcessCommandRunner.IsCommandAvailable(fileName);
+        }
+
+        internal static void ResetRunner()
+        {
+            CurrentRunner = new ProcessCommandRunner();
+        }
+    }
+
+    internal sealed class ProcessCommandRunner : ICommandRunner
+    {
+        public CommandResult Run(CommandSpec spec)
+        {
+            if (spec == null)
             {
                 return new CommandResult
                 {
                     ExitCode = -1,
                     StdOut = string.Empty,
-                    StdErr = $"Command not found: {fileName}"
+                    StdErr = "Command specification was null."
+                };
+            }
+
+            if (!TryResolveCommand(spec.FileName, out var resolvedPath))
+            {
+                return new CommandResult
+                {
+                    ExitCode = -1,
+                    StdOut = string.Empty,
+                    StdErr = $"Command not found: {spec.FileName}"
                 };
             }
 
@@ -86,43 +146,98 @@ namespace Calander.SubmodulePackageManager.Editor
                 var startInfo = new ProcessStartInfo
                 {
                     FileName = resolvedPath,
-                    Arguments = arguments,
-                    WorkingDirectory = workingDir,
+                    Arguments = spec.Arguments,
+                    WorkingDirectory = spec.WorkingDirectory,
                     RedirectStandardOutput = true,
                     RedirectStandardError = true,
                     UseShellExecute = false,
                     CreateNoWindow = true
                 };
-
                 startInfo.EnvironmentVariables["PATH"] = BuildSearchPath();
 
-                using (var process = Process.Start(startInfo))
+                using var process = new Process
                 {
-                    if (process == null)
+                    StartInfo = startInfo
+                };
+
+                var stdOut = new StringBuilder();
+                var stdErr = new StringBuilder();
+                using var stdOutCompleted = new ManualResetEventSlim(false);
+                using var stdErrCompleted = new ManualResetEventSlim(false);
+
+                process.OutputDataReceived += (_, args) =>
+                {
+                    if (args.Data == null)
                     {
-                        return new CommandResult
-                        {
-                            ExitCode = -1,
-                            StdOut = string.Empty,
-                            StdErr = $"Failed to start process: {fileName}"
-                        };
+                        stdOutCompleted.Set();
+                        return;
                     }
 
-                    string output = process.StandardOutput.ReadToEnd();
-                    string error = process.StandardError.ReadToEnd();
-                    process.WaitForExit();
+                    lock (stdOut)
+                    {
+                        if (stdOut.Length > 0)
+                            stdOut.AppendLine();
+                        stdOut.Append(args.Data);
+                    }
+                };
+
+                process.ErrorDataReceived += (_, args) =>
+                {
+                    if (args.Data == null)
+                    {
+                        stdErrCompleted.Set();
+                        return;
+                    }
+
+                    lock (stdErr)
+                    {
+                        if (stdErr.Length > 0)
+                            stdErr.AppendLine();
+                        stdErr.Append(args.Data);
+                    }
+                };
+
+                if (!process.Start())
+                {
+                    return new CommandResult
+                    {
+                        ExitCode = -1,
+                        StdOut = string.Empty,
+                        StdErr = $"Failed to start process: {spec.FileName}"
+                    };
+                }
+
+                process.BeginOutputReadLine();
+                process.BeginErrorReadLine();
+
+                if (!process.WaitForExit(Math.Max(1000, spec.TimeoutMs)))
+                {
+                    TryKillProcess(process);
+                    stdOutCompleted.Wait(250);
+                    stdErrCompleted.Wait(250);
 
                     return new CommandResult
                     {
-                        ExitCode = process.ExitCode,
-                        StdOut = output ?? string.Empty,
-                        StdErr = error ?? string.Empty
+                        ExitCode = -1,
+                        StdOut = stdOut.ToString(),
+                        StdErr = $"Command timed out after {spec.TimeoutMs}ms: {spec.FileName} {spec.Arguments}".Trim()
                     };
                 }
+
+                process.WaitForExit();
+                stdOutCompleted.Wait(250);
+                stdErrCompleted.Wait(250);
+
+                return new CommandResult
+                {
+                    ExitCode = process.ExitCode,
+                    StdOut = stdOut.ToString(),
+                    StdErr = stdErr.ToString()
+                };
             }
             catch (Exception ex)
             {
-                Debug.LogWarning($"Command failed: {resolvedPath} {arguments}\n{ex.Message}");
+                Debug.LogWarning($"Command failed: {resolvedPath} {spec.Arguments}\n{ex.Message}");
                 return new CommandResult
                 {
                     ExitCode = -1,
@@ -137,13 +252,24 @@ namespace Calander.SubmodulePackageManager.Editor
             return TryResolveCommand(fileName, out _);
         }
 
+        private static void TryKillProcess(Process process)
+        {
+            try
+            {
+                if (!process.HasExited)
+                    process.Kill();
+            }
+            catch
+            {
+                // Best effort only.
+            }
+        }
+
         private static bool TryResolveCommand(string fileName, out string resolvedPath)
         {
             resolvedPath = string.Empty;
             if (string.IsNullOrWhiteSpace(fileName))
-            {
                 return false;
-            }
 
             if (fileName.Contains("/") || fileName.Contains("\\") || Path.IsPathRooted(fileName))
             {
@@ -156,9 +282,9 @@ namespace Calander.SubmodulePackageManager.Editor
                 return false;
             }
 
-            foreach (string directory in GetSearchPaths())
+            foreach (var directory in GetSearchPaths())
             {
-                foreach (string candidate in ExpandWithExtensions(Path.Combine(directory, fileName)))
+                foreach (var candidate in ExpandWithExtensions(Path.Combine(directory, fileName)))
                 {
                     if (File.Exists(candidate))
                     {
@@ -174,21 +300,17 @@ namespace Calander.SubmodulePackageManager.Editor
         private static IEnumerable<string> GetSearchPaths()
         {
             var paths = new List<string>();
-            string envPath = Environment.GetEnvironmentVariable("PATH") ?? string.Empty;
-            foreach (string entry in envPath.Split(Path.PathSeparator))
+            var envPath = Environment.GetEnvironmentVariable("PATH") ?? string.Empty;
+            foreach (var entry in envPath.Split(Path.PathSeparator))
             {
                 if (!string.IsNullOrWhiteSpace(entry))
-                {
                     paths.Add(entry.Trim());
-                }
             }
 
-            foreach (string extra in GetPlatformSearchPaths())
+            foreach (var extra in GetPlatformSearchPaths())
             {
                 if (!string.IsNullOrWhiteSpace(extra))
-                {
                     paths.Add(extra);
-                }
             }
 
             return paths;
@@ -208,13 +330,11 @@ namespace Calander.SubmodulePackageManager.Editor
                 yield break;
             }
 
-            string pathext = Environment.GetEnvironmentVariable("PATHEXT") ?? ".EXE;.CMD;.BAT;.COM";
-            foreach (string ext in pathext.Split(';'))
+            var pathext = Environment.GetEnvironmentVariable("PATHEXT") ?? ".EXE;.CMD;.BAT;.COM";
+            foreach (var ext in pathext.Split(';'))
             {
                 if (string.IsNullOrWhiteSpace(ext))
-                {
                     continue;
-                }
 
                 yield return basePath + ext.ToLowerInvariant();
                 yield return basePath + ext.ToUpperInvariant();
@@ -223,45 +343,39 @@ namespace Calander.SubmodulePackageManager.Editor
 
         private static IEnumerable<string> GetPlatformSearchPaths()
         {
-            switch (Application.platform)
+            return Application.platform switch
             {
-                case RuntimePlatform.OSXEditor:
-                    return new[]
-                    {
-                        "/opt/homebrew/bin",
-                        "/usr/local/bin",
-                        "/usr/bin",
-                        "/bin",
-                        "/usr/sbin",
-                        "/sbin"
-                    };
-                case RuntimePlatform.LinuxEditor:
-                    return new[]
-                    {
-                        "/usr/local/bin",
-                        "/usr/bin",
-                        "/bin",
-                        "/snap/bin"
-                    };
-                case RuntimePlatform.WindowsEditor:
-                    return new[]
-                    {
-                        @"C:\Program Files\Git\cmd",
-                        @"C:\Program Files\GitHub CLI",
-                        @"C:\Program Files (x86)\Git\cmd"
-                    };
-                default:
-                    return Array.Empty<string>();
-            }
+                RuntimePlatform.OSXEditor => new[]
+                {
+                    "/opt/homebrew/bin",
+                    "/usr/local/bin",
+                    "/usr/bin",
+                    "/bin",
+                    "/usr/sbin",
+                    "/sbin"
+                },
+                RuntimePlatform.LinuxEditor => new[]
+                {
+                    "/usr/local/bin",
+                    "/usr/bin",
+                    "/bin",
+                    "/snap/bin"
+                },
+                RuntimePlatform.WindowsEditor => new[]
+                {
+                    @"C:\Program Files\Git\cmd",
+                    @"C:\Program Files\GitHub CLI",
+                    @"C:\Program Files (x86)\Git\cmd"
+                },
+                _ => Array.Empty<string>()
+            };
         }
 
         private static string BuildSearchPath()
         {
             var merged = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            foreach (string path in GetSearchPaths())
-            {
+            foreach (var path in GetSearchPaths())
                 merged.Add(path);
-            }
 
             return string.Join(Path.PathSeparator.ToString(), merged);
         }

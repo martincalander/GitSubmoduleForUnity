@@ -29,7 +29,6 @@ namespace Calander.SubmodulePackageManager.Editor
 
         private AsyncCommandHandle commandHandle;
         private int currentPage;
-        private int totalPages;
         private const int PageSize = 30;
         private const int MaxRepos = 200;
 
@@ -42,23 +41,17 @@ namespace Calander.SubmodulePackageManager.Editor
         public void Start()
         {
             currentPage = 1;
-            totalPages = (MaxRepos + PageSize - 1) / PageSize;
             FetchNextPage();
         }
 
         private void FetchNextPage()
         {
             StatusMessage = $"Fetching repositories (page {currentPage})...";
-            Progress = (float)(currentPage - 1) / totalPages * 0.9f;
+            Progress = Mathf.Clamp01((float)Repos.Count / MaxRepos);
 
-            string args = $"repo list --limit {PageSize} --json name,owner,url,defaultBranchRef,isPrivate,description";
-            if (currentPage > 1)
-            {
-                args += $" --jq '.[{(currentPage - 1) * PageSize}:{currentPage * PageSize}]'";
-            }
-
-            commandHandle = CliCommandRunner.RunAsync("gh",
-                $"repo list --limit {PageSize} --json name,owner,url,defaultBranchRef,isPrivate,description",
+            commandHandle = CliCommandRunner.RunAsync(
+                "gh",
+                BuildReposApiArguments(currentPage, PageSize),
                 GitUtility.ProjectRoot);
         }
 
@@ -89,7 +82,22 @@ namespace Calander.SubmodulePackageManager.Editor
                 var pageRepos = GitHubUtility.ParseRepoJson(json);
                 if (pageRepos != null && pageRepos.Count > 0)
                 {
-                    Repos.AddRange(pageRepos);
+                    foreach (var repo in pageRepos)
+                    {
+                        if (Repos.Count >= MaxRepos)
+                        {
+                            break;
+                        }
+
+                        Repos.Add(repo);
+                    }
+                }
+
+                if (pageRepos != null && pageRepos.Count == PageSize && Repos.Count < MaxRepos)
+                {
+                    currentPage++;
+                    FetchNextPage();
+                    return;
                 }
             }
 
@@ -97,6 +105,11 @@ namespace Calander.SubmodulePackageManager.Editor
             StatusMessage = $"Loaded {Repos.Count} repositories";
             IsSuccess = true;
             IsComplete = true;
+        }
+
+        private static string BuildReposApiArguments(int page, int pageSize)
+        {
+            return $"api user/repos?sort=updated&direction=desc&per_page={pageSize}&page={page}";
         }
     }
 
@@ -144,14 +157,33 @@ namespace Calander.SubmodulePackageManager.Editor
             repos = new List<GitHubRepo>();
             error = string.Empty;
 
-            var result = CliCommandRunner.Run("gh", "repo list --limit 200 --json name,owner,url,defaultBranchRef,isPrivate,description", GitUtility.ProjectRoot);
-            if (!result.IsSuccess)
+            for (int page = 1; repos.Count < 200; page++)
             {
-                error = BuildRepoListError("Failed to list GitHub repositories", result);
-                return false;
+                var result = CliCommandRunner.Run("gh", $"api user/repos?sort=updated&direction=desc&per_page=100&page={page}", GitUtility.ProjectRoot);
+                if (!result.IsSuccess)
+                {
+                    error = BuildRepoListError("Failed to list GitHub repositories", result);
+                    return false;
+                }
+
+                var pageRepos = ParseRepoJson(result.StdOut.Trim());
+                if (pageRepos.Count == 0)
+                {
+                    break;
+                }
+
+                repos.AddRange(pageRepos);
+                if (pageRepos.Count < 100)
+                {
+                    break;
+                }
             }
 
-            repos = ParseRepoJson(result.StdOut.Trim());
+            if (repos.Count > 200)
+            {
+                repos.RemoveRange(200, repos.Count - 200);
+            }
+
             return true;
         }
 
@@ -175,9 +207,9 @@ namespace Calander.SubmodulePackageManager.Editor
                 {
                     Name = repoJson.name,
                     Owner = repoJson.owner != null ? repoJson.owner.login : string.Empty,
-                    Url = repoJson.url,
-                    DefaultBranch = repoJson.defaultBranchRef != null ? repoJson.defaultBranchRef.name : string.Empty,
-                    IsPrivate = repoJson.isPrivate,
+                    Url = string.IsNullOrWhiteSpace(repoJson.url) ? repoJson.html_url : repoJson.url,
+                    DefaultBranch = repoJson.defaultBranchRef != null ? repoJson.defaultBranchRef.name : repoJson.default_branch,
+                    IsPrivate = repoJson.isPrivate || repoJson.@private,
                     Description = repoJson.description
                 });
             }
@@ -300,8 +332,11 @@ namespace Calander.SubmodulePackageManager.Editor
             public string name;
             public OwnerJson owner;
             public string url;
+            public string html_url;
             public DefaultBranchRefJson defaultBranchRef;
             public bool isPrivate;
+            public bool @private;
+            public string default_branch;
             public string description;
         }
 

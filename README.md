@@ -28,20 +28,20 @@ A Unity Editor tool that provides a visual interface for managing Git submodules
 
 ```bash
 cd YourUnityProject
-git submodule add https://github.com/YourUsername/submodulehelper.git Packages/com.martincalander.submodulehelper
+git submodule add https://github.com/martincalander/com.martincalander.submodulehelper.git Packages/com.martincalander.submodulehelper
 ```
 
 ### Via Git URL in Package Manager
 
 1. Open **Window > Package Manager**
 2. Click **+** > **Add package from git URL...**
-3. Enter: `https://github.com/YourUsername/submodulehelper.git`
+3. Enter: `https://github.com/martincalander/com.martincalander.submodulehelper.git`
 
 ## Usage
 
 ### Opening the Window
 
-Navigate to **Window > Package Management > Git Submodules** in the Unity menu.
+Navigate to **Window > Package Management > Git Submodules Manager** in the Unity menu.
 
 ### In Project Tab
 
@@ -100,6 +100,13 @@ Run the following command and follow the prompts:
 ```bash
 gh auth login
 ```
+
+### Git or GitHub CLI commands hang or fail
+Submodule Helper now runs CLI commands with streamed stdout/stderr capture and a timeout. If a command still fails, copy the reported error text and verify that:
+
+- `git --version` works from a terminal launched in the project environment
+- `gh auth status -h github.com` succeeds for the Unity user session
+- your network or credential helper is not blocking `git submodule` or `gh api`
 
 ### Repository doesn't appear as valid package
 Ensure your repository has a valid `package.json` in the root directory with the required Unity package fields.
