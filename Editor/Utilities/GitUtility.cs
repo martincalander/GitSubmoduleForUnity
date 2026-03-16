@@ -17,12 +17,19 @@ namespace GitPackageManager.Editor
         private static readonly Regex PackageNameRegex = new Regex(@"^com\.[a-z0-9]+(\.[a-z0-9]+)+$", RegexOptions.Compiled);
         private static readonly Regex SubmoduleStatusRegex = new Regex(@"^[ +-]?([0-9a-f]{7,40})\s+([^\s]+)", RegexOptions.Multiline | RegexOptions.Compiled);
 
+        private static string cachedProjectRoot;
+
         internal static string ProjectRoot
         {
             get
             {
-                var parent = Directory.GetParent(Application.dataPath);
-                return parent != null ? parent.FullName : Environment.CurrentDirectory;
+                if (cachedProjectRoot == null)
+                {
+                    var parent = Directory.GetParent(Application.dataPath);
+                    cachedProjectRoot = parent != null ? parent.FullName : Environment.CurrentDirectory;
+                }
+
+                return cachedProjectRoot;
             }
         }
 
@@ -104,45 +111,41 @@ namespace GitPackageManager.Editor
                 return true;
             }
 
-            if (!TryEnsureSubmodulesInitialized(out _, out error))
+            if (!TryEnsureSubmodulesInitialized(out _, out string statusOutput, out error))
             {
                 return false;
             }
 
-            var listResult = RunGit("config --file .gitmodules --name-only --get-regexp path", root);
-            if (!listResult.IsSuccess)
+            var configResult = RunGit("config --file .gitmodules --list", root);
+            if (!configResult.IsSuccess)
             {
-                if (listResult.ExitCode == 1 && string.IsNullOrWhiteSpace(listResult.StdErr))
+                if (configResult.ExitCode == 1 && string.IsNullOrWhiteSpace(configResult.StdErr))
                 {
                     return true;
                 }
 
-                error = BuildError("Failed to read .gitmodules", listResult);
+                error = BuildError("Failed to read .gitmodules", configResult);
                 return false;
             }
 
-            var commitMap = GetSubmoduleCommitMap(root);
-            string[] lines = listResult.StdOut.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries);
-            foreach (string rawLine in lines)
-            {
-                string name = ExtractSubmoduleName(rawLine.Trim());
-                if (string.IsNullOrEmpty(name))
-                {
-                    continue;
-                }
+            var config = ParseConfigList(configResult.StdOut);
+            var commitMap = ParseSubmoduleCommitMap(statusOutput);
+            var names = ExtractSubmoduleNamesFromConfig(config);
 
-                string path = RunGit($"config --file .gitmodules --get submodule.{name}.path", root).StdOut.Trim();
-                string url = RunGit($"config --file .gitmodules --get submodule.{name}.url", root).StdOut.Trim();
-                string branch = RunGit($"config --file .gitmodules --get submodule.{name}.branch", root).StdOut.Trim();
-                path = NormalizePath(path);
+            foreach (string name in names)
+            {
+                config.TryGetValue($"submodule.{name}.path", out string rawPath);
+                config.TryGetValue($"submodule.{name}.url", out string url);
+                config.TryGetValue($"submodule.{name}.branch", out string branch);
+                string path = NormalizePath(rawPath ?? string.Empty);
 
                 var info = new GitPackageInfo
                 {
                     SourceType = PackageSourceType.Submodule,
                     Name = name,
                     Path = path,
-                    Url = url,
-                    Branch = branch,
+                    Url = url ?? string.Empty,
+                    Branch = branch ?? string.Empty,
                     CommitHash = commitMap.TryGetValue(path, out string commit) ? commit : string.Empty
                 };
 
@@ -165,7 +168,13 @@ namespace GitPackageManager.Editor
 
         internal static bool TryEnsureSubmodulesInitialized(out bool initializedAny, out string error)
         {
+            return TryEnsureSubmodulesInitialized(out initializedAny, out _, out error);
+        }
+
+        internal static bool TryEnsureSubmodulesInitialized(out bool initializedAny, out string statusOutput, out string error)
+        {
             initializedAny = false;
+            statusOutput = string.Empty;
             error = string.Empty;
 
             string root = ProjectRoot;
@@ -184,6 +193,7 @@ namespace GitPackageManager.Editor
 
             if (!HasUninitializedSubmodules(statusResult.StdOut))
             {
+                statusOutput = statusResult.StdOut;
                 return true;
             }
 
@@ -193,6 +203,10 @@ namespace GitPackageManager.Editor
                 error = BuildError("Failed to initialize missing submodules", initResult);
                 return false;
             }
+
+            // Re-fetch status after initialization
+            statusResult = RunGit("submodule status --recursive", root);
+            statusOutput = statusResult.IsSuccess ? statusResult.StdOut : string.Empty;
 
             initializedAny = true;
             return true;
@@ -456,16 +470,44 @@ namespace GitPackageManager.Editor
             return CliCommandRunner.Run("git", arguments, workingDir, timeoutMs);
         }
 
-        private static Dictionary<string, string> GetSubmoduleCommitMap(string root)
+        private static Dictionary<string, string> ParseConfigList(string output)
         {
-            var commits = new Dictionary<string, string>();
-            var statusResult = RunGit("submodule status --recursive", root);
-            if (!statusResult.IsSuccess)
+            var config = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            if (string.IsNullOrWhiteSpace(output))
+                return config;
+
+            foreach (string line in output.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries))
             {
-                return commits;
+                int eqIndex = line.IndexOf('=');
+                if (eqIndex <= 0)
+                    continue;
+
+                string key = line.Substring(0, eqIndex).Trim();
+                string value = line.Substring(eqIndex + 1).Trim();
+                config[key] = value;
             }
 
-            return ParseSubmoduleCommitMap(statusResult.StdOut);
+            return config;
+        }
+
+        private static List<string> ExtractSubmoduleNamesFromConfig(Dictionary<string, string> config)
+        {
+            var names = new List<string>();
+            const string prefix = "submodule.";
+            const string suffix = ".path";
+
+            foreach (var key in config.Keys)
+            {
+                if (key.StartsWith(prefix, StringComparison.OrdinalIgnoreCase) &&
+                    key.EndsWith(suffix, StringComparison.OrdinalIgnoreCase))
+                {
+                    string name = key.Substring(prefix.Length, key.Length - prefix.Length - suffix.Length);
+                    if (!string.IsNullOrEmpty(name))
+                        names.Add(name);
+                }
+            }
+
+            return names;
         }
 
         private static bool HasUninitializedSubmodules(string submoduleStatusOutput)
