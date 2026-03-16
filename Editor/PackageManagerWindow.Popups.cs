@@ -1,22 +1,24 @@
 using UnityEditor;
 using UnityEngine;
 
-namespace Calander.SubmodulePackageManager.Editor
+namespace GitPackageManager.Editor
 {
-    public partial class GitSubmodulesWindow
+    public partial class GitPackageManagerWindow
     {
-        private void ShowAddFromUrlPopup(Rect buttonRect)
+        private void ShowAddFromUrlPopup(Rect buttonRect, PackageSourceType sourceType)
         {
             addStatus = string.Empty;
             addStatusType = MessageType.None;
+            addSourceType = sourceType;
             activeAddPopup = new AddFromUrlPopup(this);
             PopupWindow.Show(buttonRect, activeAddPopup);
         }
 
         private void DrawAddByUrl()
         {
+            string title = addSourceType == PackageSourceType.Subtree ? "Add Subtree" : "Add Submodule";
             EditorGUILayout.Space(8);
-            GUILayout.Label("Add package from git URL", Styles.TitleLabel);
+            GUILayout.Label(title, Styles.TitleLabel);
             EditorGUILayout.Space(8);
 
             EditorGUI.BeginChangeCheck();
@@ -58,22 +60,22 @@ namespace Calander.SubmodulePackageManager.Editor
             using (new EditorGUI.DisabledScope(!gitAvailable || !string.IsNullOrWhiteSpace(validationError)))
             {
                 if (GUILayout.Button("Add", GUILayout.Height(24)))
-                    TryAddSubmodule(addUrl, addBranch, addPackageName);
+                    TryAddPackage(addUrl, addBranch, addPackageName, addSourceType);
             }
         }
 
         private sealed class AddFromUrlPopup : PopupWindowContent
         {
-            private readonly GitSubmodulesWindow owner;
+            private readonly GitPackageManagerWindow owner;
 
-            public AddFromUrlPopup(GitSubmodulesWindow owner)
+            public AddFromUrlPopup(GitPackageManagerWindow owner)
             {
                 this.owner = owner;
             }
 
             public override Vector2 GetWindowSize()
             {
-                return new Vector2(400f, 220f);
+                return new Vector2(400f, 230f);
             }
 
             public override void OnGUI(Rect rect)

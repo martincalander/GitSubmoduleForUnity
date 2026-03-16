@@ -2,9 +2,9 @@ using System;
 using UnityEditor;
 using UnityEngine;
 
-namespace Calander.SubmodulePackageManager.Editor
+namespace GitPackageManager.Editor
 {
-    public partial class GitSubmodulesWindow
+    public partial class GitPackageManagerWindow
     {
         private void DrawToolbar()
         {
@@ -14,7 +14,8 @@ namespace Calander.SubmodulePackageManager.Editor
             if (EditorGUI.DropdownButton(addButtonRect, new GUIContent("+"), FocusType.Passive, EditorStyles.toolbarDropDown))
             {
                 var menu = new GenericMenu();
-                menu.AddItem(new GUIContent("Add package from git URL..."), false, () => ShowAddFromUrlPopup(addButtonRect));
+                menu.AddItem(new GUIContent("Add Submodule..."), false, () => ShowAddFromUrlPopup(addButtonRect, PackageSourceType.Submodule));
+                menu.AddItem(new GUIContent("Add Subtree..."), false, () => ShowAddFromUrlPopup(addButtonRect, PackageSourceType.Subtree));
                 menu.DropDown(addButtonRect);
             }
 
@@ -37,14 +38,36 @@ namespace Calander.SubmodulePackageManager.Editor
 
             if (currentTab == Tab.Discover)
             {
-                string sortLabel = currentSort == SortOption.Name ? "Sort: Name" : "Sort: Recent";
-                Rect sortRect = GUILayoutUtility.GetRect(new GUIContent(sortLabel), EditorStyles.toolbarDropDown, GUILayout.Width(90));
-                if (EditorGUI.DropdownButton(sortRect, new GUIContent(sortLabel), FocusType.Passive, EditorStyles.toolbarDropDown))
+                string ownerLabel = string.IsNullOrEmpty(discoveryCoordinator.SelectedOwner)
+                    ? "Owner"
+                    : discoveryCoordinator.SelectedOwner;
+                Rect ownerRect = GUILayoutUtility.GetRect(new GUIContent(ownerLabel), EditorStyles.toolbarDropDown, GUILayout.Width(140));
+                if (EditorGUI.DropdownButton(ownerRect, new GUIContent(ownerLabel), FocusType.Passive, EditorStyles.toolbarDropDown))
                 {
                     var menu = new GenericMenu();
-                    menu.AddItem(new GUIContent("Name"), currentSort == SortOption.Name, () => { currentSort = SortOption.Name; SortRepos(); });
-                    menu.AddItem(new GUIContent("Recently Updated"), currentSort == SortOption.RecentlyUpdated, () => { currentSort = SortOption.RecentlyUpdated; SortRepos(); });
-                    menu.DropDown(sortRect);
+                    string username = discoveryCoordinator.Username;
+                    if (!string.IsNullOrEmpty(username))
+                    {
+                        bool isSelected = string.Equals(discoveryCoordinator.SelectedOwner, username, StringComparison.OrdinalIgnoreCase);
+                        menu.AddItem(new GUIContent(username), isSelected, () => discoveryCoordinator.SetOwner(username));
+                    }
+
+                    if (discoveryCoordinator.Organizations.Count > 0)
+                    {
+                        menu.AddSeparator("");
+                        foreach (string org in discoveryCoordinator.Organizations)
+                        {
+                            string orgCapture = org;
+                            bool isSelected = string.Equals(discoveryCoordinator.SelectedOwner, org, StringComparison.OrdinalIgnoreCase);
+                            menu.AddItem(new GUIContent(orgCapture), isSelected, () => discoveryCoordinator.SetOwner(orgCapture));
+                        }
+                    }
+                    else if (!discoveryCoordinator.OrgsLoaded)
+                    {
+                        menu.AddDisabledItem(new GUIContent("Loading organizations..."));
+                    }
+
+                    menu.DropDown(ownerRect);
                 }
 
                 string filterLabel = GetFilterLabel();
@@ -52,11 +75,10 @@ namespace Calander.SubmodulePackageManager.Editor
                 if (EditorGUI.DropdownButton(filterRect, new GUIContent(filterLabel), FocusType.Passive, EditorStyles.toolbarDropDown))
                 {
                     var menu = new GenericMenu();
-                    menu.AddItem(new GUIContent("All Repositories"), currentFilter == FilterOption.All, () => { currentFilter = FilterOption.All; Repaint(); });
-                    menu.AddItem(new GUIContent("Valid Packages Only"), currentFilter == FilterOption.ValidPackagesOnly, () => { currentFilter = FilterOption.ValidPackagesOnly; Repaint(); });
+                    menu.AddItem(new GUIContent("All Repositories"), currentFilter == FilterOption.All, () => { currentFilter = FilterOption.All; selectedRepoIndex = -1; Repaint(); });
                     menu.AddSeparator("");
-                    menu.AddItem(new GUIContent("Public Only"), currentFilter == FilterOption.PublicOnly, () => { currentFilter = FilterOption.PublicOnly; Repaint(); });
-                    menu.AddItem(new GUIContent("Private Only"), currentFilter == FilterOption.PrivateOnly, () => { currentFilter = FilterOption.PrivateOnly; Repaint(); });
+                    menu.AddItem(new GUIContent("Public Only"), currentFilter == FilterOption.PublicOnly, () => { currentFilter = FilterOption.PublicOnly; selectedRepoIndex = -1; Repaint(); });
+                    menu.AddItem(new GUIContent("Private Only"), currentFilter == FilterOption.PrivateOnly, () => { currentFilter = FilterOption.PrivateOnly; selectedRepoIndex = -1; Repaint(); });
                     menu.DropDown(filterRect);
                 }
             }
@@ -88,7 +110,7 @@ namespace Calander.SubmodulePackageManager.Editor
         {
             return currentFilter switch
             {
-                FilterOption.ValidPackagesOnly => "Filter: Packages",
+                FilterOption.ValidPackagesOnly => "Filter: All",
                 FilterOption.PublicOnly => "Filter: Public",
                 FilterOption.PrivateOnly => "Filter: Private",
                 _ => "Filter: All"
@@ -97,11 +119,12 @@ namespace Calander.SubmodulePackageManager.Editor
 
         private void SortRepos()
         {
-            if (availableRepos == null || availableRepos.Count == 0)
+            var repos = discoveryCoordinator.DisplayedRepos;
+            if (repos == null || repos.Count == 0)
                 return;
 
             if (currentSort == SortOption.Name)
-                availableRepos.Sort((a, b) => string.Compare(a.Name, b.Name, StringComparison.OrdinalIgnoreCase));
+                repos.Sort((a, b) => string.Compare(a.Name, b.Name, StringComparison.OrdinalIgnoreCase));
 
             selectedRepoIndex = -1;
             Repaint();
@@ -129,6 +152,11 @@ namespace Calander.SubmodulePackageManager.Editor
 
             if (!string.IsNullOrWhiteSpace(installStatus))
                 EditorGUILayout.HelpBox(installStatus, installStatusType);
+
+            if (activeOperation != null)
+            {
+                EditorGUILayout.HelpBox(activeOperationLabel, MessageType.Info);
+            }
 
             return true;
         }

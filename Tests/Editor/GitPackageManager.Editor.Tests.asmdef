@@ -1,8 +1,8 @@
 {
-    "name": "SubmoduleHelper.Editor.Tests",
-    "rootNamespace": "SubmoduleHelper.Editor.Tests",
+    "name": "GitPackageManager.Editor.Tests",
+    "rootNamespace": "GitPackageManager.Editor.Tests",
     "references": [
-        "SubmoduleHelper.Editor"
+        "GitPackageManager.Editor"
     ],
     "includePlatforms": [
         "Editor"

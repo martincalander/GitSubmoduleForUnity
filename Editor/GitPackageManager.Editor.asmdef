@@ -1,6 +1,6 @@
 {
-    "name": "SubmoduleHelper.Editor",
-    "rootNamespace": "SubmoduleHelper.Editor",
+    "name": "GitPackageManager.Editor",
+    "rootNamespace": "GitPackageManager.Editor",
     "references": [],
     "includePlatforms": [
         "Editor"

@@ -4,58 +4,131 @@ using System.IO;
 using UnityEditor;
 using UnityEngine;
 
-namespace Calander.SubmodulePackageManager.Editor
+namespace GitPackageManager.Editor
 {
-    public partial class GitSubmodulesWindow
+    public partial class GitPackageManagerWindow
     {
-        private void PerformUpdate(SubmoduleInfo submodule)
+        private void PerformRemove(GitPackageInfo package)
         {
-            if (!GitUtility.TryUpdateSubmodule(submodule.Path, out string error))
+            bool success;
+            string error;
+
+            if (package.SourceType == PackageSourceType.Subtree)
+            {
+                success = GitUtility.TryRemoveSubtree(package.Path, out error);
+            }
+            else
+            {
+                success = GitUtility.TryRemoveSubmodule(package.Path, out error);
+            }
+
+            if (!success)
             {
                 installedActionStatus = error;
                 installedActionStatusType = MessageType.Error;
-            }
-            else
-            {
-                installedActionStatus = "Submodule updated successfully.";
-                installedActionStatusType = MessageType.Info;
-                RefreshInstalled();
-            }
-        }
-
-        private void PerformRemove(SubmoduleInfo submodule)
-        {
-            if (!GitUtility.TryRemoveSubmodule(submodule.Path, out string error))
-            {
-                installedStatus = error;
-                installedStatusType = MessageType.Error;
-            }
-            else
-            {
-                selectedInstalledIndex = -1;
+                return;
             }
 
+            selectedInstalledIndex = -1;
             RefreshInstalled();
-            RefreshAvailable();
+            AssetDatabase.Refresh(ImportAssetOptions.ForceUpdate);
         }
 
-        private void PerformBranchChange(SubmoduleInfo submodule, string branch)
+        private void PerformBranchChange(GitPackageInfo package, string branch)
         {
-            if (!GitUtility.TrySetSubmoduleBranch(submodule.Path, branch, out string error))
+            if (package.SourceType == PackageSourceType.Subtree)
             {
-                installedActionStatus = error;
-                installedActionStatusType = MessageType.Error;
-            }
-            else
-            {
+                GitPackagesManifestUtility.AddEntry(package.Path, package.Url, branch);
                 installedActionStatus = $"Branch set to {branch}.";
                 installedActionStatusType = MessageType.Info;
-                repositoryCoordinator.ClearBranchCache(submodule.Url);
+                repositoryCoordinator.ClearBranchCache(package.Url);
                 RefreshInstalled();
-
-                if (EditorUtility.DisplayDialog("Update Submodule", "Update to the new branch now?", "Update", "Later"))
-                    PerformUpdate(submodule);
             }
+            else
+            {
+                if (!GitUtility.TrySetSubmoduleBranch(package.Path, branch, out string error))
+                {
+                    installedActionStatus = error;
+                    installedActionStatusType = MessageType.Error;
+                }
+                else
+                {
+                    installedActionStatus = $"Branch set to {branch}.";
+                    installedActionStatusType = MessageType.Info;
+                    repositoryCoordinator.ClearBranchCache(package.Url);
+                    RefreshInstalled();
+
+                    if (EditorUtility.DisplayDialog("Update Package", "Update to the new branch now?", "Update", "Later"))
+                    {
+                        StartAsyncOperation("Updating submodule...", "git",
+                            $"submodule update --remote --merge -- {package.Path}", () => OnUpdateComplete(package));
+                    }
+                }
+            }
+        }
+
+        private void OnUpdateComplete(GitPackageInfo package)
+        {
+            if (activeOperation != null && activeOperation.Result.IsSuccess)
+            {
+                installedActionStatus = "Updated successfully.";
+                installedActionStatusType = MessageType.Info;
+                RefreshInstalled();
+            }
+            else
+            {
+                string error = activeOperation?.Result?.StdErr ?? "Unknown error";
+                installedActionStatus = $"Update failed: {error}";
+                installedActionStatusType = MessageType.Error;
+            }
+        }
+
+        private void OnPushComplete()
+        {
+            if (activeOperation != null && activeOperation.Result.IsSuccess)
+            {
+                installedActionStatus = "Push completed successfully.";
+                installedActionStatusType = MessageType.Info;
+            }
+            else
+            {
+                string error = activeOperation?.Result?.StdErr ?? "Unknown error";
+                installedActionStatus = $"Push failed: {error}";
+                installedActionStatusType = MessageType.Error;
+            }
+        }
+
+        private void StartAsyncOperation(string label, string fileName, string arguments, Action onComplete, int timeoutMs = CliCommandRunner.DefaultTimeoutMs)
+        {
+            activeOperationLabel = label;
+            activeOperation = CliCommandRunner.RunAsync(fileName, arguments, GitUtility.ProjectRoot, timeoutMs);
+            activeOperationOnComplete = onComplete;
+            Repaint();
+        }
+
+        private Action activeOperationOnComplete;
+
+        private void UpdateActiveOperation()
+        {
+            if (activeOperation == null)
+            {
+                return;
+            }
+
+            if (!activeOperation.IsComplete)
+            {
+                Repaint();
+                return;
+            }
+
+            var onComplete = activeOperationOnComplete;
+            activeOperationOnComplete = null;
+
+            onComplete?.Invoke();
+
+            activeOperation = null;
+            activeOperationLabel = string.Empty;
+            Repaint();
         }
 
         private void RefreshDependencies()
@@ -134,15 +207,13 @@ namespace Calander.SubmodulePackageManager.Editor
             switch (currentTab)
             {
                 case Tab.Installed:
-                    bool installedNeedsRefresh = installedSubmodules.Count == 0 ||
+                    bool installedNeedsRefresh = installedPackages.Count == 0 ||
                         (now - lastInstalledRefreshTime) > AutoRefreshIntervalSeconds;
                     if (installedNeedsRefresh)
                         RefreshInstalled();
                     break;
                 case Tab.Discover:
-                    bool discoverNeedsRefresh = availableRepos.Count == 0 ||
-                        (now - lastDiscoverRefreshTime) > AutoRefreshIntervalSeconds;
-                    if (discoverNeedsRefresh && !repositoryCoordinator.IsLoadingRepos)
+                    if (!discoveryCoordinator.HasResults && !discoveryCoordinator.IsLoading)
                         RefreshAvailable();
                     break;
             }
@@ -155,19 +226,19 @@ namespace Calander.SubmodulePackageManager.Editor
 
             if (!gitAvailable)
             {
-                installedStatus = "Git is required to list submodules.";
+                installedStatus = "Git is required to list packages.";
                 installedStatusType = MessageType.Warning;
                 return;
             }
 
-            if (!GitUtility.TryGetSubmodules(out installedSubmodules, out string error))
+            if (!GitUtility.TryGetAllPackages(out installedPackages, out string error))
             {
                 installedStatus = error;
                 installedStatusType = MessageType.Error;
-                installedSubmodules = new List<SubmoduleInfo>();
+                installedPackages = new List<GitPackageInfo>();
             }
 
-            selectedInstalledIndex = Mathf.Clamp(selectedInstalledIndex, -1, installedSubmodules.Count - 1);
+            selectedInstalledIndex = Mathf.Clamp(selectedInstalledIndex, -1, installedPackages.Count - 1);
             lastInstalledRefreshTime = EditorApplication.timeSinceStartup;
             lastRefreshDateTime = DateTime.Now;
         }
@@ -179,57 +250,31 @@ namespace Calander.SubmodulePackageManager.Editor
 
             if (!ghAvailable || !ghAuthenticated)
             {
-                availableRepos = new List<GitHubRepo>();
                 return;
             }
 
-            repositoryCoordinator.BeginRefreshAvailable();
+            discoveryCoordinator.EnsureUsername();
+            discoveryCoordinator.LoadInitialPage();
         }
 
-        private void UpdateRepoLoading()
+        private void UpdateDiscovery()
         {
-            if (repositoryCoordinator.TickRefreshAvailable(out List<GitHubRepo> repos, out string error))
+            bool pageChanged = discoveryCoordinator.PageChanged;
+            if (discoveryCoordinator.Tick(EditorApplication.timeSinceStartup))
             {
-                if (!string.IsNullOrWhiteSpace(error))
+                if (pageChanged)
                 {
-                    discoverStatus = error;
-                    discoverStatusType = MessageType.Error;
-                    availableRepos = new List<GitHubRepo>();
-                    return;
+                    MarkInstalledRepos();
+                    SortRepos();
                 }
-
-                availableRepos = repos;
-                MarkInstalledRepos();
-                SortRepos();
-                selectedRepoIndex = Mathf.Clamp(selectedRepoIndex, -1, availableRepos.Count - 1);
-                lastDiscoverRefreshTime = EditorApplication.timeSinceStartup;
-                lastRefreshDateTime = DateTime.Now;
-                StartPackageJsonChecking();
+                selectedRepoIndex = Mathf.Clamp(selectedRepoIndex, -1, discoveryCoordinator.DisplayedRepos.Count - 1);
                 Repaint();
-                return;
             }
 
-            if (repositoryCoordinator.IsLoadingRepos)
+            if (discoveryCoordinator.IsLoading)
             {
                 Repaint();
-                return;
             }
-
-            UpdatePackageJsonChecking();
-        }
-
-        private void StartPackageJsonChecking()
-        {
-            if (availableRepos == null || availableRepos.Count == 0)
-                return;
-
-            repositoryCoordinator.BeginPackageJsonChecks(availableRepos);
-        }
-
-        private void UpdatePackageJsonChecking()
-        {
-            if (repositoryCoordinator.TickPackageJsonChecks())
-                Repaint();
         }
 
         private void FetchBranchesForUrl(string url)
@@ -284,13 +329,15 @@ namespace Calander.SubmodulePackageManager.Editor
         private void MarkInstalledRepos()
         {
             var installedIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            foreach (var submodule in installedSubmodules)
+            if (installedPackages == null)
+                return;
+            foreach (var package in installedPackages)
             {
-                if (GitHubUtility.TryParseGitHubRepo(submodule.Url, out string owner, out string repo))
+                if (GitHubUtility.TryParseGitHubRepo(package.Url, out string owner, out string repo))
                     installedIds.Add($"{owner}/{repo}");
             }
 
-            foreach (var repo in availableRepos)
+            foreach (var repo in discoveryCoordinator.DisplayedRepos)
                 repo.IsInstalled = installedIds.Contains($"{repo.Owner}/{repo.Name}");
         }
 
@@ -298,6 +345,7 @@ namespace Calander.SubmodulePackageManager.Editor
         {
             selectedRepoPackageName = GitHubUtility.DerivePackageNameSuggestion(repo.Owner, repo.Name);
             selectedRepoBranch = string.IsNullOrWhiteSpace(repo.DefaultBranch) ? "main" : repo.DefaultBranch;
+            selectedRepoSourceType = PackageSourceType.Submodule;
             addStatus = string.Empty;
         }
 
@@ -310,15 +358,16 @@ namespace Calander.SubmodulePackageManager.Editor
                 return PackageNameRule;
 
             string path = GetPackagePath(packageName);
+
+            foreach (var package in installedPackages)
+            {
+                if (string.Equals(package.Path, path, StringComparison.OrdinalIgnoreCase))
+                    return "This package is already installed.";
+            }
+
             string fullPath = Path.Combine(GitUtility.ProjectRoot, path);
             if (Directory.Exists(fullPath))
                 return $"Package path already exists: {path}";
-
-            foreach (var submodule in installedSubmodules)
-            {
-                if (string.Equals(submodule.Path, path, StringComparison.OrdinalIgnoreCase))
-                    return "A submodule already exists at this path.";
-            }
 
             return string.Empty;
         }
@@ -331,6 +380,18 @@ namespace Calander.SubmodulePackageManager.Editor
 
             packageName = GitHubUtility.DerivePackageNameSuggestion(owner, repo);
             return !string.IsNullOrEmpty(packageName);
+        }
+
+        private void TryAddPackage(string url, string branch, string packageName, PackageSourceType sourceType)
+        {
+            if (sourceType == PackageSourceType.Subtree)
+            {
+                TryAddSubtreePackage(url, branch, packageName);
+            }
+            else
+            {
+                TryAddSubmodule(url, branch, packageName);
+            }
         }
 
         private void TryAddSubmodule(string url, string branch, string packageName)
@@ -396,7 +457,41 @@ namespace Calander.SubmodulePackageManager.Editor
 
             AssetDatabase.Refresh(ImportAssetOptions.ForceUpdate);
             RefreshInstalled();
-            RefreshAvailable();
+
+            if (activeAddPopup != null)
+            {
+                activeAddPopup.ClosePopup();
+                activeAddPopup = null;
+            }
+        }
+
+        private void TryAddSubtreePackage(string url, string branch, string packageName)
+        {
+            addStatus = string.Empty;
+            addStatusType = MessageType.None;
+
+            string validationError = ValidatePackageInput(url, packageName);
+            if (!string.IsNullOrWhiteSpace(validationError))
+            {
+                addStatus = validationError;
+                addStatusType = MessageType.Error;
+                return;
+            }
+
+            string path = GetPackagePath(packageName);
+
+            if (!GitUtility.TryAddSubtree(url, path, branch, out string error))
+            {
+                addStatus = error;
+                addStatusType = MessageType.Error;
+                return;
+            }
+
+            addStatus = $"Successfully added {packageName} as subtree. Refreshing assets...";
+            addStatusType = MessageType.Info;
+
+            AssetDatabase.Refresh(ImportAssetOptions.ForceUpdate);
+            RefreshInstalled();
 
             if (activeAddPopup != null)
             {
@@ -412,14 +507,12 @@ namespace Calander.SubmodulePackageManager.Editor
                 addStatus = $"{message} Failed to remove submodule: {error}";
                 addStatusType = MessageType.Error;
                 RefreshInstalled();
-                RefreshAvailable();
                 return;
             }
 
             addStatus = message;
             addStatusType = MessageType.Error;
             RefreshInstalled();
-            RefreshAvailable();
         }
 
         private static string GetPackagePath(string packageName)

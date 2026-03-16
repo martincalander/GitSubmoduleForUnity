@@ -7,7 +7,7 @@ using System.Threading;
 using UnityEngine;
 using Debug = UnityEngine.Debug;
 
-namespace Calander.SubmodulePackageManager.Editor
+namespace GitPackageManager.Editor
 {
     internal sealed class CommandSpec
     {
@@ -60,14 +60,31 @@ namespace Calander.SubmodulePackageManager.Editor
 
         private void RunCommand()
         {
-            StatusMessage = "Running command...";
-            Progress = 0.1f;
+            try
+            {
+                StatusMessage = "Running command...";
+                Progress = 0.1f;
 
-            Result = runner.Run(spec);
+                Result = runner.Run(spec);
 
-            Progress = 1f;
-            StatusMessage = "Complete";
-            IsComplete = true;
+                Progress = 1f;
+                StatusMessage = "Complete";
+            }
+            catch (Exception ex)
+            {
+                Result = new CommandResult
+                {
+                    ExitCode = -1,
+                    StdOut = string.Empty,
+                    StdErr = ex.Message
+                };
+                Progress = 1f;
+                StatusMessage = "Failed";
+            }
+            finally
+            {
+                IsComplete = true;
+            }
         }
     }
 

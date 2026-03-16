@@ -3,116 +3,8 @@ using System.Collections.Generic;
 using System.Text.RegularExpressions;
 using UnityEngine;
 
-namespace Calander.SubmodulePackageManager.Editor
+namespace GitPackageManager.Editor
 {
-    internal sealed class GitHubRepo
-    {
-        public string Name;
-        public string Owner;
-        public string Url;
-        public string DefaultBranch;
-        public bool IsPrivate;
-        public string Description;
-        public bool IsInstalled;
-        public bool HasPackageJson;
-        public bool PackageJsonChecked;
-    }
-
-    internal sealed class RepoListHandle
-    {
-        public bool IsComplete { get; private set; }
-        public bool IsSuccess { get; private set; }
-        public string Error { get; private set; }
-        public List<GitHubRepo> Repos { get; private set; }
-        public float Progress { get; private set; }
-        public string StatusMessage { get; private set; }
-
-        private AsyncCommandHandle commandHandle;
-        private int currentPage;
-        private const int PageSize = 30;
-        private const int MaxRepos = 200;
-
-        public RepoListHandle()
-        {
-            Repos = new List<GitHubRepo>();
-            StatusMessage = "Initializing...";
-        }
-
-        public void Start()
-        {
-            currentPage = 1;
-            FetchNextPage();
-        }
-
-        private void FetchNextPage()
-        {
-            StatusMessage = $"Fetching repositories (page {currentPage})...";
-            Progress = Mathf.Clamp01((float)Repos.Count / MaxRepos);
-
-            commandHandle = CliCommandRunner.RunAsync(
-                "gh",
-                BuildReposApiArguments(currentPage, PageSize),
-                GitUtility.ProjectRoot);
-        }
-
-        public void Update()
-        {
-            if (IsComplete || commandHandle == null)
-            {
-                return;
-            }
-
-            if (!commandHandle.IsComplete)
-            {
-                return;
-            }
-
-            var result = commandHandle.Result;
-            if (!result.IsSuccess)
-            {
-                Error = GitHubUtility.BuildRepoListError("Failed to list GitHub repositories", result);
-                IsSuccess = false;
-                IsComplete = true;
-                return;
-            }
-
-            string json = result.StdOut.Trim();
-            if (!string.IsNullOrEmpty(json))
-            {
-                var pageRepos = GitHubUtility.ParseRepoJson(json);
-                if (pageRepos != null && pageRepos.Count > 0)
-                {
-                    foreach (var repo in pageRepos)
-                    {
-                        if (Repos.Count >= MaxRepos)
-                        {
-                            break;
-                        }
-
-                        Repos.Add(repo);
-                    }
-                }
-
-                if (pageRepos != null && pageRepos.Count == PageSize && Repos.Count < MaxRepos)
-                {
-                    currentPage++;
-                    FetchNextPage();
-                    return;
-                }
-            }
-
-            Progress = 1f;
-            StatusMessage = $"Loaded {Repos.Count} repositories";
-            IsSuccess = true;
-            IsComplete = true;
-        }
-
-        private static string BuildReposApiArguments(int page, int pageSize)
-        {
-            return $"api user/repos?sort=updated&direction=desc&per_page={pageSize}&page={page}";
-        }
-    }
-
     internal static class GitHubUtility
     {
         private static readonly Regex GitHubRepoRegex = new Regex(@"github\.com[:/](?<owner>[^/]+)/(?<repo>[^/]+?)(?:\.git)?(?=/|$)", RegexOptions.IgnoreCase | RegexOptions.Compiled);
@@ -145,46 +37,10 @@ namespace Calander.SubmodulePackageManager.Editor
             return false;
         }
 
-        internal static RepoListHandle StartListReposAsync()
+        internal static string GetAuthenticatedUsername()
         {
-            var handle = new RepoListHandle();
-            handle.Start();
-            return handle;
-        }
-
-        internal static bool TryListRepos(out List<GitHubRepo> repos, out string error)
-        {
-            repos = new List<GitHubRepo>();
-            error = string.Empty;
-
-            for (int page = 1; repos.Count < 200; page++)
-            {
-                var result = CliCommandRunner.Run("gh", $"api user/repos?sort=updated&direction=desc&per_page=100&page={page}", GitUtility.ProjectRoot);
-                if (!result.IsSuccess)
-                {
-                    error = BuildRepoListError("Failed to list GitHub repositories", result);
-                    return false;
-                }
-
-                var pageRepos = ParseRepoJson(result.StdOut.Trim());
-                if (pageRepos.Count == 0)
-                {
-                    break;
-                }
-
-                repos.AddRange(pageRepos);
-                if (pageRepos.Count < 100)
-                {
-                    break;
-                }
-            }
-
-            if (repos.Count > 200)
-            {
-                repos.RemoveRange(200, repos.Count - 200);
-            }
-
-            return true;
+            var result = CliCommandRunner.Run("gh", "api user --jq .login", GitUtility.ProjectRoot);
+            return result.IsSuccess ? result.StdOut.Trim() : string.Empty;
         }
 
         internal static List<GitHubRepo> ParseRepoJson(string json)
@@ -217,6 +73,36 @@ namespace Calander.SubmodulePackageManager.Editor
             return repos;
         }
 
+        internal static List<GitHubRepo> ParseSearchJson(string json)
+        {
+            var repos = new List<GitHubRepo>();
+            if (string.IsNullOrEmpty(json))
+            {
+                return repos;
+            }
+
+            var wrapper = JsonUtility.FromJson<SearchResultWrapper>(json);
+            if (wrapper?.items == null)
+            {
+                return repos;
+            }
+
+            foreach (var repoJson in wrapper.items)
+            {
+                repos.Add(new GitHubRepo
+                {
+                    Name = repoJson.name,
+                    Owner = repoJson.owner != null ? repoJson.owner.login : string.Empty,
+                    Url = string.IsNullOrWhiteSpace(repoJson.url) ? repoJson.html_url : repoJson.url,
+                    DefaultBranch = repoJson.default_branch,
+                    IsPrivate = repoJson.@private,
+                    Description = repoJson.description
+                });
+            }
+
+            return repos;
+        }
+
         internal static string BuildRepoListError(string message, CommandResult result)
         {
             return BuildError(message, result);
@@ -234,7 +120,7 @@ namespace Calander.SubmodulePackageManager.Editor
                 return true;
             }
 
-            if (IsNotFound(result))
+            if (IsNotFoundResult(result))
             {
                 hasPackageJson = false;
                 return true;
@@ -272,13 +158,11 @@ namespace Calander.SubmodulePackageManager.Editor
                 return string.Empty;
             }
 
-            // If the repo name already matches the package name format, use it
             if (GitUtility.IsValidPackageName(repoName))
             {
                 return repoName;
             }
 
-            // Sanitize owner and repo: lowercase, replace non-alphanumeric with empty
             string sanitizedOwner = SanitizeForPackageName(owner);
             string sanitizedRepo = SanitizeForPackageName(repoName);
 
@@ -308,7 +192,7 @@ namespace Calander.SubmodulePackageManager.Editor
             return sb.ToString();
         }
 
-        private static bool IsNotFound(CommandResult result)
+        internal static bool IsNotFoundResult(CommandResult result)
         {
             string combined = $"{result.StdOut}\n{result.StdErr}".ToLowerInvariant();
             return combined.Contains("not found") || combined.Contains("404");
@@ -323,6 +207,13 @@ namespace Calander.SubmodulePackageManager.Editor
         [Serializable]
         private sealed class RepoListWrapper
         {
+            public RepoJson[] items;
+        }
+
+        [Serializable]
+        private sealed class SearchResultWrapper
+        {
+            public int total_count;
             public RepoJson[] items;
         }
 

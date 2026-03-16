@@ -3,9 +3,9 @@ using System.Collections.Generic;
 using UnityEditor;
 using UnityEngine;
 
-namespace Calander.SubmodulePackageManager.Editor
+namespace GitPackageManager.Editor
 {
-    public partial class GitSubmodulesWindow : EditorWindow
+    public partial class GitPackageManagerWindow : EditorWindow
     {
         private enum Tab
         {
@@ -31,14 +31,14 @@ namespace Calander.SubmodulePackageManager.Editor
         private const float ListPaneWidth = 320f;
         private const double AutoRefreshIntervalSeconds = 300.0;
 
-        private readonly SubmoduleRepositoryCoordinator repositoryCoordinator = new();
+        private readonly RepositoryCoordinator repositoryCoordinator = new();
+        private readonly DiscoveryCoordinator discoveryCoordinator = new();
 
         private Tab currentTab = Tab.Installed;
         private Vector2 listScroll;
         private Vector2 detailsScroll;
 
-        private List<SubmoduleInfo> installedSubmodules = new();
-        private List<GitHubRepo> availableRepos = new();
+        private List<GitPackageInfo> installedPackages = new();
 
         private int selectedInstalledIndex = -1;
         private int selectedRepoIndex = -1;
@@ -64,22 +64,26 @@ namespace Calander.SubmodulePackageManager.Editor
         private string addPackageName = string.Empty;
         private string addStatus = string.Empty;
         private MessageType addStatusType = MessageType.None;
+        private PackageSourceType addSourceType = PackageSourceType.Submodule;
 
         private string searchFilter = string.Empty;
         private string selectedRepoPackageName = string.Empty;
         private string selectedRepoBranch = string.Empty;
+        private PackageSourceType selectedRepoSourceType = PackageSourceType.Submodule;
 
         private SortOption currentSort = SortOption.Name;
         private FilterOption currentFilter = FilterOption.All;
 
         private double lastInstalledRefreshTime;
-        private double lastDiscoverRefreshTime;
         private DateTime lastRefreshDateTime;
 
         private int lastInstalledIndex = -1;
         private string installedBranchInput = string.Empty;
         private string installedActionStatus = string.Empty;
         private MessageType installedActionStatusType = MessageType.None;
+
+        private AsyncCommandHandle activeOperation;
+        private string activeOperationLabel = string.Empty;
 
         private AddFromUrlPopup activeAddPopup;
 
@@ -91,14 +95,26 @@ namespace Calander.SubmodulePackageManager.Editor
 
         private void OnDisable()
         {
+            if (activeAddPopup != null)
+            {
+                activeAddPopup.ClosePopup();
+                activeAddPopup = null;
+            }
+
             repositoryCoordinator.Dispose();
+            discoveryCoordinator.Dispose();
+        }
+
+        private void Update()
+        {
+            UpdateDiscovery();
+            UpdateBranchFetching();
+            UpdateActiveOperation();
         }
 
         private void OnGUI()
         {
             Styles.Initialize();
-            UpdateRepoLoading();
-            UpdateBranchFetching();
 
             EditorGUILayout.BeginVertical();
             DrawToolbar();
@@ -117,7 +133,7 @@ namespace Calander.SubmodulePackageManager.Editor
             EditorGUILayout.EndVertical();
         }
 
-        internal void RefreshSubmodules()
+        internal void RefreshPackages()
         {
             RefreshDependencies();
             RefreshInstalled();

@@ -1,7 +1,7 @@
 using System;
 using UnityEngine;
 
-namespace Calander.SubmodulePackageManager.Editor
+namespace GitPackageManager.Editor
 {
     internal static class CliInstaller
     {

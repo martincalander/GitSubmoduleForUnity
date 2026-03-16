@@ -1,9 +1,9 @@
 using UnityEditor;
 using UnityEngine;
 
-namespace Calander.SubmodulePackageManager.Editor
+namespace GitPackageManager.Editor
 {
-    public partial class GitSubmodulesWindow
+    public partial class GitPackageManagerWindow
     {
         private static class Styles
         {
@@ -90,7 +90,7 @@ namespace Calander.SubmodulePackageManager.Editor
 
             private static Texture2D CreateColorTexture(Color color)
             {
-                var texture = new Texture2D(1, 1);
+                var texture = new Texture2D(1, 1) { hideFlags = HideFlags.HideAndDontSave };
                 texture.SetPixel(0, 0, color);
                 texture.Apply();
                 return texture;

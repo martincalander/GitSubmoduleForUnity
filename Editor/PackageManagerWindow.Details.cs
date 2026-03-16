@@ -3,9 +3,9 @@ using System.IO;
 using UnityEditor;
 using UnityEngine;
 
-namespace Calander.SubmodulePackageManager.Editor
+namespace GitPackageManager.Editor
 {
-    public partial class GitSubmodulesWindow
+    public partial class GitPackageManagerWindow
     {
         private void DrawDetailsPane()
         {
@@ -21,50 +21,76 @@ namespace Calander.SubmodulePackageManager.Editor
 
         private void DrawInstalledDetails()
         {
-            if (selectedInstalledIndex < 0 || selectedInstalledIndex >= installedSubmodules.Count)
+            if (installedPackages == null || selectedInstalledIndex < 0 || selectedInstalledIndex >= installedPackages.Count)
             {
                 EditorGUILayout.Space(40);
                 GUILayout.Label("Select a package to view details", EditorStyles.centeredGreyMiniLabel);
                 return;
             }
 
-            SubmoduleInfo submodule = installedSubmodules[selectedInstalledIndex];
+            GitPackageInfo package = installedPackages[selectedInstalledIndex];
             if (lastInstalledIndex != selectedInstalledIndex)
             {
-                installedBranchInput = string.IsNullOrWhiteSpace(submodule.Branch) ? "main" : submodule.Branch;
+                installedBranchInput = string.IsNullOrWhiteSpace(package.Branch) ? "main" : package.Branch;
                 installedActionStatus = string.Empty;
                 installedActionStatusType = MessageType.None;
                 lastInstalledIndex = selectedInstalledIndex;
             }
 
             EditorGUILayout.Space(8);
-            string displayName = submodule.PackageName ?? submodule.Name;
+            string displayName = package.PackageName ?? package.Name;
+            string typeLabel = package.SourceType == PackageSourceType.Subtree ? "Git Subtree" : "Git Submodule";
             GUILayout.Label(displayName, Styles.TitleLabel);
-            GUILayout.Label($"{(string.IsNullOrWhiteSpace(submodule.Branch) ? "main" : submodule.Branch)} · Git Submodule", Styles.SubtitleLabel);
+            GUILayout.Label($"{(string.IsNullOrWhiteSpace(package.Branch) ? "main" : package.Branch)} · {typeLabel}", Styles.SubtitleLabel);
             EditorGUILayout.Space(4);
 
             EditorGUILayout.BeginHorizontal();
-            if (!string.IsNullOrWhiteSpace(submodule.Url) && GUILayout.Button("Repository", Styles.LinkButton))
-                Application.OpenURL(submodule.Url);
+            if (!string.IsNullOrWhiteSpace(package.Url) && GUILayout.Button("Repository", Styles.LinkButton))
+                Application.OpenURL(package.Url);
             if (GUILayout.Button("Show in Explorer", Styles.LinkButton))
-                EditorUtility.RevealInFinder(Path.Combine(GitUtility.ProjectRoot, submodule.Path));
+                EditorUtility.RevealInFinder(Path.Combine(GitUtility.ProjectRoot, package.Path));
             GUILayout.FlexibleSpace();
             EditorGUILayout.EndHorizontal();
 
             EditorGUILayout.Space(8);
+            bool isOperationRunning = activeOperation != null;
             EditorGUILayout.BeginHorizontal();
-            using (new EditorGUI.DisabledScope(!gitAvailable))
+            using (new EditorGUI.DisabledScope(!gitAvailable || isOperationRunning))
             {
-                if (GUILayout.Button("Update", GUILayout.Height(24)) &&
-                    EditorUtility.DisplayDialog("Update Submodule", $"Fetch and update:\n{submodule.Path}?", "Update", "Cancel"))
+                if (package.SourceType == PackageSourceType.Submodule)
                 {
-                    PerformUpdate(submodule);
+                    if (GUILayout.Button("Update", GUILayout.Height(24)) &&
+                        EditorUtility.DisplayDialog("Update Submodule", $"Fetch and update:\n{package.Path}?", "Update", "Cancel"))
+                    {
+                        StartAsyncOperation("Updating submodule...", "git",
+                            $"submodule update --remote --merge -- {package.Path}", () => OnUpdateComplete(package));
+                    }
+                }
+                else
+                {
+                    if (GUILayout.Button("Pull", GUILayout.Height(24)) &&
+                        EditorUtility.DisplayDialog("Pull Subtree", $"Pull latest for:\n{package.Path}?", "Pull", "Cancel"))
+                    {
+                        string branch = string.IsNullOrWhiteSpace(package.Branch) ? "main" : package.Branch;
+                        StartAsyncOperation("Pulling subtree...", "git",
+                            $"subtree pull --prefix={package.Path} {package.Url} {branch} --squash",
+                            () => OnUpdateComplete(package), 120000);
+                    }
+
+                    if (GUILayout.Button("Push", GUILayout.Height(24)) &&
+                        EditorUtility.DisplayDialog("Push Subtree", $"Push changes for:\n{package.Path}?", "Push", "Cancel"))
+                    {
+                        string branch = string.IsNullOrWhiteSpace(package.Branch) ? "main" : package.Branch;
+                        StartAsyncOperation("Pushing subtree...", "git",
+                            $"subtree push --prefix={package.Path} {package.Url} {branch}",
+                            () => OnPushComplete(), 120000);
+                    }
                 }
 
                 if (GUILayout.Button("Remove", GUILayout.Height(24)) &&
-                    EditorUtility.DisplayDialog("Remove Submodule", $"Remove submodule at {submodule.Path}?", "Remove", "Cancel"))
+                    EditorUtility.DisplayDialog("Remove Package", $"Remove {typeLabel.ToLower()} at {package.Path}?", "Remove", "Cancel"))
                 {
-                    PerformRemove(submodule);
+                    PerformRemove(package);
                 }
             }
             GUILayout.FlexibleSpace();
@@ -72,34 +98,36 @@ namespace Calander.SubmodulePackageManager.Editor
 
             EditorGUILayout.Space(12);
             EditorGUILayout.BeginVertical(Styles.InfoBox);
-            DrawInfoRow("Path", submodule.Path);
-            DrawInfoRow("URL", submodule.Url);
-            if (!string.IsNullOrWhiteSpace(submodule.Branch))
-                DrawInfoRow("Branch", submodule.Branch);
-            if (!string.IsNullOrWhiteSpace(submodule.CommitHash))
-                DrawInfoRow("Commit", submodule.CommitHash.Length > 7 ? submodule.CommitHash.Substring(0, 7) : submodule.CommitHash);
+            DrawInfoRow("Type", typeLabel);
+            DrawInfoRow("Path", package.Path);
+            DrawInfoRow("URL", package.Url);
+            if (!string.IsNullOrWhiteSpace(package.Branch))
+                DrawInfoRow("Branch", package.Branch);
+            if (!string.IsNullOrWhiteSpace(package.CommitHash))
+                DrawInfoRow("Commit", package.CommitHash.Length > 7 ? package.CommitHash.Substring(0, 7) : package.CommitHash);
             EditorGUILayout.EndVertical();
 
-            if (!submodule.HasPackageJson)
-                EditorGUILayout.HelpBox("This submodule does not contain a package.json at its root.", MessageType.Warning);
+            if (!package.HasPackageJson)
+                EditorGUILayout.HelpBox("This package does not contain a package.json at its root.", MessageType.Warning);
             if (!string.IsNullOrWhiteSpace(installedActionStatus))
                 EditorGUILayout.HelpBox(installedActionStatus, installedActionStatusType);
 
             EditorGUILayout.Space(12);
             GUILayout.Label("Change Branch", Styles.SectionHeader);
             EditorGUILayout.BeginHorizontal();
-            DrawBranchDropdown(submodule.Url, installedBranchInput, branch => installedBranchInput = branch);
-            using (new EditorGUI.DisabledScope(!gitAvailable || string.IsNullOrWhiteSpace(installedBranchInput)))
+            DrawBranchDropdown(package.Url, installedBranchInput, branch => installedBranchInput = branch);
+            using (new EditorGUI.DisabledScope(!gitAvailable || string.IsNullOrWhiteSpace(installedBranchInput) || isOperationRunning))
             {
                 if (GUILayout.Button("Apply", GUILayout.Width(60), GUILayout.Height(20)))
-                    PerformBranchChange(submodule, installedBranchInput.Trim());
+                    PerformBranchChange(package, installedBranchInput.Trim());
             }
             EditorGUILayout.EndHorizontal();
         }
 
         private void DrawDiscoverDetails()
         {
-            if (selectedRepoIndex < 0 || selectedRepoIndex >= availableRepos.Count)
+            var availableRepos = discoveryCoordinator.DisplayedRepos;
+            if (availableRepos == null || selectedRepoIndex < 0 || selectedRepoIndex >= availableRepos.Count)
             {
                 EditorGUILayout.Space(40);
                 GUILayout.Label("Select a repository to view details", EditorStyles.centeredGreyMiniLabel);
@@ -107,6 +135,8 @@ namespace Calander.SubmodulePackageManager.Editor
             }
 
             GitHubRepo repo = availableRepos[selectedRepoIndex];
+            discoveryCoordinator.CheckPackageJson(repo);
+
             EditorGUILayout.Space(8);
             GUILayout.Label(repo.Name, Styles.TitleLabel);
             GUILayout.Label(!string.IsNullOrWhiteSpace(repo.Description) ? repo.Description : $"Repository by {repo.Owner}", Styles.SubtitleLabel);
@@ -131,7 +161,7 @@ namespace Calander.SubmodulePackageManager.Editor
             if (repo.PackageJsonChecked && !repo.HasPackageJson)
                 EditorGUILayout.HelpBox("This repository does not contain a package.json at its root. It may not be a valid Unity package.", MessageType.Warning);
             if (repo.IsPrivate)
-                EditorGUILayout.HelpBox("Private repository. Collaborators will need access to clone this submodule.", MessageType.Warning);
+                EditorGUILayout.HelpBox("Private repository. Collaborators will need access to clone this package.", MessageType.Warning);
             if (repo.IsInstalled)
                 EditorGUILayout.HelpBox("This repository is already installed.", MessageType.Info);
 
@@ -141,6 +171,15 @@ namespace Calander.SubmodulePackageManager.Editor
                 GUILayout.Label("Add as Package", Styles.SectionHeader);
 
                 EditorGUILayout.BeginVertical(Styles.InfoBox);
+                EditorGUILayout.BeginHorizontal();
+                GUILayout.Label("Add as", Styles.InfoLabel, GUILayout.Width(100));
+                if (GUILayout.Toggle(selectedRepoSourceType == PackageSourceType.Submodule, "Submodule", EditorStyles.miniButtonLeft))
+                    selectedRepoSourceType = PackageSourceType.Submodule;
+                if (GUILayout.Toggle(selectedRepoSourceType == PackageSourceType.Subtree, "Subtree", EditorStyles.miniButtonRight))
+                    selectedRepoSourceType = PackageSourceType.Subtree;
+                GUILayout.FlexibleSpace();
+                EditorGUILayout.EndHorizontal();
+
                 EditorGUILayout.BeginHorizontal();
                 GUILayout.Label("Package Name", Styles.InfoLabel, GUILayout.Width(100));
                 selectedRepoPackageName = EditorGUILayout.TextField(selectedRepoPackageName);
@@ -159,10 +198,11 @@ namespace Calander.SubmodulePackageManager.Editor
                     GUILayout.Label(PackageNameRule, Styles.FooterLabel);
 
                 EditorGUILayout.Space(8);
-                using (new EditorGUI.DisabledScope(!string.IsNullOrWhiteSpace(validationError)))
+                bool isOperationRunning = activeOperation != null;
+                using (new EditorGUI.DisabledScope(!string.IsNullOrWhiteSpace(validationError) || isOperationRunning))
                 {
                     if (GUILayout.Button("Add Package", GUILayout.Height(28)))
-                        TryAddSubmodule(repo.Url, selectedRepoBranch, selectedRepoPackageName);
+                        TryAddPackage(repo.Url, selectedRepoBranch, selectedRepoPackageName, selectedRepoSourceType);
                 }
             }
 

@@ -1,16 +1,18 @@
 {
-  "name": "com.martincalander.submodulehelper",
-  "version": "0.1.0",
-  "displayName": "Submodule Helper",
-  "description": "Unity Editor tooling for discovering, adding, updating, and removing Git submodule packages.",
+  "name": "com.martincalander.gitpackagemanager",
+  "version": "1.0.0",
+  "displayName": "Git Package Manager",
+  "description": "Unity Editor tooling for discovering, adding, updating, and removing Git submodule and subtree packages.",
   "unity": "2021.3",
   "unityRelease": "0b1",
-  "documentationUrl": "https://github.com/martincalander/com.martincalander.submodulehelper/blob/main/README.md",
-  "changelogUrl": "https://github.com/martincalander/com.martincalander.submodulehelper/blob/main/CHANGELOG.md",
-  "licensesUrl": "https://github.com/martincalander/com.martincalander.submodulehelper/blob/main/LICENSE.md",
+  "documentationUrl": "https://github.com/martincalander/com.martincalander.gitpackagemanager/blob/main/README.md",
+  "changelogUrl": "https://github.com/martincalander/com.martincalander.gitpackagemanager/blob/main/CHANGELOG.md",
+  "licensesUrl": "https://github.com/martincalander/com.martincalander.gitpackagemanager/blob/main/LICENSE.md",
   "keywords": [
     "GitHub",
-    "Submodule"
+    "Submodule",
+    "Subtree",
+    "Package Manager"
   ],
   "author": {
     "name": "Martin Calander",

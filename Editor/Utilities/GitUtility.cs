@@ -4,20 +4,8 @@ using System.IO;
 using System.Text.RegularExpressions;
 using UnityEngine;
 
-namespace Calander.SubmodulePackageManager.Editor
+namespace GitPackageManager.Editor
 {
-    internal sealed class SubmoduleInfo
-    {
-        public string Name;
-        public string Path;
-        public string Url;
-        public string Branch;
-        public string CommitHash;
-        public bool HasPackageJson;
-        public string PackageName;
-        public bool IsUnderPackages;
-    }
-
     [Serializable]
     internal sealed class PackageJsonMetadata
     {
@@ -102,9 +90,11 @@ namespace Calander.SubmodulePackageManager.Editor
             return false;
         }
 
-        internal static bool TryGetSubmodules(out List<SubmoduleInfo> submodules, out string error)
+        // ── Submodule Operations ──
+
+        internal static bool TryGetSubmodules(out List<GitPackageInfo> submodules, out string error)
         {
-            submodules = new List<SubmoduleInfo>();
+            submodules = new List<GitPackageInfo>();
             error = string.Empty;
 
             string root = ProjectRoot;
@@ -122,8 +112,6 @@ namespace Calander.SubmodulePackageManager.Editor
             var listResult = RunGit("config --file .gitmodules --name-only --get-regexp path", root);
             if (!listResult.IsSuccess)
             {
-                // Exit code 1 with no stderr typically means no matches found (empty .gitmodules or no path entries)
-                // This is not an error - it just means there are no submodules configured
                 if (listResult.ExitCode == 1 && string.IsNullOrWhiteSpace(listResult.StdErr))
                 {
                     return true;
@@ -148,14 +136,14 @@ namespace Calander.SubmodulePackageManager.Editor
                 string branch = RunGit($"config --file .gitmodules --get submodule.{name}.branch", root).StdOut.Trim();
                 path = NormalizePath(path);
 
-                var info = new SubmoduleInfo
+                var info = new GitPackageInfo
                 {
+                    SourceType = PackageSourceType.Submodule,
                     Name = name,
                     Path = path,
                     Url = url,
                     Branch = branch,
-                    CommitHash = commitMap.TryGetValue(path, out string commit) ? commit : string.Empty,
-                    IsUnderPackages = path.Replace("\\", "/").StartsWith("Packages/", StringComparison.OrdinalIgnoreCase)
+                    CommitHash = commitMap.TryGetValue(path, out string commit) ? commit : string.Empty
                 };
 
                 string packageJsonPath = Path.Combine(root, path, "package.json");
@@ -164,7 +152,7 @@ namespace Calander.SubmodulePackageManager.Editor
                 {
                     info.PackageName = packageName;
                 }
-                else if (info.IsUnderPackages)
+                else if (path.Replace("\\", "/").StartsWith("Packages/", StringComparison.OrdinalIgnoreCase))
                 {
                     info.PackageName = Path.GetFileName(path);
                 }
@@ -302,6 +290,143 @@ namespace Calander.SubmodulePackageManager.Editor
             return true;
         }
 
+        // ── Subtree Operations ──
+
+        internal static bool TryAddSubtree(string url, string path, string branch, out string error)
+        {
+            error = string.Empty;
+            string root = ProjectRoot;
+            string normalizedPath = NormalizePath(path);
+            string branchArg = string.IsNullOrWhiteSpace(branch) ? "main" : branch.Trim();
+
+            var result = RunGit($"subtree add --prefix={normalizedPath} {Quote(url)} {Quote(branchArg)} --squash", root);
+            if (!result.IsSuccess)
+            {
+                error = BuildError("Failed to add subtree", result);
+                return false;
+            }
+
+            GitPackagesManifestUtility.AddEntry(normalizedPath, url, branchArg);
+            return true;
+        }
+
+        internal static bool TryRemoveSubtree(string path, out string error)
+        {
+            error = string.Empty;
+            string root = ProjectRoot;
+            string normalizedPath = NormalizePath(path);
+            string fullPath = Path.Combine(root, normalizedPath);
+
+            if (Directory.Exists(fullPath))
+            {
+                var result = RunGit($"rm -r {Quote(normalizedPath)}", root);
+                if (!result.IsSuccess)
+                {
+                    // git rm failed — force-delete the directory as fallback
+                    try
+                    {
+                        Directory.Delete(fullPath, true);
+                    }
+                    catch (System.Exception ex)
+                    {
+                        error = $"Failed to remove subtree directory: {ex.Message}";
+                        return false;
+                    }
+                }
+            }
+
+            GitPackagesManifestUtility.RemoveEntry(normalizedPath);
+            return true;
+        }
+
+        internal static bool TryPullSubtree(string path, string url, string branch, out string error)
+        {
+            error = string.Empty;
+            string root = ProjectRoot;
+            string normalizedPath = NormalizePath(path);
+            string branchArg = string.IsNullOrWhiteSpace(branch) ? "main" : branch.Trim();
+
+            var result = RunGit($"subtree pull --prefix={normalizedPath} {Quote(url)} {Quote(branchArg)} --squash", root, 120000);
+            if (!result.IsSuccess)
+            {
+                error = BuildError("Failed to pull subtree", result);
+                return false;
+            }
+
+            return true;
+        }
+
+        internal static bool TryPushSubtree(string path, string url, string branch, out string error)
+        {
+            error = string.Empty;
+            string root = ProjectRoot;
+            string normalizedPath = NormalizePath(path);
+            string branchArg = string.IsNullOrWhiteSpace(branch) ? "main" : branch.Trim();
+
+            var result = RunGit($"subtree push --prefix={normalizedPath} {Quote(url)} {Quote(branchArg)}", root, 120000);
+            if (!result.IsSuccess)
+            {
+                error = BuildError("Failed to push subtree", result);
+                return false;
+            }
+
+            return true;
+        }
+
+        internal static bool TryGetSubtrees(out List<GitPackageInfo> subtrees, out string error)
+        {
+            subtrees = new List<GitPackageInfo>();
+            error = string.Empty;
+
+            string root = ProjectRoot;
+            var manifest = GitPackagesManifestUtility.Load();
+
+            foreach (var entry in manifest.subtrees)
+            {
+                string path = NormalizePath(entry.path);
+                var info = new GitPackageInfo
+                {
+                    SourceType = PackageSourceType.Subtree,
+                    Name = Path.GetFileName(path),
+                    Path = path,
+                    Url = entry.url,
+                    Branch = entry.branch
+                };
+
+                string packageJsonPath = Path.Combine(root, path, "package.json");
+                info.HasPackageJson = File.Exists(packageJsonPath);
+                if (info.HasPackageJson && TryReadPackageName(packageJsonPath, out string packageName))
+                {
+                    info.PackageName = packageName;
+                }
+
+                subtrees.Add(info);
+            }
+
+            return true;
+        }
+
+        internal static bool TryGetAllPackages(out List<GitPackageInfo> packages, out string error)
+        {
+            packages = new List<GitPackageInfo>();
+
+            if (!TryGetSubmodules(out var submodules, out error))
+            {
+                return false;
+            }
+
+            packages.AddRange(submodules);
+
+            if (TryGetSubtrees(out var subtrees, out _))
+            {
+                packages.AddRange(subtrees);
+            }
+
+            return true;
+        }
+
+        // ── Branch Operations ──
+
         internal static bool TryListRemoteBranches(string url, out List<string> branches, out string error)
         {
             branches = new List<string>();
@@ -324,9 +449,11 @@ namespace Calander.SubmodulePackageManager.Editor
             return true;
         }
 
-        internal static CommandResult RunGit(string arguments, string workingDir)
+        // ── Internals ──
+
+        internal static CommandResult RunGit(string arguments, string workingDir, int timeoutMs = CliCommandRunner.DefaultTimeoutMs)
         {
-            return CliCommandRunner.Run("git", arguments, workingDir);
+            return CliCommandRunner.Run("git", arguments, workingDir, timeoutMs);
         }
 
         private static Dictionary<string, string> GetSubmoduleCommitMap(string root)
@@ -438,7 +565,8 @@ namespace Calander.SubmodulePackageManager.Editor
                 return "\"\"";
             }
 
-            return value.Contains(" ") ? $"\"{value}\"" : value;
+            string escaped = value.Replace("\\", "\\\\").Replace("\"", "\\\"");
+            return $"\"{escaped}\"";
         }
 
         private static string BuildError(string message, CommandResult result)
