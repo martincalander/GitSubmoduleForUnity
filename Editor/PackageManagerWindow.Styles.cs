@@ -16,6 +16,7 @@ namespace GitPackageManager.Editor
             public static GUIStyle FooterLabel;
             public static GUIStyle LinkButton;
             public static GUIStyle SectionHeader;
+            public static GUIStyle LoadingLabel;
             public static bool Initialized;
 
             public static void Initialize()
@@ -83,6 +84,11 @@ namespace GitPackageManager.Editor
                     fontSize = 11,
                     fontStyle = FontStyle.Bold,
                     padding = new RectOffset(0, 0, 8, 4)
+                };
+
+                LoadingLabel = new GUIStyle(EditorStyles.centeredGreyMiniLabel)
+                {
+                    fontSize = 12
                 };
 
                 Initialized = true;

@@ -8,6 +8,81 @@ namespace GitPackageManager.Editor
 {
     public partial class GitPackageManagerWindow
     {
+        private sealed class InitialLoadResult
+        {
+            public bool GitAvailable;
+            public string GitVersion = string.Empty;
+            public string GitError = string.Empty;
+            public bool GhAvailable;
+            public string GhVersion = string.Empty;
+            public string GhError = string.Empty;
+            public bool GhAuthenticated;
+            public string GhAuthError = string.Empty;
+            public List<GitPackageInfo> Packages;
+            public string PackagesError = string.Empty;
+            public bool PackagesSuccess;
+        }
+
+        private void RunInitialLoad()
+        {
+            var result = new InitialLoadResult();
+            result.GitAvailable = GitUtility.IsGitAvailable(out var gv, out var ge);
+            result.GitVersion = gv;
+            result.GitError = ge;
+            result.GhAvailable = GitHubUtility.IsGhAvailable(out var ghv, out var ghe);
+            result.GhVersion = ghv;
+            result.GhError = ghe;
+            if (result.GhAvailable)
+            {
+                result.GhAuthenticated = GitHubUtility.IsAuthenticated(out var ghae);
+                result.GhAuthError = result.GhAuthenticated ? string.Empty : ghae;
+            }
+
+            if (result.GitAvailable)
+            {
+                result.PackagesSuccess = GitUtility.TryGetAllPackages(out var packages, out var packagesError);
+                result.Packages = packages;
+                result.PackagesError = packagesError;
+            }
+
+            pendingLoadResult = result;
+        }
+
+        private void ApplyLoadResult(InitialLoadResult result)
+        {
+            gitAvailable = result.GitAvailable;
+            gitVersion = result.GitVersion;
+            gitError = result.GitError;
+            ghAvailable = result.GhAvailable;
+            ghVersion = result.GhVersion;
+            ghError = result.GhError;
+            ghAuthenticated = result.GhAuthenticated;
+            ghAuthError = result.GhAuthError;
+
+            if (result.GitAvailable)
+            {
+                if (result.PackagesSuccess)
+                {
+                    installedPackages = result.Packages ?? new List<GitPackageInfo>();
+                }
+                else
+                {
+                    installedStatus = result.PackagesError;
+                    installedStatusType = MessageType.Error;
+                    installedPackages = new List<GitPackageInfo>();
+                }
+            }
+            else
+            {
+                installedStatus = "Git is required to list packages.";
+                installedStatusType = MessageType.Warning;
+            }
+
+            selectedInstalledIndex = Mathf.Clamp(selectedInstalledIndex, -1, installedPackages.Count - 1);
+            lastInstalledRefreshTime = EditorApplication.timeSinceStartup;
+            lastRefreshDateTime = DateTime.Now;
+        }
+
         private void PerformRemove(GitPackageInfo package)
         {
             bool success;

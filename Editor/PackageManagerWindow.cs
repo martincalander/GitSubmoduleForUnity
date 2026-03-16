@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Threading;
 using UnityEditor;
 using UnityEngine;
 
@@ -87,10 +88,17 @@ namespace GitPackageManager.Editor
 
         private AddFromUrlPopup activeAddPopup;
 
+        private volatile InitialLoadResult pendingLoadResult;
+        private bool isInitialLoading;
+
         private void OnEnable()
         {
-            RefreshDependencies();
-            RefreshCurrentTab();
+            // Cache ProjectRoot on main thread before background work
+            _ = GitUtility.ProjectRoot;
+
+            isInitialLoading = true;
+            pendingLoadResult = null;
+            new Thread(RunInitialLoad) { IsBackground = true }.Start();
         }
 
         private void OnDisable()
@@ -107,6 +115,20 @@ namespace GitPackageManager.Editor
 
         private void Update()
         {
+            if (isInitialLoading)
+            {
+                var result = pendingLoadResult;
+                if (result != null)
+                {
+                    ApplyLoadResult(result);
+                    pendingLoadResult = null;
+                    isInitialLoading = false;
+                }
+
+                Repaint();
+                return;
+            }
+
             UpdateDiscovery();
             UpdateBranchFetching();
             UpdateActiveOperation();
@@ -118,6 +140,15 @@ namespace GitPackageManager.Editor
 
             EditorGUILayout.BeginVertical();
             DrawToolbar();
+
+            if (isInitialLoading)
+            {
+                GUILayout.FlexibleSpace();
+                EditorGUILayout.LabelField("Loading packages...", Styles.LoadingLabel);
+                GUILayout.FlexibleSpace();
+                EditorGUILayout.EndVertical();
+                return;
+            }
 
             if (!DrawDependencyGate())
             {
