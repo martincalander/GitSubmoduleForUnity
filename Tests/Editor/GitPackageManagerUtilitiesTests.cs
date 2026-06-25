@@ -28,34 +28,34 @@ namespace GitPackageManager.Editor.Tests
         public void TryReadPackageNameFromJson_ReadsStructuredName()
         {
             var success = GitUtility.TryReadPackageNameFromJson(
-                "{ \"name\": \"com.martincalander.submodulehelper\", \"displayName\": \"Submodule Helper\" }",
+                "{ \"name\": \"com.essentials.gitpackagemanager\", \"displayName\": \"Git Package Manager\" }",
                 out var packageName);
 
             Assert.That(success, Is.True);
-            Assert.That(packageName, Is.EqualTo("com.martincalander.submodulehelper"));
+            Assert.That(packageName, Is.EqualTo("com.essentials.gitpackagemanager"));
         }
 
         [Test]
         public void DerivePackageNameSuggestion_StripsNonAlphanumericCharacters()
         {
-            var suggestion = GitHubUtility.DerivePackageNameSuggestion("Martin-Calander", "My.Helper-Package");
+            var suggestion = GitHubUtility.DerivePackageNameSuggestion("Essentials-ForUnity", "My.Helper-Package");
 
-            Assert.That(suggestion, Is.EqualTo("com.martincalander.myhelperpackage"));
+            Assert.That(suggestion, Is.EqualTo("com.essentialsforunity.myhelperpackage"));
         }
 
         [Test]
         public void TryParseGitHubRepo_ParsesCommonGitHubUrls()
         {
             Assert.That(
-                GitHubUtility.TryParseGitHubRepo("https://github.com/martincalander/com.martincalander.submodulehelper.git", out var httpsOwner, out var httpsRepo),
+                GitHubUtility.TryParseGitHubRepo("https://github.com/EssentialsForUnity/com.martincalander.submodulehelper.git", out var httpsOwner, out var httpsRepo),
                 Is.True);
-            Assert.That(httpsOwner, Is.EqualTo("martincalander"));
+            Assert.That(httpsOwner, Is.EqualTo("EssentialsForUnity"));
             Assert.That(httpsRepo, Is.EqualTo("com.martincalander.submodulehelper"));
 
             Assert.That(
-                GitHubUtility.TryParseGitHubRepo("git@github.com:martincalander/com.martincalander.essentials.git", out var sshOwner, out var sshRepo),
+                GitHubUtility.TryParseGitHubRepo("git@github.com:EssentialsForUnity/com.martincalander.essentials.git", out var sshOwner, out var sshRepo),
                 Is.True);
-            Assert.That(sshOwner, Is.EqualTo("martincalander"));
+            Assert.That(sshOwner, Is.EqualTo("EssentialsForUnity"));
             Assert.That(sshRepo, Is.EqualTo("com.martincalander.essentials"));
         }
 
@@ -63,21 +63,21 @@ namespace GitPackageManager.Editor.Tests
         public void ParseSubmoduleCommitMap_ParsesTrackedAndUninitializedEntries()
         {
             const string statusOutput =
-                "-1234567890abcdef1234567890abcdef12345678 Packages/com.martincalander.submodulehelper\n" +
-                " abcdef0123456789abcdef0123456789abcdef01 Packages\\com.martincalander.essentials (heads/main)\n";
+                "-1234567890abcdef1234567890abcdef12345678 Packages/com.essentials.gitpackagemanager\n" +
+                " abcdef0123456789abcdef0123456789abcdef01 Packages\\com.essentials.extensions (heads/main)\n";
 
             var commitMap = GitUtility.ParseSubmoduleCommitMap(statusOutput);
 
-            Assert.That(commitMap["Packages/com.martincalander.submodulehelper"], Is.EqualTo("1234567890abcdef1234567890abcdef12345678"));
-            Assert.That(commitMap["Packages/com.martincalander.essentials"], Is.EqualTo("abcdef0123456789abcdef0123456789abcdef01"));
+            Assert.That(commitMap["Packages/com.essentials.gitpackagemanager"], Is.EqualTo("1234567890abcdef1234567890abcdef12345678"));
+            Assert.That(commitMap["Packages/com.essentials.extensions"], Is.EqualTo("abcdef0123456789abcdef0123456789abcdef01"));
         }
 
         [Test]
         public void NormalizePath_ReplacesBackslashesAndTrimsWhitespace()
         {
-            var normalized = GitUtility.NormalizePath(@"  Packages\com.martincalander.submodulehelper  ");
+            var normalized = GitUtility.NormalizePath(@"  Packages\com.essentials.gitpackagemanager  ");
 
-            Assert.That(normalized, Is.EqualTo("Packages/com.martincalander.submodulehelper"));
+            Assert.That(normalized, Is.EqualTo("Packages/com.essentials.gitpackagemanager"));
         }
 
         // ── Subtree Command Tests ──
@@ -167,7 +167,7 @@ namespace GitPackageManager.Editor.Tests
             {
                 if (spec.FileName == "gh" && spec.Arguments.Contains("api user --jq"))
                 {
-                    return Success("martincalander");
+                    return Success("EssentialsForUnity");
                 }
 
                 if (spec.FileName == "gh" && spec.Arguments.Contains("user/repos"))
@@ -196,7 +196,7 @@ namespace GitPackageManager.Editor.Tests
             {
                 if (spec.FileName == "gh" && spec.Arguments.Contains("api user --jq"))
                 {
-                    return Success("martincalander");
+                    return Success("EssentialsForUnity");
                 }
 
                 if (spec.FileName == "gh" && spec.Arguments.Contains("search/repositories"))
@@ -405,8 +405,8 @@ namespace GitPackageManager.Editor.Tests
                 items.Add(
                     "{" +
                     $"\"name\":\"repo-{index}\"," +
-                    "\"owner\":{\"login\":\"martincalander\"}," +
-                    $"\"html_url\":\"https://github.com/martincalander/repo-{index}\"," +
+                    "\"owner\":{\"login\":\"EssentialsForUnity\"}," +
+                    $"\"html_url\":\"https://github.com/EssentialsForUnity/repo-{index}\"," +
                     "\"default_branch\":\"main\"," +
                     "\"private\":false" +
                     "}");

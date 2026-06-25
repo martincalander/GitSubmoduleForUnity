@@ -28,14 +28,14 @@ A Unity Editor tool that provides a visual interface for managing Git submodules
 
 ```bash
 cd YourUnityProject
-git submodule add https://github.com/martincalander/com.martincalander.submodulehelper.git Packages/com.martincalander.submodulehelper
+git submodule add https://github.com/EssentialsForUnity/com.martincalander.submodulehelper.git Packages/com.essentials.gitpackagemanager
 ```
 
 ### Via Git URL in Package Manager
 
 1. Open **Window > Package Manager**
 2. Click **+** > **Add package from git URL...**
-3. Enter: `https://github.com/martincalander/com.martincalander.submodulehelper.git`
+3. Enter: `https://github.com/EssentialsForUnity/com.martincalander.submodulehelper.git`
 
 ## Usage
 

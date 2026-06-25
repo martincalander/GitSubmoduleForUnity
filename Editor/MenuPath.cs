@@ -10,7 +10,7 @@ namespace GitPackageManager.Editor
         {
             var window = EditorWindow.GetWindow<GitPackageManagerWindow>("Submodule Manager");
             var icon = AssetDatabase.LoadAssetAtPath<Texture2D>(
-                "Packages/com.martincalander.gitpackagemanager/Editor/GitEditorWindowIcon.png");
+                "Packages/com.essentials.gitpackagemanager/Editor/GitEditorWindowIcon.png");
             if (icon != null)
                 window.titleContent = new GUIContent("Submodule Manager", icon);
             window.RefreshPackages();

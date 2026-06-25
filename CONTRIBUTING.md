@@ -48,7 +48,7 @@ Please be respectful and constructive in all interactions. We're all here to bui
 1. Clone the repository into a Unity project's `Packages` folder:
    ```bash
    cd YourUnityProject/Packages
-   git clone https://github.com/YourUsername/submodulehelper.git com.martincalander.submodulehelper
+   git clone https://github.com/YourUsername/submodulehelper.git com.essentials.gitpackagemanager
    ```
 
 2. Open the project in Unity
