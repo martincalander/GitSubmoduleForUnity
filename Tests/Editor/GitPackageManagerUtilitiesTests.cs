@@ -47,16 +47,16 @@ namespace GitPackageManager.Editor.Tests
         public void TryParseGitHubRepo_ParsesCommonGitHubUrls()
         {
             Assert.That(
-                GitHubUtility.TryParseGitHubRepo("https://github.com/EssentialsForUnity/com.martincalander.submodulehelper.git", out var httpsOwner, out var httpsRepo),
+                GitHubUtility.TryParseGitHubRepo("https://github.com/EssentialsForUnity/com.essentials.gitpackagemanager.git", out var httpsOwner, out var httpsRepo),
                 Is.True);
             Assert.That(httpsOwner, Is.EqualTo("EssentialsForUnity"));
-            Assert.That(httpsRepo, Is.EqualTo("com.martincalander.submodulehelper"));
+            Assert.That(httpsRepo, Is.EqualTo("com.essentials.gitpackagemanager"));
 
             Assert.That(
-                GitHubUtility.TryParseGitHubRepo("git@github.com:EssentialsForUnity/com.martincalander.essentials.git", out var sshOwner, out var sshRepo),
+                GitHubUtility.TryParseGitHubRepo("git@github.com:EssentialsForUnity/com.essentials.extensions.git", out var sshOwner, out var sshRepo),
                 Is.True);
             Assert.That(sshOwner, Is.EqualTo("EssentialsForUnity"));
-            Assert.That(sshRepo, Is.EqualTo("com.martincalander.essentials"));
+            Assert.That(sshRepo, Is.EqualTo("com.essentials.extensions"));
         }
 
         [Test]
