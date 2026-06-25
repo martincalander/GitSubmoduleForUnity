@@ -7,7 +7,8 @@
   "unityRelease": "0b1",
   "documentationUrl": "https://github.com/EssentialsForUnity/com.essentials.gitpackagemanager/blob/main/README.md",
   "changelogUrl": "https://github.com/EssentialsForUnity/com.essentials.gitpackagemanager/blob/main/CHANGELOG.md",
-  "licensesUrl": "https://github.com/EssentialsForUnity/com.essentials.gitpackagemanager/blob/main/LICENSE.md",
+  "licensesUrl": "LICENSE.md",
+  "license": "SEE LICENSE IN LICENSE.md",
   "keywords": [
     "GitHub",
     "Submodule",
@@ -15,7 +16,7 @@
     "Package Manager"
   ],
   "author": {
-    "name": "Martin Calander",
+    "name": "Essentials",
     "url": "https://martincalander.com",
     "email": "martin.calander@gmail.com"
   },

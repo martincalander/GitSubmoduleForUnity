@@ -1,23 +1,35 @@
-# License
+# Proprietary License
 
-MIT License
+Copyright (c) 2026 Martin Calander. All rights reserved.
 
-Copyright (c) 2025 Martin Calander (Gothenburg, Sweden)
+This package, including its source code, binaries, assets, documentation, and other related materials
+(collectively, the "Package"), is the sole and exclusive property of Martin Calander, except where a
+third-party notice or individual file expressly states otherwise.
 
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
+No license, permission, or other right is granted by this notice, by delivery of the Package, or by making
+the Package available. You may use, copy, modify, adapt, merge, publish, distribute, sublicense, sell,
+disclose, reverse engineer, decompile, create derivative works from, or otherwise exploit the Package only
+with Martin Calander's prior express written permission and only under the strict terms Martin Calander
+allows in that written permission.
 
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
+No patent, trademark, trade name, copyright, or other intellectual property right is granted by implication,
+estoppel, or otherwise.
 
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
+Any unauthorized use is prohibited and automatically terminates any permission that may otherwise have been
+granted.
+
+Third-party software distributed with the Package remains subject to its own license terms. Those
+third-party terms do not grant rights to Martin Calander's proprietary portions beyond what those terms
+expressly require.
+
+To the maximum extent permitted by applicable law, the Package is provided "as is" and "as available",
+without warranties or conditions of any kind, whether express, implied, or statutory, including any implied
+warranties of merchantability, fitness for a particular purpose, title, non-infringement, or quiet
+enjoyment.
+
+To the maximum extent permitted by applicable law, Martin Calander will not be liable for any direct,
+indirect, incidental, special, exemplary, consequential, or other damages arising out of or relating to the
+Package or its use, even if advised of the possibility of such damages.
+
+If you have a separate written agreement with Martin Calander covering the Package, that agreement governs
+your permitted use to the extent of any conflict with this notice.
