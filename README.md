@@ -121,7 +121,7 @@ git submodule update --init --recursive
 
 ## License
 
-Created by Martin Calander. See [LICENSE.md](LICENSE.md) for details.
+Created by Essentials. See [LICENSE.md](LICENSE.md) for details.
 
 ## Contributing
 

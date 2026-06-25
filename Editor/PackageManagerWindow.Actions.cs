@@ -4,7 +4,7 @@ using System.IO;
 using UnityEditor;
 using UnityEngine;
 
-namespace GitPackageManager.Editor
+namespace Essentials.GitPackageManager.Editor
 {
     public partial class GitPackageManagerWindow
     {

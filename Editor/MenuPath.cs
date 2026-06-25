@@ -1,7 +1,7 @@
 using UnityEditor;
 using UnityEngine;
 
-namespace GitPackageManager.Editor
+namespace Essentials.GitPackageManager.Editor
 {
     internal static class MenuPath
     {

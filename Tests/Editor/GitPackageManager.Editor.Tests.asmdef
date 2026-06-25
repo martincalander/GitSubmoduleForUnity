@@ -1,6 +1,6 @@
 {
     "name": "GitPackageManager.Editor.Tests",
-    "rootNamespace": "GitPackageManager.Editor.Tests",
+    "rootNamespace": "Essentials.GitPackageManager.Editor.Tests",
     "references": [
         "GitPackageManager.Editor"
     ],

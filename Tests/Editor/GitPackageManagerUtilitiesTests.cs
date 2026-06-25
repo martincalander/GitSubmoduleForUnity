@@ -6,7 +6,7 @@ using System.Threading;
 using NUnit.Framework;
 using UnityEngine;
 
-namespace GitPackageManager.Editor.Tests
+namespace Essentials.GitPackageManager.Editor.Tests
 {
     public sealed class GitPackageManagerUtilitiesTests
     {

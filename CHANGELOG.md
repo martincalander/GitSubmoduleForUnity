@@ -66,6 +66,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Moved C# namespaces and asmdef root namespaces to `Essentials.GitPackageManager.*`.
 - CLI execution now streams stdout/stderr asynchronously and applies a timeout instead of blocking on sequential `ReadToEnd()` calls.
 - Package metadata now links directly to the embedded README, changelog, and license files.
 

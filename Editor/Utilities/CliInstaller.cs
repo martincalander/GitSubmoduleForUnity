@@ -1,7 +1,7 @@
 using System;
 using UnityEngine;
 
-namespace GitPackageManager.Editor
+namespace Essentials.GitPackageManager.Editor
 {
     internal static class CliInstaller
     {

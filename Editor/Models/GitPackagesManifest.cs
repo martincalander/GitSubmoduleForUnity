@@ -1,7 +1,7 @@
 using System;
 using System.Collections.Generic;
 
-namespace GitPackageManager.Editor
+namespace Essentials.GitPackageManager.Editor
 {
     [Serializable]
     internal sealed class GitPackagesManifest

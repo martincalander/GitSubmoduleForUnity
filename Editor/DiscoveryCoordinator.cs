@@ -1,7 +1,7 @@
 using System;
 using System.Collections.Generic;
 
-namespace GitPackageManager.Editor
+namespace Essentials.GitPackageManager.Editor
 {
     internal sealed class DiscoveryCoordinator
     {

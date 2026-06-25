@@ -1,4 +1,4 @@
-namespace GitPackageManager.Editor
+namespace Essentials.GitPackageManager.Editor
 {
     internal enum PackageSourceType
     {

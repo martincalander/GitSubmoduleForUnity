@@ -4,7 +4,7 @@ using System.IO;
 using System.Text.RegularExpressions;
 using UnityEngine;
 
-namespace GitPackageManager.Editor
+namespace Essentials.GitPackageManager.Editor
 {
     [Serializable]
     internal sealed class PackageJsonMetadata

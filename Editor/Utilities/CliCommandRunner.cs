@@ -7,7 +7,7 @@ using System.Threading;
 using UnityEngine;
 using Debug = UnityEngine.Debug;
 
-namespace GitPackageManager.Editor
+namespace Essentials.GitPackageManager.Editor
 {
     internal sealed class CommandSpec
     {
