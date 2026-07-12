@@ -13,7 +13,7 @@ Editor/
 ├── Models/                    package and repository data
 └── Utilities/
     ├── CliCommandRunner.cs    process execution and async handles
-    ├── CliInstaller.cs        install guidance only
+    ├── CliInstaller.cs        consent-based native install plans and guidance
     ├── GitUtility.cs          validated Git submodule operations
     └── GitHubUtility.cs       gh authentication, parsing, and API helpers
 ```
@@ -31,6 +31,11 @@ Commands run through `System.Diagnostics.Process` with:
 
 The runner does not interpret input through Bash, PowerShell, Command Prompt, or
 another shell.
+
+Missing CLI tools are never installed silently. On macOS and Windows, the
+window shows the exact native command and requires an explicit confirmation
+before starting it. Linux keeps installation in the user's terminal so the
+distribution package manager can request administrator permission normally.
 
 ## Mutation Boundary
 
@@ -54,15 +59,25 @@ Remote `package.json` checks and branch listing are selection-driven and lazy.
 
 ## Threading
 
-Blocking CLI work runs on background threads. Completion is published with a
-volatile memory barrier before the editor thread consumes the result. Unity API
-calls and UI mutations remain on the editor thread.
+Network-heavy CLI work runs on background threads. Completion is published with
+a volatile memory barrier before the editor thread consumes the result. Unity
+API calls and UI mutations remain on the editor thread. Process discovery uses
+platform-neutral .NET operating-system checks so background work does not query
+Unity editor state.
+
+While an asynchronous Git mutation writes below `Packages/`, automatic asset
+refresh is temporarily suspended. Completion is polled independently of the
+window lifecycle, validation and rollback finish first, and auto-refresh is
+restored in a `finally` path before one explicit refresh. This prevents a
+mid-clone domain reload from orphaning the operation.
 
 ## Failure Handling
 
 - CLI failures retain standard error for user-visible diagnostics.
 - Timeouts terminate the child process on a best-effort basis.
 - Package addition validates the cloned root and rolls back invalid packages.
+- Failed clones remove safe untracked worktrees and module metadata; ambiguous
+  `.gitmodules` state is preserved and reported instead of being guessed at.
 - Local metadata cleanup after a successful `git rm` is best-effort and warns
   rather than misreporting the already-completed tracked mutation.
 - Window disable/re-enable generations prevent stale initial-load results from

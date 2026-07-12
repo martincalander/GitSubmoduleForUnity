@@ -1,7 +1,7 @@
 # Contributing to Git Package Manager
 
 Thank you for helping make Git Package Manager more reliable for Unity teams.
-Contributions are welcome under the [MIT License](LICENSE.md) and must follow the
+Contributions are welcome under the [MIT License](../LICENSE.md) and must follow the
 [Code of Conduct](CODE_OF_CONDUCT.md).
 
 ## Good Contributions
@@ -56,7 +56,7 @@ Editor/
     └── GitHubUtility.cs       GitHub CLI operations
 ```
 
-Read [Documentation~/architecture.md](Documentation~/architecture.md) before
+Read [Documentation~/architecture.md](../Documentation~/architecture.md) before
 changing command execution, package mutation, threading, discovery, or lifecycle
 behavior.
 
@@ -66,7 +66,8 @@ behavior.
 - Preserve Windows, macOS, and Linux behavior.
 - Never evaluate user input through a shell.
 - Keep mutations restricted to direct `Packages/com.author.package` paths.
-- Do not store credentials or invoke system installers.
+- Do not store credentials or run installers without the user's explicit
+  confirmation.
 - Avoid implicit network or repository mutations during editor startup.
 - Prefer explicit state, actionable errors, and rollback over optimistic UI.
 - Keep public APIs minimal; most implementation types should remain `internal`.
@@ -127,4 +128,4 @@ Do not open a public issue for a vulnerability. Follow
 
 Git Package Manager was created by Martin Calander. Contributors retain
 authorship of their contributions; the combined project is distributed under
-the [MIT License](LICENSE.md).
+the [MIT License](../LICENSE.md).

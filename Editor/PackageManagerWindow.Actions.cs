@@ -87,13 +87,27 @@ namespace Essentials.GitPackageManager.Editor
 
         private void PerformRemove(GitPackageInfo package)
         {
+            operationStatus = string.Empty;
+            operationStatusType = MessageType.None;
             if (!GitUtility.TryRemoveSubmodule(package.Path, out string error))
             {
                 installedActionStatus = error;
                 installedActionStatusType = MessageType.Error;
+                operationStatus = error;
+                operationStatusType = MessageType.Error;
                 return;
             }
 
+            if (string.IsNullOrWhiteSpace(error))
+            {
+                operationStatus = $"Removed {package.PackageName ?? package.Name}. Review and commit the parent repository changes.";
+                operationStatusType = MessageType.Info;
+            }
+            else
+            {
+                operationStatus = error;
+                operationStatusType = MessageType.Warning;
+            }
             selectedInstalledIndex = -1;
             RefreshInstalled();
             AssetDatabase.Refresh(ImportAssetOptions.ForceUpdate);
@@ -114,14 +128,17 @@ namespace Essentials.GitPackageManager.Editor
                 RefreshInstalled();
 
                 if (EditorUtility.DisplayDialog("Update Package", "Update to the new branch now?", "Update", "Later"))
-                    StartAsyncOperation("Updating submodule...", "git",
-                        $"submodule update --init --remote --merge -- {package.Path}", () => OnUpdateComplete(package), 120000);
+                    StartAsyncOperation("Updating submodule...", GitUtility.GitExecutable,
+                        $"submodule update --init --remote --merge -- {package.Path}",
+                        result => OnUpdateComplete(package, result),
+                        120000,
+                        true);
             }
         }
 
-        private void OnUpdateComplete(GitPackageInfo package)
+        private void OnUpdateComplete(GitPackageInfo package, CommandResult result)
         {
-            if (activeOperation != null && activeOperation.Result.IsSuccess)
+            if (result != null && result.IsSuccess)
             {
                 installedActionStatus = "Updated successfully.";
                 installedActionStatusType = MessageType.Info;
@@ -129,21 +146,56 @@ namespace Essentials.GitPackageManager.Editor
             }
             else
             {
-                string error = activeOperation?.Result?.StdErr ?? "Unknown error";
-                installedActionStatus = $"Update failed: {error}";
+                string error = GitUtility.BuildCommandError("Git update failed", result);
+                installedActionStatus = error;
                 installedActionStatusType = MessageType.Error;
+                operationStatus = error;
+                operationStatusType = MessageType.Error;
             }
         }
 
-        private void StartAsyncOperation(string label, string fileName, string arguments, Action onComplete, int timeoutMs = CliCommandRunner.DefaultTimeoutMs)
+        private void StartAsyncOperation(
+            string label,
+            string fileName,
+            string arguments,
+            Action<CommandResult> onComplete,
+            int timeoutMs = CliCommandRunner.DefaultTimeoutMs,
+            bool suppressAutoRefresh = false)
         {
+            if (activeOperation != null)
+                return;
+
+            if (suppressAutoRefresh)
+            {
+                AssetDatabase.DisallowAutoRefresh();
+                activeOperationSuppressesAutoRefresh = true;
+            }
+
             activeOperationLabel = label;
-            activeOperation = CliCommandRunner.RunAsync(fileName, arguments, GitUtility.ProjectRoot, timeoutMs);
-            activeOperationOnComplete = onComplete;
-            Repaint();
+            try
+            {
+                activeOperation = CliCommandRunner.RunAsync(fileName, arguments, GitUtility.ProjectRoot, timeoutMs);
+                activeOperationOnComplete = onComplete;
+                RegisterActiveOperationPolling();
+                Repaint();
+            }
+            catch (Exception ex)
+            {
+                RestoreAutoRefreshIfNeeded();
+                activeOperationLabel = string.Empty;
+                activeOperation = null;
+                activeOperationOnComplete = null;
+                onComplete?.Invoke(new CommandResult
+                {
+                    ExitCode = -1,
+                    StdOut = string.Empty,
+                    StdErr = ex.Message
+                });
+                Repaint();
+            }
         }
 
-        private Action activeOperationOnComplete;
+        private Action<CommandResult> activeOperationOnComplete;
 
         private void UpdateActiveOperation()
         {
@@ -154,25 +206,173 @@ namespace Essentials.GitPackageManager.Editor
 
             if (!activeOperation.IsComplete)
             {
-                Repaint();
+                if (this != null)
+                    Repaint();
                 return;
             }
 
             var onComplete = activeOperationOnComplete;
+            CommandResult result = activeOperation.Result;
             activeOperationOnComplete = null;
-
-            onComplete?.Invoke();
-
             activeOperation = null;
             activeOperationLabel = string.Empty;
-            Repaint();
+            UnregisterActiveOperationPolling();
+            try
+            {
+                onComplete?.Invoke(result);
+            }
+            finally
+            {
+                RestoreAutoRefreshIfNeeded();
+            }
+            if (this != null)
+                Repaint();
+        }
+
+        private void RestoreAutoRefreshIfNeeded()
+        {
+            if (!activeOperationSuppressesAutoRefresh)
+                return;
+
+            activeOperationSuppressesAutoRefresh = false;
+            AssetDatabase.AllowAutoRefresh();
+            AssetDatabase.Refresh(ImportAssetOptions.ForceUpdate);
+        }
+
+        private void RegisterActiveOperationPolling()
+        {
+            if (activeOperationPollingRegistered)
+                return;
+
+            EditorApplication.update += UpdateActiveOperation;
+            activeOperationPollingRegistered = true;
+        }
+
+        private void UnregisterActiveOperationPolling()
+        {
+            if (!activeOperationPollingRegistered)
+                return;
+
+            EditorApplication.update -= UpdateActiveOperation;
+            activeOperationPollingRegistered = false;
         }
 
         private void RefreshDependencies()
         {
             gitAvailable = GitUtility.IsGitAvailable(out gitVersion, out gitError);
             ghAvailable = GitHubUtility.IsGhAvailable(out ghVersion, out ghError);
-            ghAuthenticated = ghAvailable && GitHubUtility.IsAuthenticated(out ghAuthError);
+            if (ghAvailable)
+                ghAuthenticated = GitHubUtility.IsAuthenticated(out ghAuthError);
+            else
+            {
+                ghAuthenticated = false;
+                ghAuthError = string.Empty;
+            }
+        }
+
+        private void StartCliInstall(ToolKind tool, string displayName)
+        {
+            if (cliInstallOperation != null || activeOperation != null)
+                return;
+
+            CliInstallPlan plan = CliInstaller.GetInstallPlan(tool);
+            if (!plan.CanRunAutomatically)
+            {
+                installStatus = plan.AutomaticInstallUnavailableReason;
+                installStatusType = MessageType.Warning;
+                return;
+            }
+
+            string prompt =
+                $"Git Package Manager can run this command to install {displayName}:\n\n" +
+                $"{plan.DisplayCommand}\n\n" +
+                "This changes software installed on your computer. The command will only run if you choose Install.";
+            if (plan.OpensSystemInstaller)
+                prompt += " The operating system will show its own installer confirmation.";
+            else
+                prompt += " Your operating system may also request permission.";
+
+            if (!EditorUtility.DisplayDialog($"Install {displayName}?", prompt, "Install", "Cancel"))
+            {
+                installStatus = $"{displayName} installation was cancelled.";
+                installStatusType = MessageType.Info;
+                return;
+            }
+
+            activeCliInstallTool = tool;
+            activeCliInstallPlan = plan;
+            cliInstallOperation = CliCommandRunner.RunAsync(
+                plan.FileName,
+                plan.Arguments,
+                GitUtility.ProjectRoot,
+                15 * 60 * 1000);
+            installStatus = $"Installing {displayName}...";
+            installStatusType = MessageType.Info;
+            Repaint();
+        }
+
+        private void UpdateCliInstallOperation()
+        {
+            if (cliInstallOperation == null)
+                return;
+
+            if (!cliInstallOperation.IsComplete)
+            {
+                Repaint();
+                return;
+            }
+
+            CommandResult result = cliInstallOperation.Result;
+            ToolKind tool = activeCliInstallTool;
+            CliInstallPlan plan = activeCliInstallPlan;
+            string displayName = tool == ToolKind.Git ? "Git" : "GitHub CLI";
+
+            cliInstallOperation = null;
+            activeCliInstallPlan = null;
+            RefreshDependencies();
+
+            bool isAvailable = tool == ToolKind.Git ? gitAvailable : ghAvailable;
+            if (result != null && result.IsSuccess && isAvailable)
+            {
+                installStatus = $"{displayName} is installed and ready.";
+                installStatusType = MessageType.Info;
+                RefreshCurrentTab();
+            }
+            else if (result != null && result.IsSuccess && plan != null && plan.OpensSystemInstaller)
+            {
+                installStatus = $"The {displayName} system installer was opened. Complete it, then click Check again.";
+                installStatusType = MessageType.Info;
+            }
+            else if (result != null && result.IsSuccess)
+            {
+                installStatus = $"The installer completed, but Unity cannot find {displayName} yet. Click Check again or restart Unity.";
+                installStatusType = MessageType.Warning;
+            }
+            else
+            {
+                installStatus = BuildCliInstallFailureMessage(displayName, result);
+                installStatusType = MessageType.Error;
+            }
+
+            Repaint();
+        }
+
+        internal static string BuildCliInstallFailureMessage(string displayName, CommandResult result)
+        {
+            if (result == null)
+                return $"{displayName} installation failed because the installer returned no result. You can retry or use the official install guide.";
+
+            string detail = string.IsNullOrWhiteSpace(result.StdErr) ? result.StdOut : result.StdErr;
+            detail = GitUtility.RedactCredentials(detail).Trim();
+            const int maxDetailLength = 1200;
+            if (detail.Length > maxDetailLength)
+                detail = detail.Substring(0, maxDetailLength) + "…";
+
+            string exitDescription = result.ExitCode == 0 ? string.Empty : $" (exit code {result.ExitCode})";
+            if (string.IsNullOrWhiteSpace(detail))
+                detail = "The installer did not provide an error message.";
+
+            return $"{displayName} installation failed{exitDescription}: {detail} You can retry or use the official install guide.";
         }
 
         private void RefreshCurrentTab()
@@ -277,13 +477,16 @@ namespace Essentials.GitPackageManager.Editor
 
         private void DrawBranchDropdown(string url, string currentBranch, Action<string> onBranchSelected)
         {
-            FetchBranchesForUrl(url);
-
             bool hasCachedBranches = repositoryCoordinator.TryGetCachedBranches(url, out List<string> branches);
             bool isLoading = repositoryCoordinator.IsFetchingBranches(url) && !hasCachedBranches;
+            bool hasError = repositoryCoordinator.TryGetBranchError(url, out string branchError);
 
-            string buttonLabel = string.IsNullOrWhiteSpace(currentBranch) ? "Select branch..." : currentBranch;
-            string tooltip = isLoading ? "Fetching branches from remote..." : string.Empty;
+            string buttonLabel = isLoading
+                ? "Loading branches..."
+                : string.IsNullOrWhiteSpace(currentBranch) ? "Select branch..." : currentBranch;
+            string tooltip = isLoading
+                ? "Fetching branches from remote..."
+                : hasError ? $"{FirstLine(branchError)} Click to retry." : "Click to load remote branches.";
 
             using (new EditorGUI.DisabledScope(isLoading))
             {
@@ -311,6 +514,7 @@ namespace Essentials.GitPackageManager.Editor
                 repositoryCoordinator.ClearBranchCache(url);
                 FetchBranchesForUrl(url);
             }
+
         }
 
         private void MarkInstalledRepos()
@@ -335,7 +539,7 @@ namespace Essentials.GitPackageManager.Editor
             addStatus = string.Empty;
         }
 
-        private string ValidatePackageInput(string url, string packageName)
+        private string ValidatePackageInput(string url, string packageName, string branch)
         {
             if (string.IsNullOrWhiteSpace(url))
                 return "Git URL is required.";
@@ -346,6 +550,9 @@ namespace Essentials.GitPackageManager.Editor
             if (!GitUtility.IsValidPackageName(packageName))
                 return PackageNameRule;
 
+            if (!GitUtility.IsValidBranchName(branch))
+                return "Branch name is invalid. Leave it empty to use the repository default.";
+
             string path = GetPackagePath(packageName);
 
             foreach (var package in installedPackages)
@@ -355,7 +562,7 @@ namespace Essentials.GitPackageManager.Editor
             }
 
             string fullPath = Path.Combine(GitUtility.ProjectRoot, path);
-            if (Directory.Exists(fullPath))
+            if (Directory.Exists(fullPath) || File.Exists(fullPath))
                 return $"Package path already exists: {path}";
 
             return string.Empty;
@@ -375,38 +582,50 @@ namespace Essentials.GitPackageManager.Editor
         {
             addStatus = string.Empty;
             addStatusType = MessageType.None;
+            operationStatus = string.Empty;
+            operationStatusType = MessageType.None;
 
-            string validationError = ValidatePackageInput(url, packageName);
+            if (activeOperation != null)
+            {
+                SetAddStatus("Another Git operation is already running.", MessageType.Warning);
+                return;
+            }
+
+            string validationError = ValidatePackageInput(url, packageName, branch);
             if (!string.IsNullOrWhiteSpace(validationError))
             {
-                addStatus = validationError;
-                addStatusType = MessageType.Error;
+                SetAddStatus(validationError, MessageType.Error);
                 return;
             }
 
             string path = GetPackagePath(packageName);
 
-            if (ghAuthenticated && GitHubUtility.TryParseGitHubRepo(url, out string owner, out string repo))
+            if (!GitUtility.TryBuildAddSubmoduleArguments(url, path, branch, out string arguments, out string gitError))
             {
-                if (!GitHubUtility.TryRepoHasPackageJson(owner, repo, out bool hasPackageJson, out string error))
-                {
-                    addStatus = error;
-                    addStatusType = MessageType.Error;
-                    return;
-                }
-
-                if (!hasPackageJson)
-                {
-                    addStatus = "Repository does not contain a package.json at its root.";
-                    addStatusType = MessageType.Error;
-                    return;
-                }
+                SetAddStatus(gitError, MessageType.Error);
+                return;
             }
 
-            if (!GitUtility.TryAddSubmodule(url, path, branch, out string gitError))
+            addStatus = $"Adding {packageName}...";
+            addStatusType = MessageType.Info;
+            StartAsyncOperation(
+                $"Adding {packageName}...",
+                GitUtility.GitExecutable,
+                arguments,
+                result => OnAddSubmoduleComplete(result, path, packageName),
+                120000,
+                true);
+        }
+
+        private void OnAddSubmoduleComplete(CommandResult result, string path, string packageName)
+        {
+            if (result == null || !result.IsSuccess)
             {
-                addStatus = gitError;
-                addStatusType = MessageType.Error;
+                string message = GitUtility.BuildCommandError("Failed to add submodule", result);
+                if (!GitUtility.TryCleanupFailedAdd(path, out string cleanupWarning) && !string.IsNullOrWhiteSpace(cleanupWarning))
+                    message += $" Cleanup warning: {cleanupWarning}";
+                SetAddStatus(message, MessageType.Error);
+                RefreshInstalled();
                 return;
             }
 
@@ -431,8 +650,9 @@ namespace Essentials.GitPackageManager.Editor
 
             addStatus = $"Successfully added {packageName}. Refreshing assets...";
             addStatusType = MessageType.Info;
+            operationStatus = $"Successfully added {packageName}.";
+            operationStatusType = MessageType.Info;
 
-            AssetDatabase.Refresh(ImportAssetOptions.ForceUpdate);
             RefreshInstalled();
 
             if (activeAddPopup != null)
@@ -446,15 +666,24 @@ namespace Essentials.GitPackageManager.Editor
         {
             if (!GitUtility.TryRemoveSubmodule(path, out string error))
             {
-                addStatus = $"{message} Failed to remove submodule: {error}";
-                addStatusType = MessageType.Error;
+                SetAddStatus($"{message} Failed to remove submodule: {error}", MessageType.Error);
                 RefreshInstalled();
                 return;
             }
 
-            addStatus = message;
-            addStatusType = MessageType.Error;
+            string rollbackMessage = string.IsNullOrWhiteSpace(error)
+                ? $"{message} The incomplete submodule was rolled back."
+                : $"{message} The Git registration was rolled back, with a cleanup warning: {error}";
+            SetAddStatus(rollbackMessage, MessageType.Error);
             RefreshInstalled();
+        }
+
+        private void SetAddStatus(string message, MessageType type)
+        {
+            addStatus = message;
+            addStatusType = type;
+            operationStatus = message;
+            operationStatusType = type;
         }
 
         private static string GetPackagePath(string packageName)

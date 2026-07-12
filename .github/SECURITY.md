@@ -41,8 +41,10 @@ The package launches `git` and optional `gh` processes with
 - stdout and stderr are redirected and drained concurrently;
 - commands have bounded timeouts;
 - interactive credential prompts are disabled;
-- the editor never invokes a system package manager or downloaded install
-  script.
+- missing CLI tools are never installed silently: supported native installer
+  commands are shown verbatim and require explicit confirmation;
+- install assistance is limited to fixed Git and GitHub CLI package identifiers
+  and never runs a downloaded install script or user-provided command.
 
 ### Credentials
 

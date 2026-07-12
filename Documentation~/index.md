@@ -1,6 +1,6 @@
 # Git Package Manager
 
-![Git Package Manager logo](Images/Brand/logo-lockup.png)
+<img src="Images/Brand/logo-mark.png" alt="Git Package Manager logo" width="96">
 
 Git Package Manager is an editor-only Unity package for managing Git
 submodules as embedded UPM packages under `Packages/`.
@@ -20,10 +20,11 @@ submodules as embedded UPM packages under `Packages/`.
 - [User guide](user-guide.md)
 - [Troubleshooting](troubleshooting.md)
 - [Architecture and safety model](architecture.md)
-- [Brand assets](branding.md)
+- [Roadmap](roadmap.md)
+- [Project mark](branding.md)
 - [Changelog](../CHANGELOG.md)
-- [Support](../SUPPORT.md)
-- [Security policy](../SECURITY.md)
+- [Support](https://github.com/martincalander/GitSubmoduleForUnity/blob/main/.github/SUPPORT.md)
+- [Security policy](https://github.com/martincalander/GitSubmoduleForUnity/blob/main/.github/SECURITY.md)
 
 ## Product Boundaries
 

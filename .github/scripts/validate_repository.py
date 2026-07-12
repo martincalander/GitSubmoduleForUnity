@@ -63,18 +63,23 @@ def check_required_files() -> None:
         "NOTICE.md",
         "AUTHORS.md",
         "CHANGELOG.md",
-        "CONTRIBUTING.md",
-        "CODE_OF_CONDUCT.md",
-        "SECURITY.md",
-        "SUPPORT.md",
-        "ROADMAP.md",
+        ".github/CONTRIBUTING.md",
+        ".github/CODE_OF_CONDUCT.md",
+        ".github/SECURITY.md",
+        ".github/SUPPORT.md",
+        ".github/GOVERNANCE.md",
+        ".github/MAINTAINERS.md",
+        ".github/RELEASING.md",
         "Third Party Notices.md",
         "Documentation~/index.md",
         "Documentation~/installation.md",
         "Documentation~/user-guide.md",
         "Documentation~/troubleshooting.md",
         "Documentation~/architecture.md",
+        "Documentation~/roadmap.md",
         "Documentation~/branding.md",
+        "Editor/GitEditorWindowIcon.png",
+        "Editor/GitEditorWindowIconLight.png",
         ".github/workflows/ci.yml",
         ".github/workflows/release.yml",
         ".github/ISSUE_TEMPLATE/support_request.yml",
@@ -91,6 +96,10 @@ def check_required_files() -> None:
         fail("LICENSE.md must contain the MIT license and Martin Calander attribution")
     if "Proprietary License" in license_text or "All rights reserved" in license_text:
         fail("LICENSE.md still contains proprietary licensing language")
+
+    github_meta_files = sorted((ROOT / ".github").rglob("*.meta"))
+    for meta in github_meta_files:
+        fail(f"GitHub-only file must not have Unity metadata: {meta.relative_to(ROOT)}")
 
 
 def ignored_by_unity(path: Path) -> bool:

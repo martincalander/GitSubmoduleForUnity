@@ -9,6 +9,8 @@ namespace Essentials.GitPackageManager.Editor
         {
             addStatus = string.Empty;
             addStatusType = MessageType.None;
+            operationStatus = string.Empty;
+            operationStatusType = MessageType.None;
             activeAddPopup = new AddFromUrlPopup(this);
             PopupWindow.Show(buttonRect, activeAddPopup);
         }
@@ -31,6 +33,7 @@ namespace Essentials.GitPackageManager.Editor
             GUILayout.Label("Branch", Styles.InfoLabel, GUILayout.Width(80));
             addBranch = EditorGUILayout.TextField(addBranch);
             EditorGUILayout.EndHorizontal();
+            GUILayout.Label("Leave Branch empty to use the repository's default branch.", Styles.FooterLabel);
 
             EditorGUILayout.BeginHorizontal();
             GUILayout.Label("Package Name", Styles.InfoLabel, GUILayout.Width(80));
@@ -44,7 +47,7 @@ namespace Essentials.GitPackageManager.Editor
             }
 
             EditorGUILayout.Space(8);
-            string validationError = ValidatePackageInput(addUrl, addPackageName);
+            string validationError = ValidatePackageInput(addUrl, addPackageName, addBranch);
             if (!string.IsNullOrWhiteSpace(validationError))
                 EditorGUILayout.HelpBox(validationError, MessageType.Warning);
             else
@@ -55,7 +58,10 @@ namespace Essentials.GitPackageManager.Editor
 
             EditorGUILayout.Space(8);
 
-            using (new EditorGUI.DisabledScope(!gitAvailable || !string.IsNullOrWhiteSpace(validationError)))
+            using (new EditorGUI.DisabledScope(
+                       !gitAvailable ||
+                       activeOperation != null ||
+                       !string.IsNullOrWhiteSpace(validationError)))
             {
                 if (GUILayout.Button("Add", GUILayout.Height(24)))
                     TryAddSubmodule(addUrl, addBranch, addPackageName);
@@ -90,6 +96,11 @@ namespace Essentials.GitPackageManager.Editor
             public void ClosePopup()
             {
                 editorWindow?.Close();
+            }
+
+            public void RepaintPopup()
+            {
+                editorWindow?.Repaint();
             }
         }
     }

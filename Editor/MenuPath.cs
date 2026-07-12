@@ -1,5 +1,4 @@
 using UnityEditor;
-using UnityEngine;
 
 namespace Essentials.GitPackageManager.Editor
 {
@@ -9,10 +8,7 @@ namespace Essentials.GitPackageManager.Editor
         public static void ShowWindow()
         {
             var window = EditorWindow.GetWindow<GitPackageManagerWindow>("Git Package Manager");
-            var icon = AssetDatabase.LoadAssetAtPath<Texture2D>(
-                "Packages/com.essentials.gitpackagemanager/Editor/GitEditorWindowIcon.png");
-            if (icon != null)
-                window.titleContent = new GUIContent("Git Package Manager", icon);
+            window.ApplyThemeIcon();
             window.RefreshPackages();
             window.Show();
         }

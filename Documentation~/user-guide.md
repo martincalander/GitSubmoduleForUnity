@@ -5,10 +5,20 @@ Open the window from **Window > Package Management > Git Package Manager**.
 ## Dependency Status
 
 Git is required. If it is unavailable, the window blocks package mutations and
-shows an official download page plus a platform-specific install command.
+shows an official download page plus a platform-specific install command. On
+supported macOS and Windows setups, **Install Git...** shows the exact command
+and asks for permission before running it. Linux keeps the administrator prompt
+in a normal terminal.
 
 GitHub CLI is optional. Without it, **In Project** and direct URL installation
-continue to work; only the **GitHub** discovery view is unavailable.
+continue to work; only the **GitHub** discovery view is unavailable. Its install
+card uses the same explicit-permission flow when a supported native package
+manager is available.
+
+When Git is missing, package lists, tabs, and mutation controls are locked
+behind the Git dependency card. When only GitHub CLI is missing or not
+authenticated, **In Project** and **+ > Add Submodule...** remain available and
+only the **GitHub** tab is blocked.
 
 ## In Project
 
@@ -70,6 +80,10 @@ Provide:
 - a Git-compatible repository URL or local path;
 - an optional valid branch name;
 - the exact package name declared by the repository's root `package.json`.
+
+Leave the branch empty to use the repository's default branch. This manual
+workflow uses Git directly and never requires GitHub CLI, including for GitHub
+repository URLs.
 
 The destination is always `Packages/<package-name>`. If the clone succeeds but
 the package is missing or declares a different name, the operation is rolled

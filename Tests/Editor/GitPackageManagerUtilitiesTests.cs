@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
 using NUnit.Framework;
+using UnityEngine;
 
 namespace Essentials.GitPackageManager.Editor.Tests
 {
@@ -92,6 +93,8 @@ namespace Essentials.GitPackageManager.Editor.Tests
         [TestCase("--upload-pack=bad", false)]
         [TestCase("bad..branch", false)]
         [TestCase("bad branch", false)]
+        [TestCase("feature/.hidden", false)]
+        [TestCase("feature/release.lock", false)]
         public void IsValidBranchName_RejectsUnsafeRefs(string branch, bool expected)
         {
             Assert.That(GitUtility.IsValidBranchName(branch), Is.EqualTo(expected));
@@ -102,6 +105,7 @@ namespace Essentials.GitPackageManager.Editor.Tests
         [TestCase("../Local Repo", true)]
         [TestCase("--upload-pack=malicious", false)]
         [TestCase("https://github.com/owner/repo.git\n--config=bad", false)]
+        [TestCase("https://token@github.com/owner/repo.git", false)]
         public void IsValidRepositoryUrl_RejectsOptionAndControlCharacterInjection(string url, bool expected)
         {
             Assert.That(GitUtility.IsValidRepositoryUrl(url), Is.EqualTo(expected));
@@ -111,6 +115,154 @@ namespace Essentials.GitPackageManager.Editor.Tests
         public void Quote_PreservesWindowsBackslashes()
         {
             Assert.That(GitUtility.Quote(@"C:\Repos\My Package"), Is.EqualTo("\"C:\\Repos\\My Package\""));
+        }
+
+        [Test]
+        public void TryBuildAddSubmoduleArguments_LocalRepository_AllowsFileTransportForThatCommand()
+        {
+            bool success = GitUtility.TryBuildAddSubmoduleArguments(
+                "/tmp/My Local Package",
+                "Packages/com.example.localpackage",
+                string.Empty,
+                out string arguments,
+                out string error);
+
+            Assert.That(success, Is.True, error);
+            Assert.That(arguments, Does.StartWith("-c protocol.file.allow=always submodule add"));
+            Assert.That(arguments, Does.Contain("\"/tmp/My Local Package\""));
+            Assert.That(arguments, Does.Not.Contain(" -b "));
+        }
+
+        [Test]
+        public void TryBuildAddSubmoduleArguments_RemoteRepository_DoesNotEnableFileTransport()
+        {
+            bool success = GitUtility.TryBuildAddSubmoduleArguments(
+                "https://github.com/owner/repo.git",
+                "Packages/com.example.remote",
+                " main ",
+                out string arguments,
+                out string error);
+
+            Assert.That(success, Is.True, error);
+            Assert.That(arguments, Does.StartWith("submodule add -b \"main\""));
+            Assert.That(arguments, Does.Not.Contain("protocol.file.allow"));
+        }
+
+        [Test]
+        public void RedactCredentials_RemovesHttpUserInfoFromErrors()
+        {
+            string redacted = GitUtility.RedactCredentials(
+                "fatal: unable to access 'https://user:secret@example.com/repo.git/'");
+
+            Assert.That(redacted, Does.Not.Contain("user:secret"));
+            Assert.That(redacted, Does.Contain("https://***@example.com"));
+        }
+
+        [Test]
+        public void CliInstaller_MacGit_UsesSystemInstallerWhenAvailable()
+        {
+            var plan = CliInstaller.GetInstallPlan(
+                ToolKind.Git,
+                RuntimePlatform.OSXEditor,
+                command => command == "xcode-select");
+
+            Assert.That(plan.CanRunAutomatically, Is.True);
+            Assert.That(plan.OpensSystemInstaller, Is.True);
+            Assert.That(plan.FileName, Is.EqualTo("xcode-select"));
+            Assert.That(plan.Arguments, Is.EqualTo("--install"));
+            Assert.That(plan.DisplayCommand, Is.EqualTo("xcode-select --install"));
+        }
+
+        [Test]
+        public void CliInstaller_WindowsGh_UsesWingetWithExplicitAgreements()
+        {
+            var plan = CliInstaller.GetInstallPlan(
+                ToolKind.GitHubCli,
+                RuntimePlatform.WindowsEditor,
+                command => command == "winget");
+
+            Assert.That(plan.CanRunAutomatically, Is.True);
+            Assert.That(plan.FileName, Is.EqualTo("winget"));
+            Assert.That(plan.Arguments, Does.Contain("--id GitHub.cli -e"));
+            Assert.That(plan.Arguments, Does.Contain("--accept-source-agreements"));
+            Assert.That(plan.Arguments, Does.Contain("--accept-package-agreements"));
+            Assert.That(plan.DisplayCommand, Is.EqualTo($"winget {plan.Arguments}"));
+        }
+
+        [Test]
+        public void CliInstaller_Linux_LeavesPrivilegePromptInTerminal()
+        {
+            var plan = CliInstaller.GetInstallPlan(
+                ToolKind.Git,
+                RuntimePlatform.LinuxEditor,
+                command => command == "apt-get");
+
+            Assert.That(plan.CanRunAutomatically, Is.False);
+            Assert.That(plan.CanCopyCommand, Is.True);
+            Assert.That(plan.DisplayCommand, Is.EqualTo("sudo apt-get install git"));
+            Assert.That(plan.AutomaticInstallUnavailableReason, Does.Contain("terminal"));
+        }
+
+        [Test]
+        public void CliInstaller_LinuxGit_SelectsDetectedPackageManager()
+        {
+            var plan = CliInstaller.GetInstallPlan(
+                ToolKind.Git,
+                RuntimePlatform.LinuxEditor,
+                command => command == "dnf");
+
+            Assert.That(plan.DisplayCommand, Is.EqualTo("sudo dnf install git"));
+        }
+
+        [Test]
+        public void CliInstaller_MissingPackageManager_FallsBackToOfficialGuide()
+        {
+            var plan = CliInstaller.GetInstallPlan(
+                ToolKind.GitHubCli,
+                RuntimePlatform.OSXEditor,
+                _ => false);
+
+            Assert.That(plan.CanRunAutomatically, Is.False);
+            Assert.That(plan.InstallUrl, Is.EqualTo("https://cli.github.com/"));
+            Assert.That(plan.AutomaticInstallUnavailableReason, Does.Contain("Homebrew"));
+        }
+
+        [Test]
+        public void DependencyGate_GitLocksEverythingButGhOnlyLocksDiscovery()
+        {
+            Assert.That(
+                GitPackageManagerWindow.GetDependencyGateState(false, true, true, false),
+                Is.EqualTo(DependencyGateState.GitMissing));
+            Assert.That(
+                GitPackageManagerWindow.GetDependencyGateState(true, false, false, false),
+                Is.EqualTo(DependencyGateState.Ready));
+            Assert.That(
+                GitPackageManagerWindow.GetDependencyGateState(true, false, false, true),
+                Is.EqualTo(DependencyGateState.GitHubCliMissing));
+            Assert.That(
+                GitPackageManagerWindow.GetDependencyGateState(true, true, false, true),
+                Is.EqualTo(DependencyGateState.GitHubAuthenticationMissing));
+            Assert.That(
+                GitPackageManagerWindow.GetDependencyGateState(true, true, true, true),
+                Is.EqualTo(DependencyGateState.Ready));
+        }
+
+        [Test]
+        public void BuildCliInstallFailureMessage_PreservesActionableErrorAndRedactsCredentials()
+        {
+            var result = new CommandResult
+            {
+                ExitCode = 23,
+                StdOut = string.Empty,
+                StdErr = "download failed for https://user:secret@example.com/tool"
+            };
+
+            string message = GitPackageManagerWindow.BuildCliInstallFailureMessage("Git", result);
+
+            Assert.That(message, Does.Contain("exit code 23"));
+            Assert.That(message, Does.Contain("download failed"));
+            Assert.That(message, Does.Contain("retry"));
+            Assert.That(message, Does.Not.Contain("user:secret"));
         }
 
         [Test]
@@ -125,6 +277,38 @@ namespace Essentials.GitPackageManager.Editor.Tests
 
             Assert.That(repos, Has.Count.EqualTo(1));
             Assert.That(repos[0].Url, Is.EqualTo("https://github.com/owner/repo.git"));
+        }
+
+        [Test]
+        public void TryParseGitHubRepo_RejectsLookalikeHostsAndExtraPathSegments()
+        {
+            Assert.That(
+                GitHubUtility.TryParseGitHubRepo("https://notgithub.com/owner/repo.git", out _, out _),
+                Is.False);
+            Assert.That(
+                GitHubUtility.TryParseGitHubRepo("https://github.com/owner/repo/tree/main", out _, out _),
+                Is.False);
+        }
+
+        [Test]
+        public void RepositoryCoordinator_FailedBranchLoadCanBeRetried()
+        {
+            var runner = new FakeCommandRunner(spec => Fail(spec, "network unavailable"));
+            CliCommandRunner.CurrentRunner = runner;
+            var coordinator = new RepositoryCoordinator();
+            const string url = "https://github.com/owner/repo.git";
+
+            coordinator.RequestBranches(url);
+            WaitForBranchFetch(coordinator);
+
+            Assert.That(coordinator.TryGetBranchError(url, out string error), Is.True);
+            Assert.That(error, Does.Contain("network unavailable"));
+
+            coordinator.ClearBranchCache(url);
+            coordinator.RequestBranches(url);
+            WaitForBranchFetch(coordinator);
+
+            Assert.That(runner.Calls.Count, Is.EqualTo(2));
         }
 
         // ── Discovery Coordinator Tests ──
@@ -297,6 +481,19 @@ namespace Essentials.GitPackageManager.Editor.Tests
 
                 Thread.Sleep(10);
             }
+        }
+
+        private static void WaitForBranchFetch(RepositoryCoordinator coordinator)
+        {
+            var timeoutAt = DateTime.UtcNow.AddSeconds(2);
+            while (DateTime.UtcNow < timeoutAt)
+            {
+                if (coordinator.TickBranchFetch())
+                    return;
+                Thread.Sleep(10);
+            }
+
+            Assert.Fail("Timed out waiting for branch fetch.");
         }
 
         private static CommandResult Success(string stdOut)

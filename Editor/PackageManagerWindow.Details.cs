@@ -61,8 +61,11 @@ namespace Essentials.GitPackageManager.Editor
                 if (GUILayout.Button(updateLabel, GUILayout.Height(24)) &&
                     EditorUtility.DisplayDialog($"{updateLabel} Submodule", $"{updateLabel}:\n{package.Path}?", updateLabel, "Cancel"))
                 {
-                    StartAsyncOperation($"{updateLabel} submodule...", "git",
-                        $"submodule update --init --remote --merge -- {package.Path}", () => OnUpdateComplete(package), 120000);
+                    StartAsyncOperation($"{updateLabel} submodule...", GitUtility.GitExecutable,
+                        $"submodule update --init --remote --merge -- {package.Path}",
+                        result => OnUpdateComplete(package, result),
+                        120000,
+                        true);
                 }
 
                 if (GUILayout.Button("Remove", GUILayout.Height(24)) &&
@@ -165,7 +168,7 @@ namespace Essentials.GitPackageManager.Editor
                 EditorGUILayout.EndHorizontal();
                 EditorGUILayout.EndVertical();
 
-                string validationError = ValidatePackageInput(repo.Url, selectedRepoPackageName);
+                string validationError = ValidatePackageInput(repo.Url, selectedRepoPackageName, selectedRepoBranch);
                 if (!string.IsNullOrWhiteSpace(validationError))
                     EditorGUILayout.HelpBox(validationError, MessageType.Warning);
                 else
@@ -186,9 +189,21 @@ namespace Essentials.GitPackageManager.Editor
 
         private void DrawInfoRow(string label, string value)
         {
+            const float labelWidth = 100f;
+            const float detailsChromeWidth = 48f;
+            float valueWidth = Mathf.Max(
+                80f,
+                position.width - ListPaneWidth - labelWidth - detailsChromeWidth);
+            float rowHeight = Mathf.Max(
+                EditorGUIUtility.singleLineHeight,
+                Styles.InfoValue.CalcHeight(new GUIContent(value ?? string.Empty), valueWidth));
+
             EditorGUILayout.BeginHorizontal();
-            GUILayout.Label(label, Styles.InfoLabel, GUILayout.Width(100));
-            EditorGUILayout.SelectableLabel(value, Styles.InfoValue, GUILayout.Height(16));
+            GUILayout.Label(label, Styles.InfoLabel, GUILayout.Width(labelWidth), GUILayout.Height(rowHeight));
+            EditorGUILayout.SelectableLabel(
+                value ?? string.Empty,
+                Styles.InfoValue,
+                GUILayout.Height(rowHeight));
             EditorGUILayout.EndHorizontal();
         }
     }

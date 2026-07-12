@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Runtime.InteropServices;
 using System.Text.RegularExpressions;
 using UnityEngine;
 
@@ -17,8 +18,10 @@ namespace Essentials.GitPackageManager.Editor
         private static readonly Regex PackageNameRegex = new Regex(@"^com\.[a-z0-9]+(\.[a-z0-9]+)+$", RegexOptions.Compiled);
         private static readonly Regex BranchNameRegex = new Regex(@"^[A-Za-z0-9][A-Za-z0-9._/-]*$", RegexOptions.Compiled);
         private static readonly Regex SubmoduleStatusRegex = new Regex(@"^[ +-]?([0-9a-f]{7,40})\s+([^\s]+)", RegexOptions.Multiline | RegexOptions.Compiled);
+        private static readonly Regex HttpUserInfoRegex = new Regex(@"(?<scheme>https?://)[^\s/]+@", RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
         private static string cachedProjectRoot;
+        private static string gitExecutableOverride;
 
         internal static string ProjectRoot
         {
@@ -34,6 +37,8 @@ namespace Essentials.GitPackageManager.Editor
             }
         }
 
+        internal static string GitExecutable => gitExecutableOverride ?? "git";
+
         internal static bool IsValidPackageName(string packageName)
         {
             return !string.IsNullOrWhiteSpace(packageName) && PackageNameRegex.IsMatch(packageName);
@@ -45,13 +50,26 @@ namespace Essentials.GitPackageManager.Editor
                 return true;
 
             string value = branch.Trim();
-            return BranchNameRegex.IsMatch(value) &&
-                   !value.Contains("..") &&
-                   !value.Contains("@{") &&
-                   !value.Contains("//") &&
-                   !value.EndsWith(".", StringComparison.Ordinal) &&
-                   !value.EndsWith("/", StringComparison.Ordinal) &&
-                   !value.EndsWith(".lock", StringComparison.OrdinalIgnoreCase);
+            if (!BranchNameRegex.IsMatch(value) ||
+                value.Contains("..") ||
+                value.Contains("@{") ||
+                value.Contains("//") ||
+                value.EndsWith(".", StringComparison.Ordinal) ||
+                value.EndsWith("/", StringComparison.Ordinal))
+            {
+                return false;
+            }
+
+            foreach (string segment in value.Split('/'))
+            {
+                if (segment.StartsWith(".", StringComparison.Ordinal) ||
+                    segment.EndsWith(".lock", StringComparison.OrdinalIgnoreCase))
+                {
+                    return false;
+                }
+            }
+
+            return true;
         }
 
         internal static bool IsValidRepositoryUrl(string url)
@@ -60,8 +78,20 @@ namespace Essentials.GitPackageManager.Editor
                 return false;
 
             string value = url.Trim();
-            return !value.StartsWith("-", StringComparison.Ordinal) &&
-                   value.IndexOfAny(new[] { '\0', '\r', '\n', '"' }) < 0;
+            if (value.StartsWith("-", StringComparison.Ordinal) ||
+                value.IndexOfAny(new[] { '\0', '\r', '\n', '"' }) >= 0)
+            {
+                return false;
+            }
+
+            if (Uri.TryCreate(value, UriKind.Absolute, out Uri uri) &&
+                (uri.Scheme == Uri.UriSchemeHttp || uri.Scheme == Uri.UriSchemeHttps) &&
+                !string.IsNullOrEmpty(uri.UserInfo))
+            {
+                return false;
+            }
+
+            return true;
         }
 
         internal static bool IsPackagePath(string path)
@@ -120,6 +150,35 @@ namespace Essentials.GitPackageManager.Editor
 
         internal static bool IsGitAvailable(out string version, out string error)
         {
+            gitExecutableOverride = null;
+            if (RuntimeInformation.IsOSPlatform(OSPlatform.OSX) &&
+                CliCommandRunner.TryResolveCommand("git", out string resolvedGitPath) &&
+                string.Equals(resolvedGitPath, "/usr/bin/git", StringComparison.Ordinal))
+            {
+                var developerToolsResult = CliCommandRunner.Run("xcode-select", "-p", ProjectRoot, 5000);
+                if (!developerToolsResult.IsSuccess)
+                {
+                    foreach (string alternateGitPath in new[] { "/opt/homebrew/bin/git", "/usr/local/bin/git" })
+                    {
+                        if (!File.Exists(alternateGitPath))
+                            continue;
+
+                        var alternateResult = CliCommandRunner.Run(alternateGitPath, "--version", ProjectRoot, 5000);
+                        if (!alternateResult.IsSuccess)
+                            continue;
+
+                        gitExecutableOverride = alternateGitPath;
+                        version = alternateResult.StdOut.Trim();
+                        error = string.Empty;
+                        return true;
+                    }
+
+                    version = string.Empty;
+                    error = "Apple Command Line Tools are not installed. Use the Install Git button to open the macOS installer.";
+                    return false;
+                }
+            }
+
             var result = RunGit("--version", ProjectRoot);
             if (result.IsSuccess)
             {
@@ -150,7 +209,7 @@ namespace Essentials.GitPackageManager.Editor
             var statusResult = RunGit("submodule status --recursive", root);
             if (!statusResult.IsSuccess)
             {
-                error = BuildError("Failed to read submodule status", statusResult);
+                error = BuildCommandError("Failed to read submodule status", statusResult);
                 return false;
             }
 
@@ -164,7 +223,7 @@ namespace Essentials.GitPackageManager.Editor
                     return true;
                 }
 
-                error = BuildError("Failed to read .gitmodules", configResult);
+                error = BuildCommandError("Failed to read .gitmodules", configResult);
                 return false;
             }
 
@@ -210,10 +269,31 @@ namespace Essentials.GitPackageManager.Editor
 
         internal static bool TryAddSubmodule(string url, string path, string branch, out string error)
         {
+            if (!TryBuildAddSubmoduleArguments(url, path, branch, out string args, out error))
+                return false;
+
+            var result = RunGit(args, ProjectRoot, 120000);
+            if (!result.IsSuccess)
+            {
+                error = BuildCommandError("Failed to add submodule", result);
+                return false;
+            }
+
+            return true;
+        }
+
+        internal static bool TryBuildAddSubmoduleArguments(
+            string url,
+            string path,
+            string branch,
+            out string arguments,
+            out string error)
+        {
+            arguments = string.Empty;
             error = string.Empty;
             if (!IsValidRepositoryUrl(url))
             {
-                error = "Repository URL is invalid.";
+                error = "Repository URL is invalid. Embedded HTTP credentials are not supported; use Git's credential manager instead.";
                 return false;
             }
 
@@ -229,17 +309,15 @@ namespace Essentials.GitPackageManager.Editor
                 return false;
             }
 
-            string root = ProjectRoot;
-            string args = string.IsNullOrWhiteSpace(branch)
-                ? $"submodule add {Quote(url)} {Quote(path)}"
-                : $"submodule add -b {Quote(branch)} {Quote(url)} {Quote(path)}";
-
-            var result = RunGit(args, root);
-            if (!result.IsSuccess)
-            {
-                error = BuildError("Failed to add submodule", result);
-                return false;
-            }
+            string trimmedUrl = url.Trim();
+            string normalizedPath = NormalizePath(path);
+            string trimmedBranch = branch?.Trim() ?? string.Empty;
+            string prefix = IsLocalRepositoryUrl(trimmedUrl)
+                ? "-c protocol.file.allow=always "
+                : string.Empty;
+            arguments = string.IsNullOrWhiteSpace(trimmedBranch)
+                ? $"{prefix}submodule add {Quote(trimmedUrl)} {Quote(normalizedPath)}"
+                : $"{prefix}submodule add -b {Quote(trimmedBranch)} {Quote(trimmedUrl)} {Quote(normalizedPath)}";
 
             return true;
         }
@@ -258,14 +336,14 @@ namespace Essentials.GitPackageManager.Editor
             var deinitResult = RunGit($"submodule deinit -f -- {Quote(normalizedPath)}", root);
             if (!deinitResult.IsSuccess)
             {
-                error = BuildError("Failed to deinit submodule", deinitResult);
+                error = BuildCommandError("Failed to deinit submodule", deinitResult);
                 return false;
             }
 
             var rmResult = RunGit($"rm -f -- {Quote(normalizedPath)}", root);
             if (!rmResult.IsSuccess)
             {
-                error = BuildError("Failed to remove submodule from git", rmResult);
+                error = BuildCommandError("Failed to remove submodule from git", rmResult);
                 return false;
             }
 
@@ -282,7 +360,53 @@ namespace Essentials.GitPackageManager.Editor
             {
                 // `git rm` already removed the tracked package. A locked metadata
                 // directory should not turn that successful mutation into a lie.
-                Debug.LogWarning($"[Git Package Manager] Submodule was removed, but local metadata cleanup was incomplete: {ex.Message}");
+                error = $"Submodule tracking was removed, but local metadata cleanup was incomplete: {ex.Message} " +
+                        $"Delete {moduleMeta} before adding the same package again.";
+                Debug.LogWarning($"[Git Package Manager] {error}");
+            }
+
+            return true;
+        }
+
+        internal static bool TryCleanupFailedAdd(string path, out string warning)
+        {
+            warning = string.Empty;
+            string normalizedPath = NormalizePath(path);
+            if (!IsPackagePath(normalizedPath))
+            {
+                warning = "Refusing to clean a path outside Packages/com.author.package.";
+                return false;
+            }
+
+            string root = ProjectRoot;
+            var trackedResult = RunGit($"ls-files --error-unmatch -- {Quote(normalizedPath)}", root);
+            if (trackedResult.IsSuccess)
+                return TryRemoveSubmodule(normalizedPath, out warning);
+
+            try
+            {
+                string packagePath = Path.Combine(root, normalizedPath);
+                string moduleMetadataPath = Path.Combine(root, ".git/modules", normalizedPath);
+                if (Directory.Exists(packagePath))
+                    Directory.Delete(packagePath, true);
+                else if (File.Exists(packagePath))
+                    File.Delete(packagePath);
+                if (Directory.Exists(moduleMetadataPath))
+                    Directory.Delete(moduleMetadataPath, true);
+            }
+            catch (Exception ex)
+            {
+                warning = $"Local partial-clone cleanup failed: {ex.Message}";
+                return false;
+            }
+
+            string configKey = $"submodule.{normalizedPath}.path";
+            var configResult = RunGit($"config --file .gitmodules --get {Quote(configKey)}", root);
+            if (configResult.IsSuccess &&
+                string.Equals(NormalizePath(configResult.StdOut), normalizedPath, StringComparison.OrdinalIgnoreCase))
+            {
+                warning = $".gitmodules still contains {normalizedPath}. Remove that section before retrying.";
+                return false;
             }
 
             return true;
@@ -309,7 +433,7 @@ namespace Essentials.GitPackageManager.Editor
             var result = RunGit($"submodule set-branch --branch {Quote(trimmedBranch)} -- {Quote(normalizedPath)}", root);
             if (!result.IsSuccess)
             {
-                error = BuildError("Failed to change submodule branch", result);
+                error = BuildCommandError("Failed to change submodule branch", result);
                 return false;
             }
 
@@ -320,7 +444,7 @@ namespace Essentials.GitPackageManager.Editor
 
         internal static CommandResult RunGit(string arguments, string workingDir, int timeoutMs = CliCommandRunner.DefaultTimeoutMs)
         {
-            return CliCommandRunner.Run("git", arguments, workingDir, timeoutMs);
+            return CliCommandRunner.Run(GitExecutable, arguments, workingDir, timeoutMs);
         }
 
         private static Dictionary<string, string> ParseConfigList(string output)
@@ -452,10 +576,37 @@ namespace Essentials.GitPackageManager.Editor
             return $"\"{escaped}\"";
         }
 
-        private static string BuildError(string message, CommandResult result)
+        internal static string BuildCommandError(string message, CommandResult result)
         {
+            if (result == null)
+                return message;
+
             string detail = string.IsNullOrWhiteSpace(result.StdErr) ? result.StdOut : result.StdErr;
-            return string.IsNullOrWhiteSpace(detail) ? message : $"{message}: {detail}";
+            detail = RedactCredentials(detail);
+            if (string.IsNullOrWhiteSpace(detail))
+                return result.ExitCode == 0 ? message : $"{message} (exit code {result.ExitCode}).";
+
+            return $"{message}: {detail.Trim()}";
+        }
+
+        internal static string RedactCredentials(string value)
+        {
+            if (string.IsNullOrEmpty(value))
+                return value ?? string.Empty;
+
+            return HttpUserInfoRegex.Replace(value, match => $"{match.Groups["scheme"].Value}***@");
+        }
+
+        private static bool IsLocalRepositoryUrl(string value)
+        {
+            if (Uri.TryCreate(value, UriKind.Absolute, out Uri uri) && uri.IsFile)
+                return true;
+
+            return Path.IsPathRooted(value) ||
+                   value.StartsWith("./", StringComparison.Ordinal) ||
+                   value.StartsWith("../", StringComparison.Ordinal) ||
+                   value.StartsWith(@".\", StringComparison.Ordinal) ||
+                   value.StartsWith(@"..\", StringComparison.Ordinal);
         }
     }
 }

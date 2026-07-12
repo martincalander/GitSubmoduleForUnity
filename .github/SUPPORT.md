@@ -2,7 +2,7 @@
 
 ## Before Asking for Help
 
-Check the [troubleshooting guide](Documentation~/troubleshooting.md), then
+Check the [troubleshooting guide](../Documentation~/troubleshooting.md), then
 confirm these commands work in the same user account that launches Unity:
 
 ```bash

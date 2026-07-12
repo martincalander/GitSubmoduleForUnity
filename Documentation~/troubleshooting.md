@@ -13,6 +13,10 @@ Git. GUI applications can inherit a different `PATH` than interactive shells.
 The package also probes common installation directories on Windows, macOS, and
 Linux.
 
+If the installer finishes but the tool remains unavailable, click **Check
+again**. Restart Unity if the operating system updated the GUI application's
+environment only after launch.
+
 ## GitHub Discovery Is Disabled
 
 Run:
@@ -24,6 +28,9 @@ gh auth status -h github.com
 
 If authentication fails, use `gh auth login`. Ensure the active account can see
 the user or organization repositories you expect.
+
+The editor can help install `gh`, but authentication always remains a separate
+user action in a normal terminal.
 
 ## A Command Times Out or Appears to Need Credentials
 
@@ -86,6 +93,7 @@ repository and configure credentials before initializing submodules.
 
 ## Reporting a Problem
 
-Follow [SUPPORT.md](../SUPPORT.md) and include Unity version, operating system,
+Follow the [support guide](https://github.com/martincalander/GitSubmoduleForUnity/blob/main/.github/SUPPORT.md)
+and include Unity version, operating system,
 package commit, CLI versions, the exact operation, and complete sanitized error
 text.

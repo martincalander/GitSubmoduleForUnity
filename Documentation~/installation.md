@@ -15,6 +15,9 @@ git --version
 ```
 
 Official downloads are available at [git-scm.com](https://git-scm.com/downloads).
+If Git is missing, the editor window offers platform-appropriate installation
+help. On supported macOS and Windows setups it can run the displayed native
+installer command only after you explicitly approve it.
 
 ### GitHub CLI
 
@@ -28,22 +31,10 @@ gh auth status -h github.com
 ```
 
 Install it from [cli.github.com](https://cli.github.com/).
+The editor provides the same opt-in assistance when GitHub CLI is missing.
+Linux commands remain in your terminal so administrator prompts are visible.
 
-## Add the Package
-
-### As a submodule
-
-From the Unity project root:
-
-```bash
-git submodule add \
-  https://github.com/martincalander/GitSubmoduleForUnity.git \
-  Packages/com.essentials.gitpackagemanager
-```
-
-Then commit `.gitmodules` and the submodule entry.
-
-### From a UPM Git URL
+## Add the Package with UPM
 
 Use **Window > Package Manager > + > Add package from git URL…**:
 
@@ -87,25 +78,8 @@ arguments follow the platform's normal process rules. Paths are normalized for
 Git configuration while Windows backslashes are preserved when quoting local
 repository locations.
 
-## Upgrade
+## Upgrade or Remove
 
-When the package itself is installed as a submodule:
-
-```bash
-git -C Packages/com.essentials.gitpackagemanager fetch --tags
-git -C Packages/com.essentials.gitpackagemanager checkout <tag-or-commit>
-git add Packages/com.essentials.gitpackagemanager
-```
-
-Review [CHANGELOG.md](../CHANGELOG.md) before changing versions.
-
-## Remove
-
-To remove the tool itself from a project:
-
-```bash
-git submodule deinit -f -- Packages/com.essentials.gitpackagemanager
-git rm -f -- Packages/com.essentials.gitpackagemanager
-```
-
-Commit the resulting `.gitmodules` and Git index changes.
+Manage Git Package Manager itself from Unity's Package Manager. Review
+[CHANGELOG.md](../CHANGELOG.md) before changing versions. If the dependency is
+pinned to a Git tag in `Packages/manifest.json`, change that tag to upgrade.

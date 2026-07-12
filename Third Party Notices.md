@@ -2,7 +2,19 @@
 
 Git Package Manager does not bundle third-party source code, binaries, Git, or
 GitHub CLI. It integrates with software supplied separately by the user or Unity
-Editor.
+Editor. The package includes the Git logomark described below.
+
+## Bundled Artwork
+
+### Git Logomark
+
+- Files: `Editor/GitEditorWindowIcon.png` and
+  `Editor/GitEditorWindowIconLight.png`
+- Creator: Jason Long
+- Source: [Git logo downloads](https://git-scm.com/community/logos)
+- License: [Creative Commons Attribution 3.0 Unported](https://creativecommons.org/licenses/by/3.0/)
+- Use: one-color Git logomark variants recolored to Unity's built-in dark- and
+  light-skin icon values for the Editor window tab
 
 ## External Tools
 
@@ -33,6 +45,7 @@ redistributed by this repository.
 ## Trademarks
 
 Unity is a trademark of Unity Technologies. GitHub is a trademark of GitHub,
-Inc. Git is a trademark of Software Freedom Conservancy. All trademarks belong
-to their respective owners. This independent project is not endorsed by those
-organizations.
+Inc. Git and the Git logo are either registered trademarks or trademarks of
+Software Freedom Conservancy, Inc., corporate home of the Git Project. All
+trademarks belong to their respective owners. This independent project is not
+endorsed by those organizations.

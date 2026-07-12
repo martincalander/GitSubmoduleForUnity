@@ -58,9 +58,11 @@ namespace Essentials.GitPackageManager.Editor
         private MessageType installedStatusType = MessageType.None;
         private string discoverStatus = string.Empty;
         private MessageType discoverStatusType = MessageType.None;
+        private string operationStatus = string.Empty;
+        private MessageType operationStatusType = MessageType.None;
 
         private string addUrl = string.Empty;
-        private string addBranch = "main";
+        private string addBranch = string.Empty;
         private string addPackageName = string.Empty;
         private string addStatus = string.Empty;
         private MessageType addStatusType = MessageType.None;
@@ -82,6 +84,11 @@ namespace Essentials.GitPackageManager.Editor
 
         private AsyncCommandHandle activeOperation;
         private string activeOperationLabel = string.Empty;
+        private bool activeOperationPollingRegistered;
+        private bool activeOperationSuppressesAutoRefresh;
+        private AsyncCommandHandle cliInstallOperation;
+        private CliInstallPlan activeCliInstallPlan;
+        private ToolKind activeCliInstallTool;
 
         private AddFromUrlPopup activeAddPopup;
 
@@ -91,6 +98,10 @@ namespace Essentials.GitPackageManager.Editor
 
         private void OnEnable()
         {
+            // Rebuild the polling registration after reloads or window re-enable.
+            EditorApplication.update -= UpdateActiveOperation;
+            activeOperationPollingRegistered = false;
+            ApplyThemeIcon();
             minSize = new Vector2(720f, 420f);
             // Cache ProjectRoot on main thread before background work
             _ = GitUtility.ProjectRoot;
@@ -99,6 +110,24 @@ namespace Essentials.GitPackageManager.Editor
             pendingLoadResult = null;
             int generation = Interlocked.Increment(ref initialLoadGeneration);
             new Thread(() => RunInitialLoad(generation)) { IsBackground = true }.Start();
+
+            if (activeOperation != null)
+                RegisterActiveOperationPolling();
+        }
+
+        private void OnFocus()
+        {
+            ApplyThemeIcon();
+        }
+
+        internal void ApplyThemeIcon()
+        {
+            var iconFileName = EditorGUIUtility.isProSkin
+                ? "GitEditorWindowIcon.png"
+                : "GitEditorWindowIconLight.png";
+            var icon = AssetDatabase.LoadAssetAtPath<Texture2D>(
+                $"Packages/com.essentials.gitpackagemanager/Editor/{iconFileName}");
+            titleContent = new GUIContent("Git Package Manager", icon);
         }
 
         private void OnDisable()
@@ -113,6 +142,8 @@ namespace Essentials.GitPackageManager.Editor
 
             repositoryCoordinator.Dispose();
             discoveryCoordinator.Dispose();
+            if (activeOperation == null)
+                UnregisterActiveOperationPolling();
         }
 
         private void Update()
@@ -133,7 +164,8 @@ namespace Essentials.GitPackageManager.Editor
 
             UpdateDiscovery();
             UpdateBranchFetching();
-            UpdateActiveOperation();
+            UpdateCliInstallOperation();
+            activeAddPopup?.RepaintPopup();
         }
 
         private void OnGUI()

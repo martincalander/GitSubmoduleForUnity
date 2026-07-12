@@ -2,10 +2,9 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
+using System.Runtime.InteropServices;
 using System.Text;
 using System.Threading;
-using UnityEngine;
-using Debug = UnityEngine.Debug;
 
 namespace Essentials.GitPackageManager.Editor
 {
@@ -129,6 +128,11 @@ namespace Essentials.GitPackageManager.Editor
         internal static bool IsCommandAvailable(string fileName)
         {
             return ProcessCommandRunner.IsCommandAvailable(fileName);
+        }
+
+        internal static bool TryResolveCommand(string fileName, out string resolvedPath)
+        {
+            return ProcessCommandRunner.TryResolveCommand(fileName, out resolvedPath);
         }
 
         internal static void ResetRunner()
@@ -259,7 +263,6 @@ namespace Essentials.GitPackageManager.Editor
             }
             catch (Exception ex)
             {
-                Debug.LogWarning($"Command failed: {resolvedPath} {spec.Arguments}\n{ex.Message}");
                 return new CommandResult
                 {
                     ExitCode = -1,
@@ -287,7 +290,7 @@ namespace Essentials.GitPackageManager.Editor
             }
         }
 
-        private static bool TryResolveCommand(string fileName, out string resolvedPath)
+        internal static bool TryResolveCommand(string fileName, out string resolvedPath)
         {
             resolvedPath = string.Empty;
             if (string.IsNullOrWhiteSpace(fileName))
@@ -326,7 +329,7 @@ namespace Essentials.GitPackageManager.Editor
             foreach (var entry in envPath.Split(Path.PathSeparator))
             {
                 if (!string.IsNullOrWhiteSpace(entry))
-                    paths.Add(entry.Trim());
+                    paths.Add(entry.Trim().Trim('"'));
             }
 
             foreach (var extra in GetPlatformSearchPaths())
@@ -340,7 +343,7 @@ namespace Essentials.GitPackageManager.Editor
 
         private static IEnumerable<string> ExpandWithExtensions(string basePath)
         {
-            if (Application.platform != RuntimePlatform.WindowsEditor)
+            if (!RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
             {
                 yield return basePath;
                 yield break;
@@ -365,9 +368,9 @@ namespace Essentials.GitPackageManager.Editor
 
         private static IEnumerable<string> GetPlatformSearchPaths()
         {
-            return Application.platform switch
+            if (RuntimeInformation.IsOSPlatform(OSPlatform.OSX))
             {
-                RuntimePlatform.OSXEditor => new[]
+                return new[]
                 {
                     "/opt/homebrew/bin",
                     "/usr/local/bin",
@@ -375,22 +378,31 @@ namespace Essentials.GitPackageManager.Editor
                     "/bin",
                     "/usr/sbin",
                     "/sbin"
-                },
-                RuntimePlatform.LinuxEditor => new[]
+                };
+            }
+
+            if (RuntimeInformation.IsOSPlatform(OSPlatform.Linux))
+            {
+                return new[]
                 {
                     "/usr/local/bin",
                     "/usr/bin",
                     "/bin",
                     "/snap/bin"
-                },
-                RuntimePlatform.WindowsEditor => new[]
+                };
+            }
+
+            if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+            {
+                return new[]
                 {
                     @"C:\Program Files\Git\cmd",
                     @"C:\Program Files\GitHub CLI",
                     @"C:\Program Files (x86)\Git\cmd"
-                },
-                _ => Array.Empty<string>()
-            };
+                };
+            }
+
+            return Array.Empty<string>();
         }
 
         private static string BuildSearchPath()

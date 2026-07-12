@@ -7,7 +7,9 @@ namespace Essentials.GitPackageManager.Editor
 {
     internal static class GitHubUtility
     {
-        private static readonly Regex GitHubRepoRegex = new Regex(@"github\.com[:/](?<owner>[^/]+)/(?<repo>[^/]+?)(?:\.git)?(?=/|$)", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+        private static readonly Regex GitHubRepoRegex = new Regex(
+            @"^(?:(?:https?|git|ssh)://(?:[^/@]+@)?(?:www\.)?github\.com/|git@github\.com:)(?<owner>[^/\s]+)/(?<repo>[^/\s]+?)(?:\.git)?/?$",
+            RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
         internal static bool IsGhAvailable(out string version, out string error)
         {
@@ -20,7 +22,7 @@ namespace Essentials.GitPackageManager.Editor
             }
 
             version = string.Empty;
-            error = string.IsNullOrWhiteSpace(result.StdErr) ? result.StdOut : result.StdErr;
+            error = GitUtility.RedactCredentials(string.IsNullOrWhiteSpace(result.StdErr) ? result.StdOut : result.StdErr);
             return false;
         }
 
@@ -33,7 +35,7 @@ namespace Essentials.GitPackageManager.Editor
                 return true;
             }
 
-            error = string.IsNullOrWhiteSpace(result.StdErr) ? result.StdOut : result.StdErr;
+            error = GitUtility.RedactCredentials(string.IsNullOrWhiteSpace(result.StdErr) ? result.StdOut : result.StdErr);
             return false;
         }
 
@@ -126,28 +128,6 @@ namespace Essentials.GitPackageManager.Editor
             return BuildError(message, result);
         }
 
-        internal static bool TryRepoHasPackageJson(string owner, string repo, out bool hasPackageJson, out string error)
-        {
-            hasPackageJson = false;
-            error = string.Empty;
-
-            var result = CliCommandRunner.Run("gh", $"api repos/{owner}/{repo}/contents/package.json", GitUtility.ProjectRoot);
-            if (result.IsSuccess)
-            {
-                hasPackageJson = true;
-                return true;
-            }
-
-            if (IsNotFoundResult(result))
-            {
-                hasPackageJson = false;
-                return true;
-            }
-
-            error = BuildError("Failed to query package.json from GitHub", result);
-            return false;
-        }
-
         internal static bool TryParseGitHubRepo(string url, out string owner, out string repo)
         {
             owner = string.Empty;
@@ -229,6 +209,7 @@ namespace Essentials.GitPackageManager.Editor
         private static string BuildError(string message, CommandResult result)
         {
             string detail = string.IsNullOrWhiteSpace(result.StdErr) ? result.StdOut : result.StdErr;
+            detail = GitUtility.RedactCredentials(detail);
             return string.IsNullOrWhiteSpace(detail) ? message : $"{message}: {detail}";
         }
 

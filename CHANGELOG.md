@@ -13,6 +13,18 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   UPM manual.
 - Repository sanity checks and tagged-release packaging workflows.
 - Open-source MIT licensing with attribution to Martin Calander.
+- Explicit-consent Git and GitHub CLI installation assistance on supported
+  macOS and Windows setups, with safe terminal guidance elsewhere.
+- Dependency-gate, installer-failure, local-repository, and branch-fetch
+  regression coverage.
+
+### Changed
+
+- Git now gates all package operations, while GitHub CLI gates only authenticated
+  repository discovery; manual additions require Git only.
+- Manual additions run asynchronously, accept an empty default-branch field,
+  and clean safe partial-clone artifacts after failures.
+- Remote branch lists load only when opened and failed requests can be retried.
 
 ## [1.0.0] - 2026-07-12
 
