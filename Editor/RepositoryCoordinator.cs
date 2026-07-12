@@ -30,7 +30,10 @@ namespace Essentials.GitPackageManager.Editor
             }
 
             branchFetchUrl = url;
-            branchFetchHandle = CliCommandRunner.RunAsync("git", $"ls-remote --heads {url}", GitUtility.ProjectRoot);
+            if (!GitUtility.IsValidRepositoryUrl(url))
+                return;
+
+            branchFetchHandle = CliCommandRunner.RunAsync("git", $"ls-remote --heads {GitUtility.Quote(url)}", GitUtility.ProjectRoot);
         }
 
         internal bool IsFetchingBranches(string url)

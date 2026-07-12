@@ -5,20 +5,18 @@ namespace Essentials.GitPackageManager.Editor
 {
     public partial class GitPackageManagerWindow
     {
-        private void ShowAddFromUrlPopup(Rect buttonRect, PackageSourceType sourceType)
+        private void ShowAddFromUrlPopup(Rect buttonRect)
         {
             addStatus = string.Empty;
             addStatusType = MessageType.None;
-            addSourceType = sourceType;
             activeAddPopup = new AddFromUrlPopup(this);
             PopupWindow.Show(buttonRect, activeAddPopup);
         }
 
         private void DrawAddByUrl()
         {
-            string title = addSourceType == PackageSourceType.Subtree ? "Add Subtree" : "Add Submodule";
             EditorGUILayout.Space(8);
-            GUILayout.Label(title, Styles.TitleLabel);
+            GUILayout.Label("Add Submodule", Styles.TitleLabel);
             EditorGUILayout.Space(8);
 
             EditorGUI.BeginChangeCheck();
@@ -60,7 +58,7 @@ namespace Essentials.GitPackageManager.Editor
             using (new EditorGUI.DisabledScope(!gitAvailable || !string.IsNullOrWhiteSpace(validationError)))
             {
                 if (GUILayout.Button("Add", GUILayout.Height(24)))
-                    TryAddPackage(addUrl, addBranch, addPackageName, addSourceType);
+                    TryAddSubmodule(addUrl, addBranch, addPackageName);
             }
         }
 

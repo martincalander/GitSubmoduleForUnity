@@ -1,128 +1,159 @@
-# Submodule Helper for Unity
+<p align="center">
+  <img src="Documentation~/Images/Brand/git-package-manager-hero.png" alt="Git Package Manager — Git submodules, made native to Unity" width="100%">
+</p>
 
-A Unity Editor tool that provides a visual interface for managing Git submodules as Unity packages. Designed to mirror the Unity Package Manager experience, making it easy to discover, install, update, and remove packages from your GitHub repositories.
+<p align="center">
+  <a href="https://github.com/martincalander/GitSubmoduleForUnity/actions/workflows/ci.yml"><img alt="Sanity Checks" src="https://github.com/martincalander/GitSubmoduleForUnity/actions/workflows/ci.yml/badge.svg"></a>
+  <a href="https://github.com/martincalander/GitSubmoduleForUnity/releases"><img alt="Package version" src="https://img.shields.io/github/package-json/v/martincalander/GitSubmoduleForUnity?filename=package.json&label=package"></a>
+  <img alt="Unity 2021.3 or newer" src="https://img.shields.io/badge/Unity-2021.3%2B-111827?logo=unity&logoColor=white">
+  <img alt="Platforms: Windows, macOS, Linux" src="https://img.shields.io/badge/Editor-Windows%20%7C%20macOS%20%7C%20Linux-334155">
+  <a href="LICENSE.md"><img alt="MIT License" src="https://img.shields.io/badge/License-MIT-F05A3C.svg"></a>
+</p>
 
-## Features
+<p align="center">
+  A focused Unity Editor tool for discovering and managing Git repositories as
+  UPM packages—always as submodules, always under <code>Packages/</code>.
+</p>
 
-- **Package Manager-style UI** - Familiar interface matching Unity's Package Manager design
-- **In Project View** - See all installed submodule packages at a glance
-- **GitHub Discovery** - Browse your GitHub repositories and install them as packages
-- **Async Loading** - Non-blocking repository fetching with progress indicators
-- **Package Validation** - Automatically checks for `package.json` in repositories
-- **Sorting & Filtering** - Filter by valid packages, public/private repos, and sort by name or recent activity
-- **Branch Management** - Switch branches and update submodules with ease
-- **Private Repo Support** - Works with private repositories (collaborators need access)
-- **Fresh Clone Recovery** - Automatically initializes missing submodules on editor load
+---
+
+## Why Git Package Manager?
+
+Unity understands embedded packages, and Git understands submodules. The rough
+edge is everything between them: remembering commands, validating package
+layout, seeing what is installed, changing tracked branches safely, and finding
+package repositories across a large GitHub account.
+
+Git Package Manager brings that workflow into a familiar, Package
+Manager-inspired editor window without hiding what Git is doing.
+
+| | Capability | What it means |
+| --- | --- | --- |
+| 📦 | **UPM-first** | Managed repositories live at `Packages/com.author.package`. |
+| 🌿 | **Real submodules** | Exact commits remain visible and reproducible in normal Git tooling. |
+| 🔎 | **Scalable discovery** | Browse users and organizations 50 repositories at a time with server-side search. |
+| 🛡️ | **Explicit operations** | No background initialization, implicit updates, credential storage, or system installers. |
+| 🖥️ | **Cross-platform editor tool** | Designed for Unity on Windows, macOS, and Linux. |
+| ⚡ | **Responsive by default** | CLI work runs off the editor thread; validation and branch loading are lazy. |
 
 ## Requirements
 
-- **Unity 2021.3** or later
-- **Git** - Must be installed and accessible from command line
-- **GitHub CLI** (optional) - Required for the GitHub discovery feature
-  - Install: `brew install gh` (macOS) or `winget install GitHub.cli` (Windows)
-  - Authenticate: `gh auth login`
+| Dependency | Status | Purpose |
+| --- | --- | --- |
+| Unity 2021.3+ | Required | Editor host and UPM package support |
+| [Git CLI](https://git-scm.com/downloads) | Required | Every submodule operation |
+| [GitHub CLI](https://cli.github.com/) | Optional, recommended | Authenticated GitHub discovery and package validation |
 
-## Installation
+The tool detects missing CLIs and shows an official download link plus a
+platform-appropriate command. It does **not** run Homebrew, `apt`, `winget`,
+`sudo`, or downloaded scripts from inside Unity.
 
-### Via Git Submodule (Recommended)
+## Install
+
+### Git submodule (recommended)
+
+Run this from the Unity project root:
 
 ```bash
-cd YourUnityProject
-git submodule add https://github.com/EssentialsForUnity/com.essentials.gitpackagemanager.git Packages/com.essentials.gitpackagemanager
+git submodule add \
+  https://github.com/martincalander/GitSubmoduleForUnity.git \
+  Packages/com.essentials.gitpackagemanager
 ```
 
-### Via Git URL in Package Manager
+Commit both `.gitmodules` and the new submodule entry.
 
-1. Open **Window > Package Manager**
-2. Click **+** > **Add package from git URL...**
-3. Enter: `https://github.com/EssentialsForUnity/com.essentials.gitpackagemanager.git`
+### Unity Package Manager Git URL
 
-## Usage
+In **Window > Package Manager**, choose **Add package from git URL…** and use:
 
-### Opening the Window
-
-Navigate to **Window > Package Management > Git Submodules Manager** in the Unity menu.
-
-### In Project Tab
-
-View all currently installed git submodule packages:
-- See package name, branch, and path
-- Update packages to fetch latest changes
-- Remove packages when no longer needed
-- Change tracking branch
-
-### GitHub Tab
-
-Discover and install packages from your GitHub repositories:
-- Lists all repositories from your authenticated GitHub account
-- Grey items indicate repositories without `package.json` (not valid Unity packages)
-- Filter to show only valid packages, public repos, or private repos
-- Sort by name or recently updated
-- One-click installation as a submodule package
-
-### Adding Packages
-
-**From GitHub Tab:**
-1. Select a repository from the list
-2. Adjust the package name and branch if needed
-3. Click **Add Package**
-
-**From Git URL:**
-1. Click the **+** button in the toolbar
-2. Select **Add package from git URL...**
-3. Enter the repository URL, branch, and package name
-4. Click **Add**
-
-## How It Works
-
-This tool uses Git submodules to manage Unity packages. When you add a package:
-
-1. The repository is added as a submodule under `Packages/{package-name}`
-2. The `package.json` is validated to ensure it's a valid Unity package
-3. Unity automatically recognizes and imports the package
-
-Benefits of using submodules:
-- **Version Control** - Track exact commits across your team
-- **Easy Updates** - Pull latest changes or switch branches
-- **No Registry Required** - Works with any Git repository
-- **Private Repos** - Full support for private repositories
-
-## Troubleshooting
-
-### Git not found
-The tool will prompt you to install Git if it's not detected. On macOS, you can install via Homebrew:
-```bash
-brew install git
+```text
+https://github.com/martincalander/GitSubmoduleForUnity.git
 ```
 
-### GitHub CLI not authenticated
-Run the following command and follow the prompts:
-```bash
-gh auth login
+This installs the tool, but a Git-submodule install is more consistent when the
+project already manages its own packages as submodules.
+
+## Quick Start
+
+1. Confirm `git --version` works.
+2. Optionally install `gh` and run `gh auth login`.
+3. Open **Window > Package Management > Git Package Manager**.
+4. Use **In Project** to inspect, initialize, update, retarget, or remove an
+   installed package.
+5. Use **GitHub** to search repositories visible to your account and add a valid
+   root UPM package.
+6. Use the **+** menu to add any Git repository directly by URL.
+
+```mermaid
+flowchart LR
+    A["GitHub or Git URL"] --> B["Validate URL, branch, and package path"]
+    B --> C["git submodule add"]
+    C --> D["Verify root package.json"]
+    D --> E["Unity imports Packages/com.author.package"]
+    D -->|"invalid"| F["Rollback submodule"]
 ```
 
-### Git or GitHub CLI commands hang or fail
-Submodule Helper now runs CLI commands with streamed stdout/stderr capture and a timeout. If a command still fails, copy the reported error text and verify that:
+## Built for Large Accounts
 
-- `git --version` works from a terminal launched in the project environment
-- `gh auth status -h github.com` succeeds for the Unity user session
-- your network or credential helper is not blocking `git submodule` or `gh api`
+Discovery deliberately avoids downloading an entire user or organization:
 
-### Repository doesn't appear as valid package
-Ensure your repository has a valid `package.json` in the root directory with the required Unity package fields.
+- GitHub returns 50 repositories per page;
+- search is debounced and executed server-side;
+- user and organization scopes are explicit;
+- root `package.json` validation runs only for the selected repository;
+- branch lists load only when a branch control is opened;
+- a newer search, owner, or page request supersedes stale in-flight work.
 
-### Package folders are empty on a fresh clone
-Submodule Helper now auto-runs `git submodule update --init --recursive` when it detects uninitialized submodules.
+That keeps the window predictable whether an account has ten repositories or
+several hundred.
 
-If your environment blocks that command (for example no network or missing access), run it manually in your project root:
-```bash
-git submodule update --init --recursive
-```
+## Reliability and Security
 
-## License
+- `UseShellExecute = false`; input is not evaluated by a shell.
+- Package names, branch names, URLs, and managed paths are validated.
+- Mutating paths are restricted to direct `Packages/com.author.package`
+  locations.
+- Git credential prompts are disabled in editor processes so failures return
+  instead of hanging Unity.
+- Standard output and error are drained concurrently with bounded timeouts.
+- Failed post-clone package validation rolls back the new submodule.
+- Credentials remain owned by Git and GitHub CLI; the package stores none.
 
-Created by Essentials. See [LICENSE.md](LICENSE.md) for details.
+Read the [security policy](SECURITY.md) for reporting and operational details.
+
+## Documentation
+
+- [UPM documentation home](Documentation~/index.md)
+- [Installation and prerequisites](Documentation~/installation.md)
+- [User guide](Documentation~/user-guide.md)
+- [Troubleshooting](Documentation~/troubleshooting.md)
+- [Architecture and safety model](Documentation~/architecture.md)
+- [Brand assets](Documentation~/branding.md)
+- [Contributing guide](CONTRIBUTING.md)
+- [Roadmap](ROADMAP.md)
+- [Support](SUPPORT.md)
+
+## Compatibility
+
+The package targets Unity 2021.3 or newer and contains editor-only assemblies.
+The process runner includes search paths for conventional Git and GitHub CLI
+installations on Windows, macOS, and Linux. See the
+[compatibility notes](Documentation~/installation.md#compatibility) before
+reporting a platform issue.
 
 ## Contributing
 
-Contributions are welcome! Please read [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
+Bug reports, focused improvements, documentation fixes, and cross-platform test
+results are welcome. Start with [CONTRIBUTING.md](CONTRIBUTING.md) and follow the
+[Code of Conduct](CODE_OF_CONDUCT.md).
+
+## License and Attribution
+
+Git Package Manager is open source under the [MIT License](LICENSE.md).
+
+Created by **Martin Calander**. The MIT copyright and permission notice must be
+kept with copies or substantial portions of the software. See
+[NOTICE.md](NOTICE.md) and [AUTHORS.md](AUTHORS.md).
+
+Unity and GitHub are trademarks of their respective owners. This independent
+project is not affiliated with or endorsed by Unity Technologies or GitHub, Inc.

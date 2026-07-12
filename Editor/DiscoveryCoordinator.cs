@@ -5,14 +5,23 @@ namespace Essentials.GitPackageManager.Editor
 {
     internal sealed class DiscoveryCoordinator
     {
-        private const int PageSize = 30;
+        private const int PageSize = 50;
         private const double SearchDebounceSeconds = 0.3;
+
+        private sealed class PageRequest
+        {
+            public string Arguments;
+            public bool IsSearch;
+            public int Page;
+        }
 
         private string cachedUsername = string.Empty;
         private AsyncCommandHandle usernameHandle;
         private AsyncCommandHandle orgsHandle;
 
         private AsyncCommandHandle pageHandle;
+        private PageRequest activePageRequest;
+        private PageRequest pendingPageRequest;
         private int currentPage = 1;
         private string currentSearchQuery = string.Empty;
         private bool isSearchMode;
@@ -27,6 +36,7 @@ namespace Essentials.GitPackageManager.Editor
         internal bool IsLoading => pageHandle != null && !pageHandle.IsComplete;
         internal int CurrentPage => currentPage;
         internal string StatusMessage => pageHandle?.StatusMessage ?? string.Empty;
+        internal string ErrorMessage { get; private set; } = string.Empty;
 
         internal List<GitHubRepo> DisplayedRepos { get; private set; } = new();
         internal bool HasResults => DisplayedRepos.Count > 0;
@@ -101,13 +111,14 @@ namespace Essentials.GitPackageManager.Editor
 
         internal void CheckPackageJson(GitHubRepo repo)
         {
-            if (repo == null || repo.PackageJsonChecked)
+            if (repo == null || repo.PackageJsonChecked || !string.IsNullOrEmpty(repo.PackageJsonError))
                 return;
 
             if (packageJsonTarget == repo && packageJsonHandle != null)
                 return;
 
             packageJsonTarget = repo;
+            repo.PackageJsonError = string.Empty;
             packageJsonHandle = CliCommandRunner.RunAsync("gh",
                 $"api repos/{repo.Owner}/{repo.Name}/contents/package.json",
                 GitUtility.ProjectRoot);
@@ -183,23 +194,38 @@ namespace Essentials.GitPackageManager.Editor
             {
                 var result = pageHandle.Result;
                 pageHandle = null;
+                var completedRequest = activePageRequest;
+                activePageRequest = null;
+
+                // A search/owner/page change superseded this response. Start the
+                // newest request without flashing stale results in the window.
+                if (pendingPageRequest != null)
+                {
+                    var nextRequest = pendingPageRequest;
+                    pendingPageRequest = null;
+                    StartPageRequest(nextRequest);
+                    return true;
+                }
 
                 if (result.IsSuccess)
                 {
                     string json = result.StdOut.Trim();
                     List<GitHubRepo> repos;
 
-                    if (isSearchMode)
+                    if (completedRequest != null && completedRequest.IsSearch)
                     {
                         repos = GitHubUtility.ParseSearchJson(json);
+                        int totalCount = GitHubUtility.ParseSearchTotalCount(json);
+                        HasNextPage = completedRequest.Page * PageSize < totalCount;
                     }
                     else
                     {
                         repos = GitHubUtility.ParseRepoJson(json);
+                        HasNextPage = repos != null && repos.Count == PageSize;
                     }
 
                     DisplayedRepos = repos ?? new List<GitHubRepo>();
-                    HasNextPage = DisplayedRepos.Count == PageSize;
+                    ErrorMessage = string.Empty;
                     PageChanged = true;
                     packageJsonHandle = null;
                     packageJsonTarget = null;
@@ -208,6 +234,7 @@ namespace Essentials.GitPackageManager.Editor
                 {
                     DisplayedRepos = new List<GitHubRepo>();
                     HasNextPage = false;
+                    ErrorMessage = GitHubUtility.BuildRepoListError("Failed to load GitHub repositories", result);
                     PageChanged = true;
                 }
 
@@ -233,7 +260,10 @@ namespace Essentials.GitPackageManager.Editor
                         target.HasPackageJson = false;
                         target.PackageJsonChecked = true;
                     }
-                    // else: transient error — leave unchecked so it retries on next select
+                    else
+                    {
+                        target.PackageJsonError = GitHubUtility.BuildRepoListError("Could not validate package.json", result);
+                    }
                 }
 
                 changed = true;
@@ -266,12 +296,34 @@ namespace Essentials.GitPackageManager.Editor
                 args = $"api orgs/{owner}/repos?sort=updated&direction=desc&per_page={PageSize}&page={currentPage}";
             }
 
-            pageHandle = CliCommandRunner.RunAsync("gh", args, GitUtility.ProjectRoot);
+            var request = new PageRequest
+            {
+                Arguments = args,
+                IsSearch = isSearchMode,
+                Page = currentPage
+            };
+
+            if (pageHandle != null && !pageHandle.IsComplete)
+            {
+                pendingPageRequest = request;
+                return;
+            }
+
+            StartPageRequest(request);
+        }
+
+        private void StartPageRequest(PageRequest request)
+        {
+            ErrorMessage = string.Empty;
+            activePageRequest = request;
+            pageHandle = CliCommandRunner.RunAsync("gh", request.Arguments, GitUtility.ProjectRoot);
         }
 
         internal void Dispose()
         {
             pageHandle = null;
+            activePageRequest = null;
+            pendingPageRequest = null;
             usernameHandle = null;
             orgsHandle = null;
             packageJsonHandle = null;
@@ -281,6 +333,7 @@ namespace Essentials.GitPackageManager.Editor
             isSearchMode = false;
             currentSearchQuery = string.Empty;
             pendingSearchQuery = null;
+            ErrorMessage = string.Empty;
         }
     }
 }

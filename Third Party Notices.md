@@ -1,36 +1,38 @@
-# Third Party Notices
+# Third-Party Notices
 
-This package includes or depends on the following third-party software:
+Git Package Manager does not bundle third-party source code, binaries, Git, or
+GitHub CLI. It integrates with software supplied separately by the user or Unity
+Editor.
 
-## Runtime Dependencies
+## External Tools
 
 ### Git
 
-- **Website**: https://git-scm.com/
-- **License**: GNU General Public License v2
-- **Usage**: Required for all submodule operations (add, remove, update, branch management)
+- Website: [git-scm.com](https://git-scm.com/)
+- License: GNU General Public License version 2
+- Role: required external executable for submodule and remote operations
 
-### GitHub CLI (gh)
+### GitHub CLI
 
-- **Website**: https://cli.github.com/
-- **License**: MIT License
-- **Usage**: Optional. Used for GitHub repository discovery and package.json validation via GitHub API
+- Website: [cli.github.com](https://cli.github.com/)
+- License: MIT License
+- Role: optional external executable for authenticated GitHub discovery and API
+  requests
 
-## Unity Dependencies
+## Unity Module
 
-### Unity IMGUI Module
+### Unity IMGUI
 
-- **Package**: com.unity.modules.imgui
-- **License**: Unity Companion License
-- **Usage**: Required for Editor UI rendering
+- Package: `com.unity.modules.imgui`
+- License: Unity Companion License
+- Role: editor window rendering
 
-## Notes
+The Unity module is provided by the Unity Editor installation and is not
+redistributed by this repository.
 
-- Git and GitHub CLI are external tools that must be installed separately by the user
-- This package does not bundle or redistribute these tools
-- This package only provides a Unity Editor interface to interact with these tools via command-line
-- No third-party code is directly included in this package
+## Trademarks
 
-## Acknowledgments
-
-This tool was inspired by Unity's Package Manager UI design and aims to provide a familiar experience for Unity developers managing git-based packages.
+Unity is a trademark of Unity Technologies. GitHub is a trademark of GitHub,
+Inc. Git is a trademark of Software Freedom Conservancy. All trademarks belong
+to their respective owners. This independent project is not endorsed by those
+organizations.

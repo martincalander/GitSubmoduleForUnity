@@ -8,11 +8,11 @@ namespace Essentials.GitPackageManager.Editor
         [MenuItem("Window/Package Management/Git Package Manager")]
         public static void ShowWindow()
         {
-            var window = EditorWindow.GetWindow<GitPackageManagerWindow>("Submodule Manager");
+            var window = EditorWindow.GetWindow<GitPackageManagerWindow>("Git Package Manager");
             var icon = AssetDatabase.LoadAssetAtPath<Texture2D>(
                 "Packages/com.essentials.gitpackagemanager/Editor/GitEditorWindowIcon.png");
             if (icon != null)
-                window.titleContent = new GUIContent("Submodule Manager", icon);
+                window.titleContent = new GUIContent("Git Package Manager", icon);
             window.RefreshPackages();
             window.Show();
         }

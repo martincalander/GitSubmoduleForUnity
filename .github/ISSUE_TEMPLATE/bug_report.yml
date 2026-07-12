@@ -1,0 +1,69 @@
+name: Bug report
+description: Report a reproducible defect in Git Package Manager
+title: "[Bug]: "
+labels: [bug, needs-triage]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for reporting a problem. Remove credentials and private repository details before submitting.
+  - type: input
+    id: unity
+    attributes:
+      label: Unity version
+      placeholder: 2022.3.62f3
+    validations:
+      required: true
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system
+      options: [Windows, macOS, Linux]
+    validations:
+      required: true
+  - type: input
+    id: package
+    attributes:
+      label: Package version or commit
+      placeholder: v1.0.0 or commit SHA
+    validations:
+      required: true
+  - type: input
+    id: cli
+    attributes:
+      label: Git and GitHub CLI versions
+      description: Include Git; include gh when discovery is involved.
+      placeholder: git 2.50.1; gh 2.96.0
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Reproduction steps
+      placeholder: Provide the smallest deterministic sequence that reproduces the issue.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior and sanitized logs
+      description: Never include tokens, keys, credentials, or undisclosable private URLs.
+    validations:
+      required: true
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checklist
+      options:
+        - label: I searched existing issues and discussions.
+          required: true
+        - label: I removed credentials and sensitive repository information.
+          required: true
+        - label: This is not a security vulnerability.
+          required: true

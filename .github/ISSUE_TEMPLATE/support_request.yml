@@ -1,0 +1,52 @@
+name: Support request
+description: Ask for help with setup, authentication, or package workflows
+title: "[Support]: "
+labels: [support, needs-triage]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Check the troubleshooting guide first. Remove credentials and private repository details before submitting.
+  - type: input
+    id: unity
+    attributes:
+      label: Unity version
+      placeholder: 2022.3.62f3
+    validations:
+      required: true
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system
+      options: [Windows, macOS, Linux]
+    validations:
+      required: true
+  - type: input
+    id: versions
+    attributes:
+      label: Package, Git, and GitHub CLI versions
+      placeholder: Package v1.0.0; git 2.50.1; gh 2.96.0
+    validations:
+      required: true
+  - type: textarea
+    id: goal
+    attributes:
+      label: What are you trying to do?
+    validations:
+      required: true
+  - type: textarea
+    id: tried
+    attributes:
+      label: What have you tried?
+      description: Include complete sanitized errors and relevant troubleshooting steps.
+    validations:
+      required: true
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checklist
+      options:
+        - label: I read the troubleshooting guide.
+          required: true
+        - label: I removed credentials and sensitive repository information.
+          required: true

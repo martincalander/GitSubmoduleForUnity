@@ -34,7 +34,7 @@ namespace Essentials.GitPackageManager.Editor
             EditorGUILayout.EndHorizontal();
 
             Rect lineRect = GUILayoutUtility.GetRect(1, 1, GUILayout.ExpandWidth(true));
-            EditorGUI.DrawRect(lineRect, new Color(0.15f, 0.15f, 0.15f));
+            EditorGUI.DrawRect(lineRect, Styles.SeparatorColor);
 
             listScroll = EditorGUILayout.BeginScrollView(listScroll, GUILayout.ExpandHeight(true));
             if (currentTab == Tab.Installed)
@@ -72,20 +72,18 @@ namespace Essentials.GitPackageManager.Editor
                 }
 
                 bool isSelected = i == selectedInstalledIndex;
-                string badge = package.SourceType == PackageSourceType.Subtree ? "[ST]" : "[SM]";
+                string badge = package.IsInitialized ? "git" : "!";
                 string versionText = !string.IsNullOrWhiteSpace(package.Branch) ? package.Branch : "main";
                 Rect itemRect = GUILayoutUtility.GetRect(GUIContent.none, EditorStyles.label, GUILayout.ExpandWidth(true), GUILayout.Height(24));
 
                 if (Event.current.type == EventType.Repaint && isSelected)
-                    EditorGUI.DrawRect(itemRect, new Color(0.17f, 0.36f, 0.53f, 1f));
+                    EditorGUI.DrawRect(itemRect, Styles.SelectionColor);
 
                 Rect badgeRect = new Rect(itemRect.x + 4, itemRect.y + 4, 28, itemRect.height - 8);
                 GUI.Label(badgeRect, badge, Styles.SubtitleLabel);
 
                 Rect nameRect = new Rect(itemRect.x + 34, itemRect.y + 4, itemRect.width - 96, itemRect.height - 8);
-                var nameStyle = new GUIStyle(EditorStyles.label);
-                if (isSelected)
-                    nameStyle.normal.textColor = Color.white;
+                GUIStyle nameStyle = isSelected ? Styles.SelectedListItemLabel : Styles.ListItemLabel;
                 GUI.Label(nameRect, displayName, nameStyle);
 
                 Rect versionRect = new Rect(itemRect.xMax - 60, itemRect.y + 4, 52, itemRect.height - 8);
@@ -117,6 +115,12 @@ namespace Essentials.GitPackageManager.Editor
                 return;
             }
 
+            if (!string.IsNullOrWhiteSpace(discoveryCoordinator.ErrorMessage))
+            {
+                EditorGUILayout.HelpBox(discoveryCoordinator.ErrorMessage, MessageType.Error);
+                return;
+            }
+
             var availableRepos = discoveryCoordinator.DisplayedRepos;
             if (availableRepos == null || availableRepos.Count == 0)
             {
@@ -141,12 +145,10 @@ namespace Essentials.GitPackageManager.Editor
 
                 Rect itemRect = GUILayoutUtility.GetRect(GUIContent.none, EditorStyles.label, GUILayout.ExpandWidth(true), GUILayout.Height(36));
                 if (Event.current.type == EventType.Repaint && isSelected)
-                    EditorGUI.DrawRect(itemRect, new Color(0.17f, 0.36f, 0.53f, 1f));
+                    EditorGUI.DrawRect(itemRect, Styles.SelectionColor);
 
                 Rect nameRect = new Rect(itemRect.x + 8, itemRect.y + 2, itemRect.width - 16, 16);
-                var nameStyle = new GUIStyle(EditorStyles.label);
-                if (isSelected)
-                    nameStyle.normal.textColor = Color.white;
+                GUIStyle nameStyle = isSelected ? Styles.SelectedListItemLabel : Styles.ListItemLabel;
                 GUI.Label(nameRect, repo.Name, nameStyle);
 
                 Rect statusRect = new Rect(itemRect.x + 8, itemRect.y + 18, itemRect.width - 16, 14);
@@ -170,7 +172,6 @@ namespace Essentials.GitPackageManager.Editor
         {
             return currentFilter switch
             {
-                FilterOption.ValidPackagesOnly => true,
                 FilterOption.PublicOnly => !repo.IsPrivate,
                 FilterOption.PrivateOnly => repo.IsPrivate,
                 _ => true
@@ -180,7 +181,7 @@ namespace Essentials.GitPackageManager.Editor
         private void DrawListFooter()
         {
             Rect footerRect = GUILayoutUtility.GetRect(1, 1, GUILayout.ExpandWidth(true));
-            EditorGUI.DrawRect(footerRect, new Color(0.15f, 0.15f, 0.15f));
+            EditorGUI.DrawRect(footerRect, Styles.SeparatorColor);
 
             EditorGUILayout.BeginHorizontal();
 

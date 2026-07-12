@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 280" role="img" aria-labelledby="title description">
+  <title id="title">Git Package Manager</title>
+  <desc id="description">Git Package Manager logo and wordmark.</desc>
+  <rect width="1200" height="280" rx="36" fill="#FFFFFF"/>
+  <g transform="translate(36 24) scale(.45)">
+    <rect width="512" height="512" rx="112" fill="#0B1220"/>
+    <path d="M92 154 256 68l164 86v204l-164 86-164-86Z" fill="none" stroke="#E5E7EB" stroke-width="30" stroke-linejoin="round"/>
+    <path d="m92 154 164 90 164-90M256 244v200" fill="none" stroke="#E5E7EB" stroke-width="30" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M256 112v176m0 0 98 72" fill="none" stroke="#F05A3C" stroke-width="34" stroke-linecap="round" stroke-linejoin="round"/>
+    <circle cx="256" cy="112" r="31" fill="#F05A3C"/>
+    <circle cx="256" cy="288" r="31" fill="#F05A3C"/>
+    <circle cx="354" cy="360" r="31" fill="#F05A3C"/>
+  </g>
+  <text x="302" y="118" fill="#0B1220" font-family="Inter, Avenir Next, Helvetica Neue, Arial, sans-serif" font-size="64" font-weight="750" letter-spacing="-2">Git Package Manager</text>
+  <text x="306" y="174" fill="#475569" font-family="Inter, Avenir Next, Helvetica Neue, Arial, sans-serif" font-size="27" font-weight="500">Git submodules, made native to Unity.</text>
+  <rect x="306" y="202" width="198" height="38" rx="19" fill="#FFF0EB"/>
+  <text x="330" y="228" fill="#C83D22" font-family="Inter, Avenir Next, Helvetica Neue, Arial, sans-serif" font-size="18" font-weight="700" letter-spacing="1.2">UNITY EDITOR TOOL</text>
+</svg>

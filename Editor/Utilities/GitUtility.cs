@@ -15,6 +15,7 @@ namespace Essentials.GitPackageManager.Editor
     internal static class GitUtility
     {
         private static readonly Regex PackageNameRegex = new Regex(@"^com\.[a-z0-9]+(\.[a-z0-9]+)+$", RegexOptions.Compiled);
+        private static readonly Regex BranchNameRegex = new Regex(@"^[A-Za-z0-9][A-Za-z0-9._/-]*$", RegexOptions.Compiled);
         private static readonly Regex SubmoduleStatusRegex = new Regex(@"^[ +-]?([0-9a-f]{7,40})\s+([^\s]+)", RegexOptions.Multiline | RegexOptions.Compiled);
 
         private static string cachedProjectRoot;
@@ -36,6 +37,41 @@ namespace Essentials.GitPackageManager.Editor
         internal static bool IsValidPackageName(string packageName)
         {
             return !string.IsNullOrWhiteSpace(packageName) && PackageNameRegex.IsMatch(packageName);
+        }
+
+        internal static bool IsValidBranchName(string branch)
+        {
+            if (string.IsNullOrWhiteSpace(branch))
+                return true;
+
+            string value = branch.Trim();
+            return BranchNameRegex.IsMatch(value) &&
+                   !value.Contains("..") &&
+                   !value.Contains("@{") &&
+                   !value.Contains("//") &&
+                   !value.EndsWith(".", StringComparison.Ordinal) &&
+                   !value.EndsWith("/", StringComparison.Ordinal) &&
+                   !value.EndsWith(".lock", StringComparison.OrdinalIgnoreCase);
+        }
+
+        internal static bool IsValidRepositoryUrl(string url)
+        {
+            if (string.IsNullOrWhiteSpace(url))
+                return false;
+
+            string value = url.Trim();
+            return !value.StartsWith("-", StringComparison.Ordinal) &&
+                   value.IndexOfAny(new[] { '\0', '\r', '\n', '"' }) < 0;
+        }
+
+        internal static bool IsPackagePath(string path)
+        {
+            string normalized = NormalizePath(path);
+            if (!normalized.StartsWith("Packages/", StringComparison.OrdinalIgnoreCase))
+                return false;
+
+            string packageName = normalized.Substring("Packages/".Length);
+            return packageName.IndexOf('/') < 0 && IsValidPackageName(packageName);
         }
 
         internal static bool TryReadPackageName(string packageJsonPath, out string packageName)
@@ -111,10 +147,14 @@ namespace Essentials.GitPackageManager.Editor
                 return true;
             }
 
-            if (!TryEnsureSubmodulesInitialized(out _, out string statusOutput, out error))
+            var statusResult = RunGit("submodule status --recursive", root);
+            if (!statusResult.IsSuccess)
             {
+                error = BuildError("Failed to read submodule status", statusResult);
                 return false;
             }
+
+            string statusOutput = statusResult.StdOut;
 
             var configResult = RunGit("config --file .gitmodules --list", root);
             if (!configResult.IsSuccess)
@@ -138,15 +178,17 @@ namespace Essentials.GitPackageManager.Editor
                 config.TryGetValue($"submodule.{name}.url", out string url);
                 config.TryGetValue($"submodule.{name}.branch", out string branch);
                 string path = NormalizePath(rawPath ?? string.Empty);
+                if (!IsPackagePath(path))
+                    continue;
 
                 var info = new GitPackageInfo
                 {
-                    SourceType = PackageSourceType.Submodule,
                     Name = name,
                     Path = path,
                     Url = url ?? string.Empty,
                     Branch = branch ?? string.Empty,
-                    CommitHash = commitMap.TryGetValue(path, out string commit) ? commit : string.Empty
+                    CommitHash = commitMap.TryGetValue(path, out string commit) ? commit : string.Empty,
+                    IsInitialized = IsSubmoduleInitialized(statusOutput, path)
                 };
 
                 string packageJsonPath = Path.Combine(root, path, "package.json");
@@ -166,55 +208,27 @@ namespace Essentials.GitPackageManager.Editor
             return true;
         }
 
-        internal static bool TryEnsureSubmodulesInitialized(out bool initializedAny, out string error)
-        {
-            return TryEnsureSubmodulesInitialized(out initializedAny, out _, out error);
-        }
-
-        internal static bool TryEnsureSubmodulesInitialized(out bool initializedAny, out string statusOutput, out string error)
-        {
-            initializedAny = false;
-            statusOutput = string.Empty;
-            error = string.Empty;
-
-            string root = ProjectRoot;
-            string gitModulesPath = Path.Combine(root, ".gitmodules");
-            if (!File.Exists(gitModulesPath))
-            {
-                return true;
-            }
-
-            var statusResult = RunGit("submodule status --recursive", root);
-            if (!statusResult.IsSuccess)
-            {
-                error = BuildError("Failed to read submodule status", statusResult);
-                return false;
-            }
-
-            if (!HasUninitializedSubmodules(statusResult.StdOut))
-            {
-                statusOutput = statusResult.StdOut;
-                return true;
-            }
-
-            var initResult = RunGit("submodule update --init --recursive", root);
-            if (!initResult.IsSuccess)
-            {
-                error = BuildError("Failed to initialize missing submodules", initResult);
-                return false;
-            }
-
-            // Re-fetch status after initialization
-            statusResult = RunGit("submodule status --recursive", root);
-            statusOutput = statusResult.IsSuccess ? statusResult.StdOut : string.Empty;
-
-            initializedAny = true;
-            return true;
-        }
-
         internal static bool TryAddSubmodule(string url, string path, string branch, out string error)
         {
             error = string.Empty;
+            if (!IsValidRepositoryUrl(url))
+            {
+                error = "Repository URL is invalid.";
+                return false;
+            }
+
+            if (!IsPackagePath(path))
+            {
+                error = "Submodules managed by this tool must use a valid Packages/com.author.package path.";
+                return false;
+            }
+
+            if (!IsValidBranchName(branch))
+            {
+                error = "Branch name is invalid.";
+                return false;
+            }
+
             string root = ProjectRoot;
             string args = string.IsNullOrWhiteSpace(branch)
                 ? $"submodule add {Quote(url)} {Quote(path)}"
@@ -235,6 +249,11 @@ namespace Essentials.GitPackageManager.Editor
             error = string.Empty;
             string root = ProjectRoot;
             string normalizedPath = NormalizePath(path);
+            if (!IsPackagePath(normalizedPath))
+            {
+                error = "Refusing to remove a path outside Packages/com.author.package.";
+                return false;
+            }
 
             var deinitResult = RunGit($"submodule deinit -f -- {Quote(normalizedPath)}", root);
             if (!deinitResult.IsSuccess)
@@ -251,31 +270,19 @@ namespace Essentials.GitPackageManager.Editor
             }
 
             string moduleMeta = Path.Combine(root, ".git/modules", normalizedPath);
-            if (Directory.Exists(moduleMeta))
-            {
-                Directory.Delete(moduleMeta, true);
-            }
-
             string submodulePath = Path.Combine(root, normalizedPath);
-            if (Directory.Exists(submodulePath))
+            try
             {
-                Directory.Delete(submodulePath, true);
+                if (Directory.Exists(moduleMeta))
+                    Directory.Delete(moduleMeta, true);
+                if (Directory.Exists(submodulePath))
+                    Directory.Delete(submodulePath, true);
             }
-
-            return true;
-        }
-
-        internal static bool TryUpdateSubmodule(string path, out string error)
-        {
-            error = string.Empty;
-            string root = ProjectRoot;
-            string normalizedPath = NormalizePath(path);
-
-            var result = RunGit($"submodule update --remote --merge -- {Quote(normalizedPath)}", root);
-            if (!result.IsSuccess)
+            catch (Exception ex)
             {
-                error = BuildError("Failed to update submodule", result);
-                return false;
+                // `git rm` already removed the tracked package. A locked metadata
+                // directory should not turn that successful mutation into a lie.
+                Debug.LogWarning($"[Git Package Manager] Submodule was removed, but local metadata cleanup was incomplete: {ex.Message}");
             }
 
             return true;
@@ -293,6 +300,11 @@ namespace Essentials.GitPackageManager.Editor
             string root = ProjectRoot;
             string normalizedPath = NormalizePath(path);
             string trimmedBranch = branch.Trim();
+            if (!IsPackagePath(normalizedPath) || !IsValidBranchName(trimmedBranch))
+            {
+                error = "Package path or branch name is invalid.";
+                return false;
+            }
 
             var result = RunGit($"submodule set-branch --branch {Quote(trimmedBranch)} -- {Quote(normalizedPath)}", root);
             if (!result.IsSuccess)
@@ -301,165 +313,6 @@ namespace Essentials.GitPackageManager.Editor
                 return false;
             }
 
-            return true;
-        }
-
-        // ── Subtree Operations ──
-
-        internal static bool TryAddSubtree(string url, string path, string branch, out string error)
-        {
-            error = string.Empty;
-            string root = ProjectRoot;
-            string normalizedPath = NormalizePath(path);
-            string branchArg = string.IsNullOrWhiteSpace(branch) ? "main" : branch.Trim();
-
-            var result = RunGit($"subtree add --prefix={normalizedPath} {Quote(url)} {Quote(branchArg)} --squash", root);
-            if (!result.IsSuccess)
-            {
-                error = BuildError("Failed to add subtree", result);
-                return false;
-            }
-
-            GitPackagesManifestUtility.AddEntry(normalizedPath, url, branchArg);
-            return true;
-        }
-
-        internal static bool TryRemoveSubtree(string path, out string error)
-        {
-            error = string.Empty;
-            string root = ProjectRoot;
-            string normalizedPath = NormalizePath(path);
-            string fullPath = Path.Combine(root, normalizedPath);
-
-            if (Directory.Exists(fullPath))
-            {
-                var result = RunGit($"rm -r {Quote(normalizedPath)}", root);
-                if (!result.IsSuccess)
-                {
-                    // git rm failed — force-delete the directory as fallback
-                    try
-                    {
-                        Directory.Delete(fullPath, true);
-                    }
-                    catch (System.Exception ex)
-                    {
-                        error = $"Failed to remove subtree directory: {ex.Message}";
-                        return false;
-                    }
-                }
-            }
-
-            GitPackagesManifestUtility.RemoveEntry(normalizedPath);
-            return true;
-        }
-
-        internal static bool TryPullSubtree(string path, string url, string branch, out string error)
-        {
-            error = string.Empty;
-            string root = ProjectRoot;
-            string normalizedPath = NormalizePath(path);
-            string branchArg = string.IsNullOrWhiteSpace(branch) ? "main" : branch.Trim();
-
-            var result = RunGit($"subtree pull --prefix={normalizedPath} {Quote(url)} {Quote(branchArg)} --squash", root, 120000);
-            if (!result.IsSuccess)
-            {
-                error = BuildError("Failed to pull subtree", result);
-                return false;
-            }
-
-            return true;
-        }
-
-        internal static bool TryPushSubtree(string path, string url, string branch, out string error)
-        {
-            error = string.Empty;
-            string root = ProjectRoot;
-            string normalizedPath = NormalizePath(path);
-            string branchArg = string.IsNullOrWhiteSpace(branch) ? "main" : branch.Trim();
-
-            var result = RunGit($"subtree push --prefix={normalizedPath} {Quote(url)} {Quote(branchArg)}", root, 120000);
-            if (!result.IsSuccess)
-            {
-                error = BuildError("Failed to push subtree", result);
-                return false;
-            }
-
-            return true;
-        }
-
-        internal static bool TryGetSubtrees(out List<GitPackageInfo> subtrees, out string error)
-        {
-            subtrees = new List<GitPackageInfo>();
-            error = string.Empty;
-
-            string root = ProjectRoot;
-            var manifest = GitPackagesManifestUtility.Load();
-
-            foreach (var entry in manifest.subtrees)
-            {
-                string path = NormalizePath(entry.path);
-                var info = new GitPackageInfo
-                {
-                    SourceType = PackageSourceType.Subtree,
-                    Name = Path.GetFileName(path),
-                    Path = path,
-                    Url = entry.url,
-                    Branch = entry.branch
-                };
-
-                string packageJsonPath = Path.Combine(root, path, "package.json");
-                info.HasPackageJson = File.Exists(packageJsonPath);
-                if (info.HasPackageJson && TryReadPackageName(packageJsonPath, out string packageName))
-                {
-                    info.PackageName = packageName;
-                }
-
-                subtrees.Add(info);
-            }
-
-            return true;
-        }
-
-        internal static bool TryGetAllPackages(out List<GitPackageInfo> packages, out string error)
-        {
-            packages = new List<GitPackageInfo>();
-
-            if (!TryGetSubmodules(out var submodules, out error))
-            {
-                return false;
-            }
-
-            packages.AddRange(submodules);
-
-            if (TryGetSubtrees(out var subtrees, out _))
-            {
-                packages.AddRange(subtrees);
-            }
-
-            return true;
-        }
-
-        // ── Branch Operations ──
-
-        internal static bool TryListRemoteBranches(string url, out List<string> branches, out string error)
-        {
-            branches = new List<string>();
-            error = string.Empty;
-
-            if (string.IsNullOrWhiteSpace(url))
-            {
-                error = "URL is required.";
-                return false;
-            }
-
-            var result = RunGit($"ls-remote --heads {Quote(url)}", ProjectRoot);
-            if (!result.IsSuccess)
-            {
-                error = BuildError("Failed to list remote branches", result);
-                return false;
-            }
-
-            branches = ParseRemoteBranches(result.StdOut);
             return true;
         }
 
@@ -508,42 +361,6 @@ namespace Essentials.GitPackageManager.Editor
             }
 
             return names;
-        }
-
-        private static bool HasUninitializedSubmodules(string submoduleStatusOutput)
-        {
-            if (string.IsNullOrWhiteSpace(submoduleStatusOutput))
-            {
-                return false;
-            }
-
-            string[] lines = submoduleStatusOutput.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries);
-            foreach (string line in lines)
-            {
-                if (!string.IsNullOrEmpty(line) && line[0] == '-')
-                {
-                    return true;
-                }
-            }
-
-            return false;
-        }
-
-        private static string ExtractSubmoduleName(string line)
-        {
-            const string prefix = "submodule.";
-            const string suffix = ".path";
-            if (!line.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
-            {
-                return string.Empty;
-            }
-
-            if (!line.EndsWith(suffix, StringComparison.OrdinalIgnoreCase))
-            {
-                return string.Empty;
-            }
-
-            return line.Substring(prefix.Length, line.Length - prefix.Length - suffix.Length);
         }
 
         internal static Dictionary<string, string> ParseSubmoduleCommitMap(string submoduleStatusOutput)
@@ -600,14 +417,38 @@ namespace Essentials.GitPackageManager.Editor
             return (path ?? string.Empty).Replace("\\", "/").Trim();
         }
 
-        private static string Quote(string value)
+        private static bool IsSubmoduleInitialized(string statusOutput, string path)
+        {
+            if (string.IsNullOrWhiteSpace(statusOutput))
+                return false;
+
+            string normalizedPath = NormalizePath(path);
+            string[] lines = statusOutput.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries);
+            foreach (string line in lines)
+            {
+                string trimmed = line.TrimStart(' ', '+', '-');
+                int separator = trimmed.IndexOf(' ');
+                if (separator < 0)
+                    continue;
+
+                string remainder = trimmed.Substring(separator + 1);
+                int pathEnd = remainder.IndexOf(' ');
+                string candidatePath = NormalizePath(pathEnd >= 0 ? remainder.Substring(0, pathEnd) : remainder);
+                if (string.Equals(candidatePath, normalizedPath, StringComparison.OrdinalIgnoreCase))
+                    return line.Length > 0 && line[0] != '-';
+            }
+
+            return false;
+        }
+
+        internal static string Quote(string value)
         {
             if (string.IsNullOrEmpty(value))
             {
                 return "\"\"";
             }
 
-            string escaped = value.Replace("\\", "\\\\").Replace("\"", "\\\"");
+            string escaped = value.Replace("\"", "\\\"");
             return $"\"{escaped}\"";
         }
 

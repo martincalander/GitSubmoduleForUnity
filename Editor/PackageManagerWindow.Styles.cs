@@ -17,6 +17,10 @@ namespace Essentials.GitPackageManager.Editor
             public static GUIStyle LinkButton;
             public static GUIStyle SectionHeader;
             public static GUIStyle LoadingLabel;
+            public static GUIStyle ListItemLabel;
+            public static GUIStyle SelectedListItemLabel;
+            public static Color SelectionColor;
+            public static Color SeparatorColor;
             public static bool Initialized;
 
             public static void Initialize()
@@ -38,10 +42,20 @@ namespace Essentials.GitPackageManager.Editor
                     margin = new RectOffset(0, 0, 0, 4)
                 };
 
+                Color secondaryText = EditorGUIUtility.isProSkin
+                    ? new Color(0.65f, 0.65f, 0.65f)
+                    : new Color(0.35f, 0.35f, 0.35f);
+                SelectionColor = EditorGUIUtility.isProSkin
+                    ? new Color(0.17f, 0.36f, 0.53f, 1f)
+                    : new Color(0.24f, 0.49f, 0.71f, 1f);
+                SeparatorColor = EditorGUIUtility.isProSkin
+                    ? new Color(0.15f, 0.15f, 0.15f)
+                    : new Color(0.68f, 0.68f, 0.68f);
+
                 SubtitleLabel = new GUIStyle(EditorStyles.label)
                 {
                     fontSize = 11,
-                    normal = { textColor = new Color(0.6f, 0.6f, 0.6f) },
+                    normal = { textColor = secondaryText },
                     margin = new RectOffset(0, 0, 0, 2)
                 };
 
@@ -50,12 +64,14 @@ namespace Essentials.GitPackageManager.Editor
                     padding = new RectOffset(12, 12, 10, 10),
                     margin = new RectOffset(0, 0, 8, 8)
                 };
-                InfoBox.normal.background = CreateColorTexture(new Color(0.22f, 0.22f, 0.22f, 1f));
+                InfoBox.normal.background = CreateColorTexture(EditorGUIUtility.isProSkin
+                    ? new Color(0.22f, 0.22f, 0.22f, 1f)
+                    : new Color(0.88f, 0.88f, 0.88f, 1f));
 
                 InfoLabel = new GUIStyle(EditorStyles.label)
                 {
                     fontSize = 11,
-                    normal = { textColor = new Color(0.65f, 0.65f, 0.65f) },
+                    normal = { textColor = secondaryText },
                     alignment = TextAnchor.MiddleLeft
                 };
 
@@ -69,7 +85,7 @@ namespace Essentials.GitPackageManager.Editor
                 FooterLabel = new GUIStyle(EditorStyles.miniLabel)
                 {
                     fontSize = 10,
-                    normal = { textColor = new Color(0.5f, 0.5f, 0.5f) },
+                    normal = { textColor = secondaryText },
                     padding = new RectOffset(8, 8, 4, 4)
                 };
 
@@ -90,6 +106,10 @@ namespace Essentials.GitPackageManager.Editor
                 {
                     fontSize = 12
                 };
+
+                ListItemLabel = new GUIStyle(EditorStyles.label);
+                SelectedListItemLabel = new GUIStyle(EditorStyles.label);
+                SelectedListItemLabel.normal.textColor = Color.white;
 
                 Initialized = true;
             }

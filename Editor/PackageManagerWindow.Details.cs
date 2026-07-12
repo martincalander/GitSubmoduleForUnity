@@ -39,7 +39,7 @@ namespace Essentials.GitPackageManager.Editor
 
             EditorGUILayout.Space(8);
             string displayName = package.PackageName ?? package.Name;
-            string typeLabel = package.SourceType == PackageSourceType.Subtree ? "Git Subtree" : "Git Submodule";
+            const string typeLabel = "Git Submodule";
             GUILayout.Label(displayName, Styles.TitleLabel);
             GUILayout.Label($"{(string.IsNullOrWhiteSpace(package.Branch) ? "main" : package.Branch)} · {typeLabel}", Styles.SubtitleLabel);
             EditorGUILayout.Space(4);
@@ -57,34 +57,12 @@ namespace Essentials.GitPackageManager.Editor
             EditorGUILayout.BeginHorizontal();
             using (new EditorGUI.DisabledScope(!gitAvailable || isOperationRunning))
             {
-                if (package.SourceType == PackageSourceType.Submodule)
+                string updateLabel = package.IsInitialized ? "Update" : "Initialize";
+                if (GUILayout.Button(updateLabel, GUILayout.Height(24)) &&
+                    EditorUtility.DisplayDialog($"{updateLabel} Submodule", $"{updateLabel}:\n{package.Path}?", updateLabel, "Cancel"))
                 {
-                    if (GUILayout.Button("Update", GUILayout.Height(24)) &&
-                        EditorUtility.DisplayDialog("Update Submodule", $"Fetch and update:\n{package.Path}?", "Update", "Cancel"))
-                    {
-                        StartAsyncOperation("Updating submodule...", "git",
-                            $"submodule update --remote --merge -- {package.Path}", () => OnUpdateComplete(package));
-                    }
-                }
-                else
-                {
-                    if (GUILayout.Button("Pull", GUILayout.Height(24)) &&
-                        EditorUtility.DisplayDialog("Pull Subtree", $"Pull latest for:\n{package.Path}?", "Pull", "Cancel"))
-                    {
-                        string branch = string.IsNullOrWhiteSpace(package.Branch) ? "main" : package.Branch;
-                        StartAsyncOperation("Pulling subtree...", "git",
-                            $"subtree pull --prefix={package.Path} {package.Url} {branch} --squash",
-                            () => OnUpdateComplete(package), 120000);
-                    }
-
-                    if (GUILayout.Button("Push", GUILayout.Height(24)) &&
-                        EditorUtility.DisplayDialog("Push Subtree", $"Push changes for:\n{package.Path}?", "Push", "Cancel"))
-                    {
-                        string branch = string.IsNullOrWhiteSpace(package.Branch) ? "main" : package.Branch;
-                        StartAsyncOperation("Pushing subtree...", "git",
-                            $"subtree push --prefix={package.Path} {package.Url} {branch}",
-                            () => OnPushComplete(), 120000);
-                    }
+                    StartAsyncOperation($"{updateLabel} submodule...", "git",
+                        $"submodule update --init --remote --merge -- {package.Path}", () => OnUpdateComplete(package), 120000);
                 }
 
                 if (GUILayout.Button("Remove", GUILayout.Height(24)) &&
@@ -99,6 +77,7 @@ namespace Essentials.GitPackageManager.Editor
             EditorGUILayout.Space(12);
             EditorGUILayout.BeginVertical(Styles.InfoBox);
             DrawInfoRow("Type", typeLabel);
+            DrawInfoRow("Status", package.IsInitialized ? "Initialized" : "Not initialized");
             DrawInfoRow("Path", package.Path);
             DrawInfoRow("URL", package.Url);
             if (!string.IsNullOrWhiteSpace(package.Branch))
@@ -108,7 +87,9 @@ namespace Essentials.GitPackageManager.Editor
             EditorGUILayout.EndVertical();
 
             if (!package.HasPackageJson)
-                EditorGUILayout.HelpBox("This package does not contain a package.json at its root.", MessageType.Warning);
+                EditorGUILayout.HelpBox(package.IsInitialized
+                    ? "This package does not contain a package.json at its root."
+                    : "This submodule has not been initialized yet.", MessageType.Warning);
             if (!string.IsNullOrWhiteSpace(installedActionStatus))
                 EditorGUILayout.HelpBox(installedActionStatus, installedActionStatusType);
 
@@ -160,6 +141,8 @@ namespace Essentials.GitPackageManager.Editor
 
             if (repo.PackageJsonChecked && !repo.HasPackageJson)
                 EditorGUILayout.HelpBox("This repository does not contain a package.json at its root. It may not be a valid Unity package.", MessageType.Warning);
+            else if (!string.IsNullOrWhiteSpace(repo.PackageJsonError))
+                EditorGUILayout.HelpBox(repo.PackageJsonError + " Refresh the page to retry.", MessageType.Warning);
             if (repo.IsPrivate)
                 EditorGUILayout.HelpBox("Private repository. Collaborators will need access to clone this package.", MessageType.Warning);
             if (repo.IsInstalled)
@@ -171,15 +154,6 @@ namespace Essentials.GitPackageManager.Editor
                 GUILayout.Label("Add as Package", Styles.SectionHeader);
 
                 EditorGUILayout.BeginVertical(Styles.InfoBox);
-                EditorGUILayout.BeginHorizontal();
-                GUILayout.Label("Add as", Styles.InfoLabel, GUILayout.Width(100));
-                if (GUILayout.Toggle(selectedRepoSourceType == PackageSourceType.Submodule, "Submodule", EditorStyles.miniButtonLeft))
-                    selectedRepoSourceType = PackageSourceType.Submodule;
-                if (GUILayout.Toggle(selectedRepoSourceType == PackageSourceType.Subtree, "Subtree", EditorStyles.miniButtonRight))
-                    selectedRepoSourceType = PackageSourceType.Subtree;
-                GUILayout.FlexibleSpace();
-                EditorGUILayout.EndHorizontal();
-
                 EditorGUILayout.BeginHorizontal();
                 GUILayout.Label("Package Name", Styles.InfoLabel, GUILayout.Width(100));
                 selectedRepoPackageName = EditorGUILayout.TextField(selectedRepoPackageName);
@@ -202,7 +176,7 @@ namespace Essentials.GitPackageManager.Editor
                 using (new EditorGUI.DisabledScope(!string.IsNullOrWhiteSpace(validationError) || isOperationRunning))
                 {
                     if (GUILayout.Button("Add Package", GUILayout.Height(28)))
-                        TryAddPackage(repo.Url, selectedRepoBranch, selectedRepoPackageName, selectedRepoSourceType);
+                        TryAddSubmodule(repo.Url, selectedRepoBranch, selectedRepoPackageName);
                 }
             }
 

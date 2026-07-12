@@ -1,10 +1,8 @@
 using System;
 using System.Collections.Generic;
-using System.IO;
 using System.Linq;
 using System.Threading;
 using NUnit.Framework;
-using UnityEngine;
 
 namespace Essentials.GitPackageManager.Editor.Tests
 {
@@ -80,82 +78,53 @@ namespace Essentials.GitPackageManager.Editor.Tests
             Assert.That(normalized, Is.EqualTo("Packages/com.essentials.gitpackagemanager"));
         }
 
-        // ── Subtree Command Tests ──
-
-        [Test]
-        public void TryAddSubtree_RunsCorrectGitCommand()
+        [TestCase("Packages/com.user.repo", true)]
+        [TestCase("Packages/com.user.repo/nested", false)]
+        [TestCase("Assets/com.user.repo", false)]
+        [TestCase("Packages/../ProjectSettings", false)]
+        public void IsPackagePath_OnlyAllowsDirectUnityPackages(string path, bool expected)
         {
-            var runner = new FakeCommandRunner(spec =>
-            {
-                if (spec.FileName == "git" && spec.Arguments.Contains("subtree add"))
-                {
-                    return Success(string.Empty);
-                }
+            Assert.That(GitUtility.IsPackagePath(path), Is.EqualTo(expected));
+        }
 
-                return Success(string.Empty);
-            });
-            CliCommandRunner.CurrentRunner = runner;
+        [TestCase("main", true)]
+        [TestCase("feature/reliable-discovery", true)]
+        [TestCase("--upload-pack=bad", false)]
+        [TestCase("bad..branch", false)]
+        [TestCase("bad branch", false)]
+        public void IsValidBranchName_RejectsUnsafeRefs(string branch, bool expected)
+        {
+            Assert.That(GitUtility.IsValidBranchName(branch), Is.EqualTo(expected));
+        }
 
-            bool result = GitUtility.TryAddSubtree("https://github.com/user/repo.git", "Packages/com.user.repo", "main", out string error);
-
-            Assert.That(result, Is.True, error);
-            var subtreeCall = runner.Calls.FirstOrDefault(c => c.Arguments.Contains("subtree add"));
-            Assert.That(subtreeCall, Is.Not.Null);
-            Assert.That(subtreeCall.Arguments, Does.Contain("--prefix=Packages/com.user.repo"));
-            Assert.That(subtreeCall.Arguments, Does.Contain("https://github.com/user/repo.git"));
-            Assert.That(subtreeCall.Arguments, Does.Contain("main"));
-            Assert.That(subtreeCall.Arguments, Does.Contain("--squash"));
+        [TestCase("https://github.com/owner/repo.git", true)]
+        [TestCase("git@github.com:owner/repo.git", true)]
+        [TestCase("../Local Repo", true)]
+        [TestCase("--upload-pack=malicious", false)]
+        [TestCase("https://github.com/owner/repo.git\n--config=bad", false)]
+        public void IsValidRepositoryUrl_RejectsOptionAndControlCharacterInjection(string url, bool expected)
+        {
+            Assert.That(GitUtility.IsValidRepositoryUrl(url), Is.EqualTo(expected));
         }
 
         [Test]
-        public void TryPullSubtree_RunsCorrectGitCommand()
+        public void Quote_PreservesWindowsBackslashes()
         {
-            var runner = new FakeCommandRunner(spec => Success(string.Empty));
-            CliCommandRunner.CurrentRunner = runner;
-
-            bool result = GitUtility.TryPullSubtree("Packages/com.user.repo", "https://github.com/user/repo.git", "main", out string error);
-
-            Assert.That(result, Is.True, error);
-            var pullCall = runner.Calls.FirstOrDefault(c => c.Arguments.Contains("subtree pull"));
-            Assert.That(pullCall, Is.Not.Null);
-            Assert.That(pullCall.Arguments, Does.Contain("--prefix=Packages/com.user.repo"));
-            Assert.That(pullCall.Arguments, Does.Contain("--squash"));
+            Assert.That(GitUtility.Quote(@"C:\Repos\My Package"), Is.EqualTo("\"C:\\Repos\\My Package\""));
         }
 
         [Test]
-        public void TryPushSubtree_RunsCorrectGitCommand()
+        public void ParseRepoJson_PrefersCloneUrlOverApiUrl()
         {
-            var runner = new FakeCommandRunner(spec => Success(string.Empty));
-            CliCommandRunner.CurrentRunner = runner;
+            const string json = "[{\"name\":\"repo\",\"owner\":{\"login\":\"owner\"}," +
+                                "\"url\":\"https://api.github.com/repos/owner/repo\"," +
+                                "\"html_url\":\"https://github.com/owner/repo\"," +
+                                "\"clone_url\":\"https://github.com/owner/repo.git\"}]";
 
-            bool result = GitUtility.TryPushSubtree("Packages/com.user.repo", "https://github.com/user/repo.git", "main", out string error);
+            var repos = GitHubUtility.ParseRepoJson(json);
 
-            Assert.That(result, Is.True, error);
-            var pushCall = runner.Calls.FirstOrDefault(c => c.Arguments.Contains("subtree push"));
-            Assert.That(pushCall, Is.Not.Null);
-            Assert.That(pushCall.Arguments, Does.Contain("--prefix=Packages/com.user.repo"));
-        }
-
-        // ── Manifest Tests ──
-
-        [Test]
-        public void GitPackagesManifest_RoundTrip()
-        {
-            var manifest = new GitPackagesManifest();
-            manifest.subtrees.Add(new GitPackagesManifestEntry
-            {
-                path = "Packages/com.user.repo",
-                url = "https://github.com/user/repo.git",
-                branch = "main"
-            });
-
-            string json = JsonUtility.ToJson(manifest, true);
-            var loaded = JsonUtility.FromJson<GitPackagesManifest>(json);
-
-            Assert.That(loaded.subtrees, Has.Count.EqualTo(1));
-            Assert.That(loaded.subtrees[0].path, Is.EqualTo("Packages/com.user.repo"));
-            Assert.That(loaded.subtrees[0].url, Is.EqualTo("https://github.com/user/repo.git"));
-            Assert.That(loaded.subtrees[0].branch, Is.EqualTo("main"));
+            Assert.That(repos, Has.Count.EqualTo(1));
+            Assert.That(repos[0].Url, Is.EqualTo("https://github.com/owner/repo.git"));
         }
 
         // ── Discovery Coordinator Tests ──
@@ -231,7 +200,7 @@ namespace Essentials.GitPackageManager.Editor.Tests
             {
                 if (spec.FileName == "gh" && spec.Arguments.Contains("user/repos") && spec.Arguments.Contains("page=1"))
                 {
-                    return Success(BuildRepoJson(1, 30));
+                    return Success(BuildRepoJson(1, 50));
                 }
 
                 if (spec.FileName == "gh" && spec.Arguments.Contains("user/repos") && spec.Arguments.Contains("page=2"))
@@ -260,7 +229,7 @@ namespace Essentials.GitPackageManager.Editor.Tests
             while (DateTime.UtcNow < timeoutAt)
             {
                 coordinator.Tick(0);
-                if (coordinator.DisplayedRepos.Count != 30)
+                if (coordinator.DisplayedRepos.Count != 50)
                     break;
                 Thread.Sleep(10);
             }
@@ -270,79 +239,33 @@ namespace Essentials.GitPackageManager.Editor.Tests
             Assert.That(coordinator.HasPrevPage, Is.True);
         }
 
-        // ── BatchAsyncRunner Tests ──
-
         [Test]
-        public void BatchAsyncRunner_ConcurrencyLimit()
+        public void DiscoveryCoordinator_NewerSearchSupersedesInFlightPage()
         {
-            int maxConcurrent = 0;
-            int currentConcurrent = 0;
-            object lockObj = new object();
-
             var runner = new FakeCommandRunner(spec =>
             {
-                lock (lockObj)
+                if (spec.Arguments.Contains("user/repos"))
                 {
-                    currentConcurrent++;
-                    if (currentConcurrent > maxConcurrent)
-                        maxConcurrent = currentConcurrent;
+                    Thread.Sleep(30);
+                    return Success(BuildRepoJson(1, 50));
                 }
 
-                Thread.Sleep(20);
+                if (spec.Arguments.Contains("search/repositories"))
+                    return Success("{\"total_count\":1,\"items\":" + BuildRepoJson(100, 1) + "}");
 
-                lock (lockObj)
-                {
-                    currentConcurrent--;
-                }
-
-                return Success("ok");
+                return Fail(spec, "Unexpected");
             });
             CliCommandRunner.CurrentRunner = runner;
 
-            var items = new List<BatchAsyncRunner.BatchItem>();
-            for (int i = 0; i < 10; i++)
-            {
-                items.Add(new BatchAsyncRunner.BatchItem
-                {
-                    Spec = new CommandSpec { FileName = "test", Arguments = $"arg{i}", WorkingDirectory = "." },
-                    OnComplete = _ => { }
-                });
-            }
+            var coordinator = new DiscoveryCoordinator();
+            coordinator.LoadInitialPage();
+            coordinator.SetSearchQuery("newest", 0);
+            coordinator.Tick(1.0);
 
-            var batch = new BatchAsyncRunner(items, 3);
-            var timeoutAt = DateTime.UtcNow.AddSeconds(5);
-            while (!batch.IsComplete && DateTime.UtcNow < timeoutAt)
-            {
-                batch.Tick();
-                Thread.Sleep(10);
-            }
+            WaitForDiscovery(coordinator, 2, 1.0);
 
-            Assert.That(batch.IsComplete, Is.True);
-            Assert.That(batch.CompletedCount, Is.EqualTo(10));
-            Assert.That(maxConcurrent, Is.LessThanOrEqualTo(3));
-        }
-
-        // ── TryGetAllPackages Tests ──
-
-        [Test]
-        public void TryGetAllPackages_CombinesBothTypes()
-        {
-            // This test verifies the manifest parsing path.
-            // Submodule path requires .gitmodules which we can't mock easily,
-            // but subtree path reads from .gitpackages manifest via JSON.
-            var manifest = new GitPackagesManifest();
-            manifest.subtrees.Add(new GitPackagesManifestEntry
-            {
-                path = "Packages/com.test.subtree",
-                url = "https://github.com/test/subtree.git",
-                branch = "main"
-            });
-
-            string json = JsonUtility.ToJson(manifest);
-            var loaded = JsonUtility.FromJson<GitPackagesManifest>(json);
-
-            Assert.That(loaded.subtrees, Has.Count.EqualTo(1));
-            Assert.That(loaded.subtrees[0].path, Is.EqualTo("Packages/com.test.subtree"));
+            Assert.That(coordinator.DisplayedRepos, Has.Count.EqualTo(1));
+            Assert.That(coordinator.DisplayedRepos[0].Name, Is.EqualTo("repo-100"));
         }
 
         // ── Helpers ──

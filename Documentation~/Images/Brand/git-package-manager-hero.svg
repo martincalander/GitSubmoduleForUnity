@@ -1,0 +1,50 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 520" role="img" aria-labelledby="title description">
+  <title id="title">Git Package Manager</title>
+  <desc id="description">Git submodules, made native to Unity. Explicit operations, cross-platform support, and MIT licensing.</desc>
+  <defs>
+    <linearGradient id="background" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#070B14"/>
+      <stop offset=".55" stop-color="#0B1220"/>
+      <stop offset="1" stop-color="#111B2E"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0" cy="0" r="1" gradientTransform="translate(1380 120) rotate(140) scale(550 420)">
+      <stop offset="0" stop-color="#F05A3C" stop-opacity=".24"/>
+      <stop offset="1" stop-color="#F05A3C" stop-opacity="0"/>
+    </radialGradient>
+    <pattern id="grid" width="48" height="48" patternUnits="userSpaceOnUse">
+      <path d="M48 0H0v48" fill="none" stroke="#94A3B8" stroke-opacity=".06"/>
+    </pattern>
+  </defs>
+  <rect width="1600" height="520" rx="34" fill="url(#background)"/>
+  <rect width="1600" height="520" rx="34" fill="url(#grid)"/>
+  <rect width="1600" height="520" rx="34" fill="url(#glow)"/>
+  <g transform="translate(72 52) scale(.81)">
+    <rect width="512" height="512" rx="112" fill="#111827" stroke="#334155" stroke-width="3"/>
+    <path d="M92 154 256 68l164 86v204l-164 86-164-86Z" fill="none" stroke="#E5E7EB" stroke-width="30" stroke-linejoin="round"/>
+    <path d="m92 154 164 90 164-90M256 244v200" fill="none" stroke="#E5E7EB" stroke-width="30" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M256 112v176m0 0 98 72" fill="none" stroke="#F05A3C" stroke-width="34" stroke-linecap="round" stroke-linejoin="round"/>
+    <circle cx="256" cy="112" r="31" fill="#F05A3C"/>
+    <circle cx="256" cy="288" r="31" fill="#F05A3C"/>
+    <circle cx="354" cy="360" r="31" fill="#F05A3C"/>
+  </g>
+  <rect x="544" y="76" width="206" height="38" rx="19" fill="#F05A3C" fill-opacity=".14" stroke="#F05A3C" stroke-opacity=".45"/>
+  <text x="570" y="102" fill="#FF8A70" font-family="Inter, Avenir Next, Helvetica Neue, Arial, sans-serif" font-size="17" font-weight="750" letter-spacing="1.6">UNITY EDITOR TOOL</text>
+  <text x="540" y="206" fill="#F8FAFC" font-family="Inter, Avenir Next, Helvetica Neue, Arial, sans-serif" font-size="72" font-weight="780" letter-spacing="-3">Git Package Manager</text>
+  <text x="544" y="268" fill="#CBD5E1" font-family="Inter, Avenir Next, Helvetica Neue, Arial, sans-serif" font-size="31" font-weight="500">Git submodules, made native to Unity.</text>
+  <text x="544" y="320" fill="#94A3B8" font-family="Inter, Avenir Next, Helvetica Neue, Arial, sans-serif" font-size="22">Discover, validate, install, update, and remove UPM packages—explicitly.</text>
+  <g font-family="Inter, Avenir Next, Helvetica Neue, Arial, sans-serif" font-size="18" font-weight="650">
+    <rect x="544" y="378" width="234" height="48" rx="24" fill="#172033" stroke="#334155"/>
+    <circle cx="570" cy="402" r="6" fill="#4ADE80"/>
+    <text x="588" y="409" fill="#E2E8F0">Explicit Git operations</text>
+    <rect x="794" y="378" width="190" height="48" rx="24" fill="#172033" stroke="#334155"/>
+    <circle cx="820" cy="402" r="6" fill="#60A5FA"/>
+    <text x="838" y="409" fill="#E2E8F0">Cross-platform</text>
+    <rect x="1000" y="378" width="174" height="48" rx="24" fill="#172033" stroke="#334155"/>
+    <circle cx="1026" cy="402" r="6" fill="#F05A3C"/>
+    <text x="1044" y="409" fill="#E2E8F0">MIT licensed</text>
+  </g>
+  <path d="M1270 398c68-8 124-40 168-98 38-50 57-104 58-163" fill="none" stroke="#F05A3C" stroke-width="3" stroke-linecap="round" stroke-dasharray="2 13" opacity=".5"/>
+  <circle cx="1270" cy="398" r="8" fill="#F05A3C"/>
+  <circle cx="1438" cy="300" r="8" fill="#F05A3C"/>
+  <circle cx="1496" cy="137" r="8" fill="#F05A3C"/>
+</svg>

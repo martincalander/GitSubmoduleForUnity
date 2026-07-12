@@ -1,0 +1,12 @@
+cff-version: 1.2.0
+message: If you use this software, please cite it using these metadata.
+title: Git Package Manager
+type: software
+authors:
+  - family-names: Calander
+    given-names: Martin
+repository-code: https://github.com/martincalander/GitSubmoduleForUnity
+url: https://github.com/martincalander/GitSubmoduleForUnity
+license: MIT
+version: 1.0.0
+date-released: 2026-07-12

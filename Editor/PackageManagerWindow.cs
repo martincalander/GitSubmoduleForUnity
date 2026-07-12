@@ -23,7 +23,6 @@ namespace Essentials.GitPackageManager.Editor
         private enum FilterOption
         {
             All,
-            ValidPackagesOnly,
             PublicOnly,
             PrivateOnly
         }
@@ -65,12 +64,10 @@ namespace Essentials.GitPackageManager.Editor
         private string addPackageName = string.Empty;
         private string addStatus = string.Empty;
         private MessageType addStatusType = MessageType.None;
-        private PackageSourceType addSourceType = PackageSourceType.Submodule;
 
         private string searchFilter = string.Empty;
         private string selectedRepoPackageName = string.Empty;
         private string selectedRepoBranch = string.Empty;
-        private PackageSourceType selectedRepoSourceType = PackageSourceType.Submodule;
 
         private SortOption currentSort = SortOption.Name;
         private FilterOption currentFilter = FilterOption.All;
@@ -90,19 +87,24 @@ namespace Essentials.GitPackageManager.Editor
 
         private volatile InitialLoadResult pendingLoadResult;
         private bool isInitialLoading;
+        private int initialLoadGeneration;
 
         private void OnEnable()
         {
+            minSize = new Vector2(720f, 420f);
             // Cache ProjectRoot on main thread before background work
             _ = GitUtility.ProjectRoot;
 
             isInitialLoading = true;
             pendingLoadResult = null;
-            new Thread(RunInitialLoad) { IsBackground = true }.Start();
+            int generation = Interlocked.Increment(ref initialLoadGeneration);
+            new Thread(() => RunInitialLoad(generation)) { IsBackground = true }.Start();
         }
 
         private void OnDisable()
         {
+            Interlocked.Increment(ref initialLoadGeneration);
+            pendingLoadResult = null;
             if (activeAddPopup != null)
             {
                 activeAddPopup.ClosePopup();
@@ -166,6 +168,9 @@ namespace Essentials.GitPackageManager.Editor
 
         internal void RefreshPackages()
         {
+            if (isInitialLoading)
+                return;
+
             RefreshDependencies();
             RefreshInstalled();
         }

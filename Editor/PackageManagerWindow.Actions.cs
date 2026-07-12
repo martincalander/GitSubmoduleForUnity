@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Threading;
 using UnityEditor;
 using UnityEngine;
 
@@ -23,7 +24,7 @@ namespace Essentials.GitPackageManager.Editor
             public bool PackagesSuccess;
         }
 
-        private void RunInitialLoad()
+        private void RunInitialLoad(int generation)
         {
             var result = new InitialLoadResult();
             result.GitAvailable = GitUtility.IsGitAvailable(out var gv, out var ge);
@@ -40,12 +41,13 @@ namespace Essentials.GitPackageManager.Editor
 
             if (result.GitAvailable)
             {
-                result.PackagesSuccess = GitUtility.TryGetAllPackages(out var packages, out var packagesError);
+                result.PackagesSuccess = GitUtility.TryGetSubmodules(out var packages, out var packagesError);
                 result.Packages = packages;
                 result.PackagesError = packagesError;
             }
 
-            pendingLoadResult = result;
+            if (generation == Volatile.Read(ref initialLoadGeneration))
+                pendingLoadResult = result;
         }
 
         private void ApplyLoadResult(InitialLoadResult result)
@@ -85,19 +87,7 @@ namespace Essentials.GitPackageManager.Editor
 
         private void PerformRemove(GitPackageInfo package)
         {
-            bool success;
-            string error;
-
-            if (package.SourceType == PackageSourceType.Subtree)
-            {
-                success = GitUtility.TryRemoveSubtree(package.Path, out error);
-            }
-            else
-            {
-                success = GitUtility.TryRemoveSubmodule(package.Path, out error);
-            }
-
-            if (!success)
+            if (!GitUtility.TryRemoveSubmodule(package.Path, out string error))
             {
                 installedActionStatus = error;
                 installedActionStatusType = MessageType.Error;
@@ -111,34 +101,21 @@ namespace Essentials.GitPackageManager.Editor
 
         private void PerformBranchChange(GitPackageInfo package, string branch)
         {
-            if (package.SourceType == PackageSourceType.Subtree)
+            if (!GitUtility.TrySetSubmoduleBranch(package.Path, branch, out string error))
             {
-                GitPackagesManifestUtility.AddEntry(package.Path, package.Url, branch);
+                installedActionStatus = error;
+                installedActionStatusType = MessageType.Error;
+            }
+            else
+            {
                 installedActionStatus = $"Branch set to {branch}.";
                 installedActionStatusType = MessageType.Info;
                 repositoryCoordinator.ClearBranchCache(package.Url);
                 RefreshInstalled();
-            }
-            else
-            {
-                if (!GitUtility.TrySetSubmoduleBranch(package.Path, branch, out string error))
-                {
-                    installedActionStatus = error;
-                    installedActionStatusType = MessageType.Error;
-                }
-                else
-                {
-                    installedActionStatus = $"Branch set to {branch}.";
-                    installedActionStatusType = MessageType.Info;
-                    repositoryCoordinator.ClearBranchCache(package.Url);
-                    RefreshInstalled();
 
-                    if (EditorUtility.DisplayDialog("Update Package", "Update to the new branch now?", "Update", "Later"))
-                    {
-                        StartAsyncOperation("Updating submodule...", "git",
-                            $"submodule update --remote --merge -- {package.Path}", () => OnUpdateComplete(package));
-                    }
-                }
+                if (EditorUtility.DisplayDialog("Update Package", "Update to the new branch now?", "Update", "Later"))
+                    StartAsyncOperation("Updating submodule...", "git",
+                        $"submodule update --init --remote --merge -- {package.Path}", () => OnUpdateComplete(package), 120000);
             }
         }
 
@@ -154,21 +131,6 @@ namespace Essentials.GitPackageManager.Editor
             {
                 string error = activeOperation?.Result?.StdErr ?? "Unknown error";
                 installedActionStatus = $"Update failed: {error}";
-                installedActionStatusType = MessageType.Error;
-            }
-        }
-
-        private void OnPushComplete()
-        {
-            if (activeOperation != null && activeOperation.Result.IsSuccess)
-            {
-                installedActionStatus = "Push completed successfully.";
-                installedActionStatusType = MessageType.Info;
-            }
-            else
-            {
-                string error = activeOperation?.Result?.StdErr ?? "Unknown error";
-                installedActionStatus = $"Push failed: {error}";
                 installedActionStatusType = MessageType.Error;
             }
         }
@@ -211,55 +173,6 @@ namespace Essentials.GitPackageManager.Editor
             gitAvailable = GitUtility.IsGitAvailable(out gitVersion, out gitError);
             ghAvailable = GitHubUtility.IsGhAvailable(out ghVersion, out ghError);
             ghAuthenticated = ghAvailable && GitHubUtility.IsAuthenticated(out ghAuthError);
-        }
-
-        private void TryInstallGit()
-        {
-            installStatus = string.Empty;
-            installStatusType = MessageType.None;
-
-            if (CliInstaller.TryInstallGit(out string output, out string error))
-            {
-                installStatus = string.IsNullOrWhiteSpace(output) ? "Git installation completed." : output.Trim();
-                installStatusType = MessageType.Info;
-            }
-            else
-            {
-                installStatus = string.IsNullOrWhiteSpace(error) ? "Git installation failed." : error.Trim();
-                installStatusType = MessageType.Error;
-            }
-
-            RefreshDependencies();
-        }
-
-        private void TryInstallGh()
-        {
-            installStatus = string.Empty;
-            installStatusType = MessageType.None;
-
-            if (CliInstaller.TryInstallGh(out _, out string error))
-            {
-                RefreshDependencies();
-
-                if (ghAvailable)
-                {
-                    installStatus = "GitHub CLI installed successfully. Run 'gh auth login' in terminal to authenticate.";
-                    installStatusType = MessageType.Info;
-                }
-                else
-                {
-                    installStatus = "GitHub CLI install finished but could not be detected. You may need to restart Unity.";
-                    installStatusType = MessageType.Warning;
-                }
-            }
-            else
-            {
-                installStatus = string.IsNullOrWhiteSpace(error) ? "GitHub CLI installation failed." : error.Trim();
-                installStatusType = MessageType.Error;
-                RefreshDependencies();
-            }
-
-            Repaint();
         }
 
         private void RefreshCurrentTab()
@@ -306,7 +219,7 @@ namespace Essentials.GitPackageManager.Editor
                 return;
             }
 
-            if (!GitUtility.TryGetAllPackages(out installedPackages, out string error))
+            if (!GitUtility.TryGetSubmodules(out installedPackages, out string error))
             {
                 installedStatus = error;
                 installedStatusType = MessageType.Error;
@@ -334,10 +247,9 @@ namespace Essentials.GitPackageManager.Editor
 
         private void UpdateDiscovery()
         {
-            bool pageChanged = discoveryCoordinator.PageChanged;
             if (discoveryCoordinator.Tick(EditorApplication.timeSinceStartup))
             {
-                if (pageChanged)
+                if (discoveryCoordinator.PageChanged)
                 {
                     MarkInstalledRepos();
                     SortRepos();
@@ -420,7 +332,6 @@ namespace Essentials.GitPackageManager.Editor
         {
             selectedRepoPackageName = GitHubUtility.DerivePackageNameSuggestion(repo.Owner, repo.Name);
             selectedRepoBranch = string.IsNullOrWhiteSpace(repo.DefaultBranch) ? "main" : repo.DefaultBranch;
-            selectedRepoSourceType = PackageSourceType.Submodule;
             addStatus = string.Empty;
         }
 
@@ -428,6 +339,9 @@ namespace Essentials.GitPackageManager.Editor
         {
             if (string.IsNullOrWhiteSpace(url))
                 return "Git URL is required.";
+
+            if (!GitUtility.IsValidRepositoryUrl(url))
+                return "Git URL contains unsupported characters.";
 
             if (!GitUtility.IsValidPackageName(packageName))
                 return PackageNameRule;
@@ -455,18 +369,6 @@ namespace Essentials.GitPackageManager.Editor
 
             packageName = GitHubUtility.DerivePackageNameSuggestion(owner, repo);
             return !string.IsNullOrEmpty(packageName);
-        }
-
-        private void TryAddPackage(string url, string branch, string packageName, PackageSourceType sourceType)
-        {
-            if (sourceType == PackageSourceType.Subtree)
-            {
-                TryAddSubtreePackage(url, branch, packageName);
-            }
-            else
-            {
-                TryAddSubmodule(url, branch, packageName);
-            }
         }
 
         private void TryAddSubmodule(string url, string branch, string packageName)
@@ -528,41 +430,6 @@ namespace Essentials.GitPackageManager.Editor
             }
 
             addStatus = $"Successfully added {packageName}. Refreshing assets...";
-            addStatusType = MessageType.Info;
-
-            AssetDatabase.Refresh(ImportAssetOptions.ForceUpdate);
-            RefreshInstalled();
-
-            if (activeAddPopup != null)
-            {
-                activeAddPopup.ClosePopup();
-                activeAddPopup = null;
-            }
-        }
-
-        private void TryAddSubtreePackage(string url, string branch, string packageName)
-        {
-            addStatus = string.Empty;
-            addStatusType = MessageType.None;
-
-            string validationError = ValidatePackageInput(url, packageName);
-            if (!string.IsNullOrWhiteSpace(validationError))
-            {
-                addStatus = validationError;
-                addStatusType = MessageType.Error;
-                return;
-            }
-
-            string path = GetPackagePath(packageName);
-
-            if (!GitUtility.TryAddSubtree(url, path, branch, out string error))
-            {
-                addStatus = error;
-                addStatusType = MessageType.Error;
-                return;
-            }
-
-            addStatus = $"Successfully added {packageName} as subtree. Refreshing assets...";
             addStatusType = MessageType.Info;
 
             AssetDatabase.Refresh(ImportAssetOptions.ForceUpdate);

@@ -33,7 +33,9 @@ namespace Essentials.GitPackageManager.Editor
 
     internal sealed class AsyncCommandHandle
     {
-        public bool IsComplete { get; private set; }
+        private int isComplete;
+
+        public bool IsComplete => Volatile.Read(ref isComplete) != 0;
         public CommandResult Result { get; private set; }
         public float Progress { get; private set; }
         public string StatusMessage { get; private set; }
@@ -83,7 +85,8 @@ namespace Essentials.GitPackageManager.Editor
             }
             finally
             {
-                IsComplete = true;
+                // Publish Result and the final status before readers observe completion.
+                Volatile.Write(ref isComplete, 1);
             }
         }
     }
@@ -170,6 +173,8 @@ namespace Essentials.GitPackageManager.Editor
                     UseShellExecute = false,
                     CreateNoWindow = true
                 };
+                startInfo.EnvironmentVariables["GIT_TERMINAL_PROMPT"] = "0";
+                startInfo.EnvironmentVariables["GCM_INTERACTIVE"] = "Never";
                 startInfo.EnvironmentVariables["PATH"] = BuildSearchPath();
 
                 using var process = new Process

@@ -1,0 +1,54 @@
+name: Sanity Checks
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sanity-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  package:
+    name: Validate UPM package
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Validate repository structure and links
+        run: python3 .github/scripts/validate_repository.py
+
+      - name: Lint Markdown
+        run: >-
+          npx --yes markdownlint-cli2@0.23.0
+          "**/*.md"
+          "#Library"
+          "#Temp"
+
+      - name: Validate GitHub Actions syntax
+        run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
+
+      - name: Inspect package archive
+        run: npm pack --dry-run
+
+      - name: Build package archive
+        run: |
+          mkdir -p artifacts
+          npm pack --pack-destination artifacts
+          sha256sum artifacts/*.tgz > artifacts/SHA256SUMS
+
+      - name: Upload package preview
+        uses: actions/upload-artifact@v7
+        with:
+          name: upm-package-${{ github.sha }}
+          path: artifacts/
+          if-no-files-found: error
+          retention-days: 7

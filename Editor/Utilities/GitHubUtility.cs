@@ -63,10 +63,11 @@ namespace Essentials.GitPackageManager.Editor
                 {
                     Name = repoJson.name,
                     Owner = repoJson.owner != null ? repoJson.owner.login : string.Empty,
-                    Url = string.IsNullOrWhiteSpace(repoJson.url) ? repoJson.html_url : repoJson.url,
+                    Url = GetCloneUrl(repoJson),
                     DefaultBranch = repoJson.defaultBranchRef != null ? repoJson.defaultBranchRef.name : repoJson.default_branch,
                     IsPrivate = repoJson.isPrivate || repoJson.@private,
-                    Description = repoJson.description
+                    Description = repoJson.description,
+                    UpdatedAt = repoJson.updated_at
                 });
             }
 
@@ -93,14 +94,31 @@ namespace Essentials.GitPackageManager.Editor
                 {
                     Name = repoJson.name,
                     Owner = repoJson.owner != null ? repoJson.owner.login : string.Empty,
-                    Url = string.IsNullOrWhiteSpace(repoJson.url) ? repoJson.html_url : repoJson.url,
+                    Url = GetCloneUrl(repoJson),
                     DefaultBranch = repoJson.default_branch,
                     IsPrivate = repoJson.@private,
-                    Description = repoJson.description
+                    Description = repoJson.description,
+                    UpdatedAt = repoJson.updated_at
                 });
             }
 
             return repos;
+        }
+
+        internal static int ParseSearchTotalCount(string json)
+        {
+            if (string.IsNullOrWhiteSpace(json))
+                return 0;
+
+            try
+            {
+                var wrapper = JsonUtility.FromJson<SearchResultWrapper>(json);
+                return wrapper?.total_count ?? 0;
+            }
+            catch
+            {
+                return 0;
+            }
         }
 
         internal static string BuildRepoListError(string message, CommandResult result)
@@ -198,6 +216,16 @@ namespace Essentials.GitPackageManager.Editor
             return combined.Contains("not found") || combined.Contains("404");
         }
 
+        private static string GetCloneUrl(RepoJson repo)
+        {
+            if (!string.IsNullOrWhiteSpace(repo.clone_url))
+                return repo.clone_url;
+
+            // Git can clone a repository's normal GitHub page URL. The REST `url`
+            // field is deliberately not used because it points at api.github.com.
+            return repo.html_url ?? string.Empty;
+        }
+
         private static string BuildError(string message, CommandResult result)
         {
             string detail = string.IsNullOrWhiteSpace(result.StdErr) ? result.StdOut : result.StdErr;
@@ -224,11 +252,13 @@ namespace Essentials.GitPackageManager.Editor
             public OwnerJson owner;
             public string url;
             public string html_url;
+            public string clone_url;
             public DefaultBranchRefJson defaultBranchRef;
             public bool isPrivate;
             public bool @private;
             public string default_branch;
             public string description;
+            public string updated_at;
         }
 
         [Serializable]

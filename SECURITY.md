@@ -2,58 +2,71 @@
 
 ## Supported Versions
 
-| Version | Supported          |
-| ------- | ------------------ |
-| 0.1.x   | :white_check_mark: |
+Security fixes are applied to the latest released major version and the current
+`main` branch.
 
-## Security Considerations
+| Version | Supported |
+| --- | --- |
+| 1.x | Yes |
+| 0.x | No |
 
-### Command Execution
+## Report a Vulnerability
 
-This package executes CLI commands (`git`, `gh`) using `System.Diagnostics.Process`. The following security measures are in place:
+Do **not** open a public issue or discussion.
 
-- Commands are executed with `UseShellExecute = false` to prevent shell injection
-- Arguments are constructed programmatically, not from raw user input
-- The package only executes known, whitelisted commands (`git`, `gh`)
+Email [martin.calander@gmail.com](mailto:martin.calander@gmail.com) with:
 
-### Authentication
+- a description and expected impact;
+- affected versions or commits;
+- reproducible steps or a minimal proof of concept;
+- relevant operating system, Unity, Git, and GitHub CLI versions;
+- suggested remediation, if available.
 
-- This package does not store any credentials
-- GitHub authentication is handled entirely by the GitHub CLI (`gh`)
-- No tokens or passwords are transmitted or stored by this package
+Do not include real credentials or third-party private repository data. Encrypt
+sensitive attachments before sending and request a secure exchange method when
+needed.
 
-### Network Access
+You can expect acknowledgment within 72 hours and an initial assessment within
+seven days. Disclosure timing will be coordinated around a fix and release.
 
-- Repository discovery uses GitHub CLI, which handles all authentication
-- Package validation uses GitHub API via `gh api` command
-- No direct network requests are made by this package
+## Security Model
 
-### File System Access
+### Command execution
 
-- The package reads and writes only within the Unity project directory
-- Submodules are installed under `Packages/` following Unity conventions
-- The package reads `.gitmodules` and `package.json` files
+The package launches `git` and optional `gh` processes with
+`UseShellExecute = false`. It does not execute user input through a shell.
 
-## Reporting a Vulnerability
+- repository URLs, branch names, package names, and managed paths are validated;
+- mutations are restricted to direct `Packages/com.author.package` paths;
+- stdout and stderr are redirected and drained concurrently;
+- commands have bounded timeouts;
+- interactive credential prompts are disabled;
+- the editor never invokes a system package manager or downloaded install
+  script.
 
-If you discover a security vulnerability:
+### Credentials
 
-1. **Do not** open a public issue
-2. Email the maintainer directly at martin.calander@gmail.com
-3. Include:
-   - Description of the vulnerability
-   - Steps to reproduce
-   - Potential impact
-   - Suggested fix (if any)
+The package does not collect, persist, log, or forward tokens, passwords, SSH
+keys, or credential-helper output. Authentication belongs to Git, the platform's
+credential manager, SSH agent, and GitHub CLI.
 
-You can expect:
-- Acknowledgment within 48 hours
-- Status update within 7 days
-- Credit in the fix (unless you prefer anonymity)
+### Network access
 
-## Best Practices for Users
+- Git performs clone, fetch, remote branch, and submodule operations.
+- GitHub CLI performs authenticated repository discovery and root
+  `package.json` checks.
+- The package does not contain its own HTTP client or telemetry.
 
-1. **Keep dependencies updated**: Ensure Git and GitHub CLI are up to date
-2. **Review repositories**: Before installing packages, review the source code
-3. **Use trusted sources**: Only install packages from repositories you trust
-4. **Private repositories**: Be aware that collaborators need access to private repo submodules
+### Filesystem access
+
+The package reads project `.gitmodules` and package metadata. Mutating package
+operations are constrained to validated direct children of `Packages/`.
+
+## User Responsibilities
+
+- Install Git and GitHub CLI from trusted official sources.
+- Review repository URLs before adding packages.
+- Apply least-privilege access to private repositories.
+- Protect developer and CI credentials outside Unity.
+- Review Git changes before committing submodule updates or removals.
+- Keep Unity, Git, GitHub CLI, and this package updated.

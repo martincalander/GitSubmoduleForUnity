@@ -14,8 +14,7 @@ namespace Essentials.GitPackageManager.Editor
             if (EditorGUI.DropdownButton(addButtonRect, new GUIContent("+"), FocusType.Passive, EditorStyles.toolbarDropDown))
             {
                 var menu = new GenericMenu();
-                menu.AddItem(new GUIContent("Add Submodule..."), false, () => ShowAddFromUrlPopup(addButtonRect, PackageSourceType.Submodule));
-                menu.AddItem(new GUIContent("Add Subtree..."), false, () => ShowAddFromUrlPopup(addButtonRect, PackageSourceType.Subtree));
+                menu.AddItem(new GUIContent("Add Submodule..."), false, () => ShowAddFromUrlPopup(addButtonRect));
                 menu.DropDown(addButtonRect);
             }
 
@@ -81,6 +80,16 @@ namespace Essentials.GitPackageManager.Editor
                     menu.AddItem(new GUIContent("Private Only"), currentFilter == FilterOption.PrivateOnly, () => { currentFilter = FilterOption.PrivateOnly; selectedRepoIndex = -1; Repaint(); });
                     menu.DropDown(filterRect);
                 }
+
+                string sortLabel = currentSort == SortOption.Name ? "Sort: Name" : "Sort: Updated";
+                Rect sortRect = GUILayoutUtility.GetRect(new GUIContent(sortLabel), EditorStyles.toolbarDropDown, GUILayout.Width(100));
+                if (EditorGUI.DropdownButton(sortRect, new GUIContent(sortLabel), FocusType.Passive, EditorStyles.toolbarDropDown))
+                {
+                    var menu = new GenericMenu();
+                    menu.AddItem(new GUIContent("Name"), currentSort == SortOption.Name, () => { currentSort = SortOption.Name; SortRepos(); });
+                    menu.AddItem(new GUIContent("Recently Updated"), currentSort == SortOption.RecentlyUpdated, () => { currentSort = SortOption.RecentlyUpdated; SortRepos(); });
+                    menu.DropDown(sortRect);
+                }
             }
 
             GUILayout.FlexibleSpace();
@@ -90,6 +99,9 @@ namespace Essentials.GitPackageManager.Editor
             {
                 var menu = new GenericMenu();
                 menu.AddItem(new GUIContent("Refresh"), false, RefreshCurrentTab);
+                menu.AddSeparator("");
+                menu.AddDisabledItem(new GUIContent(string.IsNullOrWhiteSpace(gitVersion) ? "Git unavailable" : FirstLine(gitVersion)));
+                menu.AddDisabledItem(new GUIContent(!ghAvailable ? "GitHub CLI not installed" : FirstLine(ghVersion)));
                 menu.AddSeparator("");
                 menu.AddItem(new GUIContent("Reset Window"), false, () =>
                 {
@@ -110,7 +122,6 @@ namespace Essentials.GitPackageManager.Editor
         {
             return currentFilter switch
             {
-                FilterOption.ValidPackagesOnly => "Filter: All",
                 FilterOption.PublicOnly => "Filter: Public",
                 FilterOption.PrivateOnly => "Filter: Private",
                 _ => "Filter: All"
@@ -125,9 +136,17 @@ namespace Essentials.GitPackageManager.Editor
 
             if (currentSort == SortOption.Name)
                 repos.Sort((a, b) => string.Compare(a.Name, b.Name, StringComparison.OrdinalIgnoreCase));
+            else
+                repos.Sort((a, b) => string.Compare(b.UpdatedAt, a.UpdatedAt, StringComparison.Ordinal));
 
             selectedRepoIndex = -1;
             Repaint();
+        }
+
+        private static string FirstLine(string value)
+        {
+            int lineEnd = value.IndexOfAny(new[] { '\r', '\n' });
+            return lineEnd < 0 ? value : value.Substring(0, lineEnd);
         }
 
         private bool DrawDependencyGate()
@@ -135,7 +154,7 @@ namespace Essentials.GitPackageManager.Editor
             if (!gitAvailable)
             {
                 EditorGUILayout.Space(20);
-                DrawDependencyCard("Git", gitError, ToolKind.Git, TryInstallGit);
+                DrawDependencyCard("Git", gitError, ToolKind.Git);
                 if (!string.IsNullOrWhiteSpace(installStatus))
                     EditorGUILayout.HelpBox(installStatus, installStatusType);
                 return false;
@@ -161,7 +180,7 @@ namespace Essentials.GitPackageManager.Editor
             return true;
         }
 
-        private void DrawDependencyCard(string title, string error, ToolKind tool, Action installAction)
+        private void DrawDependencyCard(string title, string error, ToolKind tool)
         {
             EditorGUILayout.BeginVertical(EditorStyles.helpBox);
             EditorGUILayout.LabelField($"{title} is required.", EditorStyles.boldLabel);
@@ -175,75 +194,40 @@ namespace Essentials.GitPackageManager.Editor
                 EditorGUILayout.SelectableLabel(hint, EditorStyles.textField, GUILayout.Height(EditorGUIUtility.singleLineHeight));
             }
 
-            if (GUILayout.Button($"Install {title}") &&
-                EditorUtility.DisplayDialog($"Install {title}", $"Allow this tool to install {title} using your system package manager?", "Install", "Cancel"))
+            EditorGUILayout.BeginHorizontal();
+            if (GUILayout.Button("Copy install command", GUILayout.Height(22)))
             {
-                installAction?.Invoke();
+                EditorGUIUtility.systemCopyBuffer = hint;
+                installStatus = $"{title} install command copied to the clipboard.";
+                installStatusType = MessageType.Info;
             }
+
+            if (GUILayout.Button("Open download page", GUILayout.Height(22)))
+                Application.OpenURL(CliInstaller.GetInstallUrl(tool));
+            EditorGUILayout.EndHorizontal();
 
             EditorGUILayout.EndVertical();
         }
 
         private void DrawGhInstallCard()
         {
-            bool isMac = Application.platform == RuntimePlatform.OSXEditor;
-            bool needsBrew = isMac && !CliInstaller.IsBrewAvailable();
-
             EditorGUILayout.BeginVertical(EditorStyles.helpBox);
             EditorGUILayout.LabelField("GitHub CLI is not installed.", EditorStyles.boldLabel);
             EditorGUILayout.LabelField("Install it to discover your repositories. You can still add packages manually via the + button.", EditorStyles.wordWrappedLabel);
-
-            if (needsBrew)
+            string hint = CliInstaller.GetInstallHint(ToolKind.GitHubCli);
+            EditorGUILayout.SelectableLabel(hint, EditorStyles.textField, GUILayout.Height(EditorGUIUtility.singleLineHeight));
+            EditorGUILayout.BeginHorizontal();
+            if (GUILayout.Button("Copy install command", GUILayout.Height(22)))
             {
-                EditorGUILayout.Space(4);
-                EditorGUILayout.LabelField("Homebrew is required to install GitHub CLI on macOS.", Styles.SubtitleLabel);
-
-                EditorGUILayout.BeginHorizontal();
-                if (GUILayout.Button("Install Homebrew", GUILayout.Height(22)) &&
-                    EditorUtility.DisplayDialog("Install Homebrew", "This will download and install Homebrew from https://brew.sh/\n\nProceed?", "Install", "Cancel"))
-                {
-                    installStatus = "Installing Homebrew... this may take a minute.";
-                    installStatusType = MessageType.Info;
-                    Repaint();
-
-                    if (CliInstaller.TryInstallBrew(out string brewOut, out string brewErr))
-                    {
-                        installStatus = "Homebrew installed. You can now install GitHub CLI.";
-                        installStatusType = MessageType.Info;
-                    }
-                    else
-                    {
-                        string detail = string.IsNullOrWhiteSpace(brewErr) ? brewOut : brewErr;
-                        installStatus = "Homebrew installation failed. Install manually from https://brew.sh/\n" +
-                            (string.IsNullOrWhiteSpace(detail) ? string.Empty : detail.Trim());
-                        installStatusType = MessageType.Error;
-                    }
-                }
-
-                if (GUILayout.Button("Copy brew install command", GUILayout.Height(22)))
-                {
-                    EditorGUIUtility.systemCopyBuffer = "/bin/bash -c \"$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)\"";
-                    installStatus = "Homebrew install command copied to clipboard. Paste in Terminal.";
-                    installStatusType = MessageType.Info;
-                }
-
-                GUILayout.FlexibleSpace();
-                EditorGUILayout.EndHorizontal();
+                EditorGUIUtility.systemCopyBuffer = hint;
+                installStatus = "GitHub CLI install command copied to the clipboard.";
+                installStatusType = MessageType.Info;
             }
-            else
-            {
-                EditorGUILayout.BeginHorizontal();
-                if (GUILayout.Button("Install GitHub CLI", GUILayout.Height(22)) &&
-                    EditorUtility.DisplayDialog("Install GitHub CLI",
-                        "Allow this tool to install GitHub CLI using your system package manager?\n\n" + CliInstaller.GetInstallHint(ToolKind.GitHubCli),
-                        "Install", "Cancel"))
-                {
-                    TryInstallGh();
-                }
 
-                GUILayout.FlexibleSpace();
-                EditorGUILayout.EndHorizontal();
-            }
+            if (GUILayout.Button("Open install guide", GUILayout.Height(22)))
+                Application.OpenURL(CliInstaller.GetInstallUrl(ToolKind.GitHubCli));
+            GUILayout.FlexibleSpace();
+            EditorGUILayout.EndHorizontal();
 
             EditorGUILayout.EndVertical();
         }

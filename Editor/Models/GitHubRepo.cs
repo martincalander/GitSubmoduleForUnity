@@ -8,8 +8,10 @@ namespace Essentials.GitPackageManager.Editor
         public string DefaultBranch;
         public bool IsPrivate;
         public string Description;
+        public string UpdatedAt;
         public bool IsInstalled;
         public bool HasPackageJson;
         public bool PackageJsonChecked;
+        public string PackageJsonError;
     }
 }

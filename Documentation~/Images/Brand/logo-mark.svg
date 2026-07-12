@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-labelledby="title description">
+  <title id="title">Git Package Manager logo</title>
+  <desc id="description">An original package outline crossed by a three-node repository branch.</desc>
+  <rect width="512" height="512" rx="112" fill="#0B1220"/>
+  <path d="M92 154 256 68l164 86v204l-164 86-164-86Z" fill="none" stroke="#E5E7EB" stroke-width="30" stroke-linejoin="round"/>
+  <path d="m92 154 164 90 164-90M256 244v200" fill="none" stroke="#E5E7EB" stroke-width="30" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M256 112v176m0 0 98 72" fill="none" stroke="#F05A3C" stroke-width="34" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="256" cy="112" r="31" fill="#F05A3C"/>
+  <circle cx="256" cy="288" r="31" fill="#F05A3C"/>
+  <circle cx="354" cy="360" r="31" fill="#F05A3C"/>
+</svg>

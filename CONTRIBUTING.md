@@ -1,99 +1,130 @@
-# Contributing to Submodule Helper
+# Contributing to Git Package Manager
 
-Thank you for your interest in contributing to Submodule Helper! This document provides guidelines and information for contributors.
+Thank you for helping make Git Package Manager more reliable for Unity teams.
+Contributions are welcome under the [MIT License](LICENSE.md) and must follow the
+[Code of Conduct](CODE_OF_CONDUCT.md).
 
-## Code of Conduct
+## Good Contributions
 
-Please be respectful and constructive in all interactions. We're all here to build something useful together.
+The project especially values:
 
-## How to Contribute
+- reproducible Windows, macOS, or Linux fixes;
+- compatibility improvements across supported Unity versions;
+- failure handling and data-loss prevention;
+- focused tests for Git and GitHub CLI edge cases;
+- accessibility and native-editor UI improvements;
+- concise documentation and diagnostics.
 
-### Reporting Bugs
+Discuss large features or architecture changes in an issue before investing in
+an implementation. The project intentionally keeps a narrow submodule-only
+scope.
 
-1. Check if the bug has already been reported in the Issues section
-2. If not, create a new issue with:
-   - A clear, descriptive title
-   - Steps to reproduce the problem
-   - Expected behavior vs actual behavior
-   - Unity version and OS information
-   - Any relevant error messages or logs
+## Development Prerequisites
 
-### Suggesting Features
+- Unity 2021.3 or newer;
+- Git CLI;
+- GitHub CLI for discovery testing;
+- Python 3 for repository sanity checks.
 
-1. Check if the feature has already been suggested
-2. Create a new issue with the "enhancement" label
-3. Describe the feature and why it would be useful
-4. Include any relevant mockups or examples
+## Set Up a Test Project
 
-### Pull Requests
+Add a fork or working clone below a Unity project's `Packages/` directory:
 
-1. Fork the repository
-2. Create a feature branch (`git checkout -b feature/amazing-feature`)
-3. Make your changes
-4. Test thoroughly in Unity Editor
-5. Commit with clear, descriptive messages
-6. Push to your fork
-7. Open a Pull Request
-
-## Development Setup
-
-### Prerequisites
-
-- Unity 2021.3 or later
-- Git
-- GitHub CLI (for testing discovery features)
-
-### Getting Started
-
-1. Clone the repository into a Unity project's `Packages` folder:
-   ```bash
-   cd YourUnityProject/Packages
-   git clone https://github.com/YourUsername/submodulehelper.git com.essentials.gitpackagemanager
-   ```
-
-2. Open the project in Unity
-
-3. Access the tool via **Window > Package Management > Git Submodules**
-
-## Code Style
-
-- Follow C# naming conventions
-- Use meaningful variable and method names
-- Add XML documentation for public APIs
-- Keep methods focused and concise
-- Use `internal` for non-public APIs within the package
-
-## Architecture Overview
-
+```bash
+git clone https://github.com/<your-user>/GitSubmoduleForUnity.git \
+  Packages/com.essentials.gitpackagemanager
 ```
+
+Open the Unity project, then open **Window > Package Management > Git Package
+Manager**.
+
+Do not edit Unity-generated solution or project files. Let Unity import new
+package files and generate `.meta` files.
+
+## Architecture
+
+```text
 Editor/
-├── SubmoduleWindow.cs      # Main EditorWindow UI
-├── MenuPath.cs             # Menu item definitions
+├── PackageManagerWindow.*      editor UI and actions
+├── DiscoveryCoordinator.cs    paged GitHub state
+├── RepositoryCoordinator.cs   lazy branch loading
+├── Models/                    internal data objects
 └── Utilities/
-    ├── CliCommandRunner.cs # Async CLI execution
-    ├── CliInstaller.cs     # Dependency installation
-    ├── GitUtility.cs       # Git submodule operations
-    └── GitHubUtility.cs    # GitHub API interactions
+    ├── CliCommandRunner.cs    bounded process execution
+    ├── CliInstaller.cs        install guidance
+    ├── GitUtility.cs          Git submodule operations
+    └── GitHubUtility.cs       GitHub CLI operations
 ```
 
-### Key Components
+Read [Documentation~/architecture.md](Documentation~/architecture.md) before
+changing command execution, package mutation, threading, discovery, or lifecycle
+behavior.
 
-- **SubmoduleWindow**: Main UI, handles all user interactions
-- **CliCommandRunner**: Executes CLI commands with async support
-- **GitUtility**: Wraps git submodule commands
-- **GitHubUtility**: Wraps GitHub CLI commands
+## Engineering Rules
 
-## Testing
+- Keep runtime code out of the package; this is an editor-only tool.
+- Preserve Windows, macOS, and Linux behavior.
+- Never evaluate user input through a shell.
+- Keep mutations restricted to direct `Packages/com.author.package` paths.
+- Do not store credentials or invoke system installers.
+- Avoid implicit network or repository mutations during editor startup.
+- Prefer explicit state, actionable errors, and rollback over optimistic UI.
+- Keep public APIs minimal; most implementation types should remain `internal`.
+- Add tests for parsing, state transitions, validation, and regressions.
 
-Currently, testing is manual. When submitting changes:
+## Test Before Opening a Pull Request
 
-1. Test the "In Project" tab with existing submodules
-2. Test the "GitHub" tab with your authenticated account
-3. Test adding packages via URL and from GitHub
-4. Test on your target platform (macOS/Windows/Linux)
+Run the license-free repository checks:
 
-## Questions?
+```bash
+python3 .github/scripts/validate_repository.py
+npx --yes markdownlint-cli2@0.23.0 "**/*.md" "#Library" "#Temp"
+npm pack --dry-run
+```
 
-Feel free to open an issue for any questions about contributing.
+In Unity:
 
-Thank you for helping improve Submodule Helper!
+1. verify the package compiles without warnings or errors;
+2. run `GitPackageManager.Editor.Tests` in EditMode;
+3. exercise the changed workflow manually;
+4. inspect the Console for new warnings or errors;
+5. test the relevant CLI-missing, authentication, or failure state;
+6. test on every operating system affected by the change when possible.
+
+If a platform or Unity version could not be tested, state that clearly in the
+pull request.
+
+## Pull Request Checklist
+
+- Keep one logical change per pull request.
+- Use a descriptive title and explain user-visible behavior.
+- Link the related issue when one exists.
+- Include tests or explain why the change is documentation-only.
+- Update documentation and `CHANGELOG.md` for user-visible changes.
+- Include before/after images for visual changes.
+- Do not commit secrets, credentials, generated Unity project files, or build
+  outputs.
+- Confirm the contribution may be distributed under MIT.
+
+## Commit Style
+
+Use short imperative summaries, for example:
+
+```text
+Prevent stale discovery results after owner changes
+Document private submodule authentication
+Add Windows path quoting regression test
+```
+
+Conventional Commits are welcome but not required.
+
+## Reporting Security Problems
+
+Do not open a public issue for a vulnerability. Follow
+[SECURITY.md](SECURITY.md).
+
+## Attribution
+
+Git Package Manager was created by Martin Calander. Contributors retain
+authorship of their contributions; the combined project is distributed under
+the [MIT License](LICENSE.md).

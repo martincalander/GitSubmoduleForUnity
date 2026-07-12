@@ -2,23 +2,31 @@
   "name": "com.essentials.gitpackagemanager",
   "version": "1.0.0",
   "displayName": "Git Package Manager",
-  "description": "Unity Editor tooling for discovering, adding, updating, and removing Git submodule and subtree packages.",
+  "description": "Reliable, cross-platform Unity Editor tooling for discovering and managing Git submodule packages under Packages/.",
   "unity": "2021.3",
   "unityRelease": "0b1",
-  "documentationUrl": "https://github.com/EssentialsForUnity/com.essentials.gitpackagemanager/blob/main/README.md",
-  "changelogUrl": "https://github.com/EssentialsForUnity/com.essentials.gitpackagemanager/blob/main/CHANGELOG.md",
-  "licensesUrl": "https://github.com/EssentialsForUnity/com.essentials.gitpackagemanager/blob/main/LICENSE.md",
-  "license": "SEE LICENSE IN LICENSE.md",
+  "documentationUrl": "https://github.com/martincalander/GitSubmoduleForUnity/blob/main/Documentation~/index.md",
+  "changelogUrl": "https://github.com/martincalander/GitSubmoduleForUnity/blob/main/CHANGELOG.md",
+  "licensesUrl": "https://github.com/martincalander/GitSubmoduleForUnity/blob/main/LICENSE.md",
+  "license": "MIT",
   "keywords": [
     "GitHub",
+    "Git",
     "Submodule",
-    "Subtree",
+    "Editor",
     "Package Manager"
   ],
   "author": {
-    "name": "Essentials",
+    "name": "Martin Calander",
     "url": "https://martincalander.com",
     "email": "martin.calander@gmail.com"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/martincalander/GitSubmoduleForUnity.git"
+  },
+  "bugs": {
+    "url": "https://github.com/martincalander/GitSubmoduleForUnity/issues"
   },
   "dependencies": {
     "com.unity.modules.imgui": "1.0.0"

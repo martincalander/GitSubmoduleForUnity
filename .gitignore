@@ -81,3 +81,8 @@ node_modules/
 /.claude/
 /.claude/settings.local.json
 ### END SHAREDGITIGNORE - PROJECT RULES BELOW ###
+
+# Unity's conventional documentation folder ends with `~`. Explicitly include
+# it even when a developer's global ignore file treats editor backup files as `*~`.
+!Documentation~/
+!Documentation~/**
