@@ -6,9 +6,53 @@ using UnityEngine;
 
 namespace MartinCalander.GitPackageManager.Editor
 {
+    internal sealed class DeferredRepositoryMutationQueue
+    {
+        private static int globalPendingCount;
+        private Action pendingMutation;
+
+        internal bool HasPending => pendingMutation != null;
+        internal static bool HasAnyPending => Volatile.Read(ref globalPendingCount) != 0;
+        internal string Label { get; private set; } = string.Empty;
+
+        internal bool TryEnqueue(string label, Action mutation)
+        {
+            if (mutation == null || pendingMutation != null ||
+                Interlocked.CompareExchange(ref globalPendingCount, 1, 0) != 0)
+                return false;
+
+            Label = string.IsNullOrWhiteSpace(label)
+                ? "Repository operation"
+                : label.Trim();
+            pendingMutation = mutation;
+            return true;
+        }
+
+        internal bool TryDequeueWhenReady(bool canStart, out Action mutation)
+        {
+            mutation = null;
+            if (!canStart || pendingMutation == null)
+                return false;
+
+            mutation = pendingMutation;
+            pendingMutation = null;
+            Label = string.Empty;
+            Interlocked.Exchange(ref globalPendingCount, 0);
+            return true;
+        }
+
+        internal void Clear()
+        {
+            if (pendingMutation != null)
+                Interlocked.Exchange(ref globalPendingCount, 0);
+            pendingMutation = null;
+            Label = string.Empty;
+        }
+    }
+
     public partial class GitPackageManagerWindow : EditorWindow
     {
-        private enum Tab
+        internal enum Tab
         {
             Installed,
             Discover
@@ -20,16 +64,22 @@ namespace MartinCalander.GitPackageManager.Editor
             RecentlyUpdated
         }
 
-        private enum FilterOption
+        internal enum FilterOption
         {
             All,
             PublicOnly,
-            PrivateOnly
+            PrivateOnly,
+            ValidPackagesOnly
         }
 
-        private const string PackageNameRule = "Package name must follow com.author.package (lowercase).";
+        private const string PackageNameRule =
+            "Use a lowercase reverse-domain UPM name (for example com.company.package); hyphens and underscores are supported.";
+        internal const string CurrentPackageName = "com.martincalander.gitpackagemanager";
+        internal const string CurrentPackagePath = "Packages/" + CurrentPackageName;
+        private const int BackgroundLoadDrainTimeoutMs = 2000;
         private const float ListPaneWidth = 320f;
-        private const double AutoRefreshIntervalSeconds = 300.0;
+
+        private static int activeBackgroundLoadWorkers;
 
         private readonly RepositoryCoordinator repositoryCoordinator = new();
         private readonly DiscoveryCoordinator discoveryCoordinator = new();
@@ -68,8 +118,12 @@ namespace MartinCalander.GitPackageManager.Editor
         private MessageType addStatusType = MessageType.None;
 
         private string searchFilter = string.Empty;
+        private string installedSearchFilter = string.Empty;
+        private string discoverSearchFilter = string.Empty;
         private string selectedRepoPackageName = string.Empty;
         private string selectedRepoBranch = string.Empty;
+        private GitHubRepo selectedRepoManifestDefaultsSource;
+        private bool selectedRepoDeclaredNameApplied;
 
         private SortOption currentSort = SortOption.Name;
         private FilterOption currentFilter = FilterOption.All;
@@ -77,42 +131,102 @@ namespace MartinCalander.GitPackageManager.Editor
         private double lastInstalledRefreshTime;
         private DateTime lastRefreshDateTime;
 
-        private int lastInstalledIndex = -1;
         private string installedBranchInput = string.Empty;
         private string installedActionStatus = string.Empty;
         private MessageType installedActionStatusType = MessageType.None;
 
-        private AsyncCommandHandle activeOperation;
-        private string activeOperationLabel = string.Empty;
-        private bool activeOperationPollingRegistered;
-        private bool activeOperationSuppressesAutoRefresh;
-        private AsyncCommandHandle cliInstallOperation;
-        private CliInstallPlan activeCliInstallPlan;
-        private ToolKind activeCliInstallTool;
+        private static bool cliInstallInProgress;
+        private static CliInstallPlan activeCliInstallPlan;
+        private static ToolKind activeCliInstallTool;
+
+        private readonly DeferredRepositoryMutationQueue deferredRepositoryMutation = new();
+        private bool isWindowEnabled;
+
+        internal static bool IsRepositoryOperationBusyState(
+            bool operationExecutionBusy,
+            bool deferredMutationPending)
+        {
+            return operationExecutionBusy || deferredMutationPending;
+        }
+
+        internal static bool IsGitHubInteractionBusyState(
+            bool repositoryOperationBusy,
+            bool authenticationInProgress)
+        {
+            return repositoryOperationBusy || authenticationInProgress;
+        }
+
+        internal static bool CanEnterDeferredWindowAction(
+            UnityEngine.Object owner,
+            bool windowEnabled)
+        {
+            return owner != null && windowEnabled;
+        }
+
+        private bool IsRepositoryOperationExecutionBusy =>
+            GitOperationService.IsBusy || cliInstallInProgress;
+
+        private bool IsRepositoryOperationBusy =>
+            IsRepositoryOperationBusyState(
+                IsRepositoryOperationExecutionBusy,
+                DeferredRepositoryMutationQueue.HasAnyPending);
+
+        private bool IsGitHubInteractionBusy =>
+            IsGitHubInteractionBusyState(
+                IsRepositoryOperationBusy,
+                IsSharedGitHubAuthenticationBlocked);
 
         private AddFromUrlPopup activeAddPopup;
 
+        private volatile InitialLoadResult pendingInitialGitStageResult;
         private volatile InitialLoadResult pendingLoadResult;
+        private CancellationTokenSource initialLoadCancellationSource;
+        private Thread initialLoadThread;
         private bool isInitialLoading;
+        private bool initialGitStageReady;
         private int initialLoadGeneration;
+        private bool dependencyCheckRequested;
+        private bool dependencyCheckIncludesGitHub;
+        private bool backgroundLoadDeferred;
+        private volatile InstalledLoadResult pendingInstalledLoadResult;
+        private CancellationTokenSource installedLoadCancellationSource;
+        private Thread installedLoadThread;
+        private bool isInstalledLoading;
+        private int installedLoadGeneration;
+        private double nextProgressRepaintTime;
 
         private void OnEnable()
         {
-            // Rebuild the polling registration after reloads or window re-enable.
-            EditorApplication.update -= UpdateActiveOperation;
-            activeOperationPollingRegistered = false;
+            isWindowEnabled = true;
             ApplyThemeIcon();
+            ApplyStartupPreferences();
+            InitializeWelcomeState();
             minSize = new Vector2(720f, 420f);
             // Cache ProjectRoot on main thread before background work
             _ = GitUtility.ProjectRoot;
+            EnsureGitHubAuthenticationSafetyInitialized();
+            discoveryCoordinator.SetValidPackageFilterEnabled(
+                currentFilter == FilterOption.ValidPackagesOnly);
 
-            isInitialLoading = true;
-            pendingLoadResult = null;
-            int generation = Interlocked.Increment(ref initialLoadGeneration);
-            new Thread(() => RunInitialLoad(generation)) { IsBackground = true }.Start();
+            BeginBackgroundLoad(false);
 
-            if (activeOperation != null)
-                RegisterActiveOperationPolling();
+            if (!string.IsNullOrWhiteSpace(GitOperationService.RecoveryWarning))
+            {
+                operationStatus = GitOperationService.RecoveryWarning;
+                operationStatusType = MessageType.Warning;
+            }
+        }
+
+        private void ApplyStartupPreferences()
+        {
+            GitPackageManagerUserSettings settings = GitPackageManagerUserSettings.instance;
+            currentTab = settings.StartupTab == GitPackageManagerStartupTab.GitHub
+                ? Tab.Discover
+                : Tab.Installed;
+            currentFilter = settings.DefaultGitHubFilter ==
+                GitPackageManagerDefaultGitHubFilter.ValidUpmPackages
+                ? FilterOption.ValidPackagesOnly
+                : FilterOption.All;
         }
 
         private void OnFocus()
@@ -126,14 +240,32 @@ namespace MartinCalander.GitPackageManager.Editor
                 ? "GitEditorWindowIcon.png"
                 : "GitEditorWindowIconLight.png";
             var icon = AssetDatabase.LoadAssetAtPath<Texture2D>(
-                $"Packages/com.martincalander.gitpackagemanager/Editor/{iconFileName}");
+                $"{CurrentPackagePath}/Editor/{iconFileName}");
             titleContent = new GUIContent("Git Package Manager", icon);
         }
 
         private void OnDisable()
         {
+            isWindowEnabled = false;
+            deferredRepositoryMutation.Clear();
+            ReleaseGitHubAuthentication();
+            _ = CancelAndDrainBackgroundLoad(initialLoadCancellationSource, initialLoadThread);
+            _ = CancelAndDrainBackgroundLoad(installedLoadCancellationSource, installedLoadThread);
+            initialLoadCancellationSource = null;
+            initialLoadThread = null;
+            installedLoadCancellationSource = null;
+            installedLoadThread = null;
             Interlocked.Increment(ref initialLoadGeneration);
+            Interlocked.Increment(ref installedLoadGeneration);
+            pendingInitialGitStageResult = null;
             pendingLoadResult = null;
+            pendingInstalledLoadResult = null;
+            isInitialLoading = false;
+            initialGitStageReady = false;
+            isInstalledLoading = false;
+            dependencyCheckRequested = false;
+            dependencyCheckIncludesGitHub = false;
+            backgroundLoadDeferred = false;
             if (activeAddPopup != null)
             {
                 activeAddPopup.ClosePopup();
@@ -142,43 +274,105 @@ namespace MartinCalander.GitPackageManager.Editor
 
             repositoryCoordinator.Dispose();
             discoveryCoordinator.Dispose();
-            if (activeOperation == null)
-                UnregisterActiveOperationPolling();
         }
 
         private void Update()
         {
+            UpdateGitHubAuthentication();
+            UpdateDeferredRepositoryMutation();
+
+            if (backgroundLoadDeferred &&
+                !IsGitHubInteractionBusy &&
+                !AreBackgroundLoadsDraining &&
+                !isInitialLoading &&
+                !isInstalledLoading &&
+                string.IsNullOrWhiteSpace(GitOperationService.RecoveryWarning))
+            {
+                backgroundLoadDeferred = false;
+                BeginBackgroundLoad(dependencyCheckRequested);
+            }
+
             if (isInitialLoading)
             {
-                var result = pendingLoadResult;
-                if (result != null)
+                InitialLoadResult gitStageResult = pendingInitialGitStageResult;
+                if (gitStageResult != null)
                 {
-                    ApplyLoadResult(result);
+                    pendingInitialGitStageResult = null;
+                    if (ApplyLoadResult(gitStageResult))
+                        initialGitStageReady = true;
+                }
+
+                InitialLoadResult finalResult = pendingLoadResult;
+                if (finalResult != null)
+                {
                     pendingLoadResult = null;
+                    if (ApplyLoadResult(finalResult))
+                        initialGitStageReady = true;
                     isInitialLoading = false;
                 }
 
-                Repaint();
-                return;
+                if (isInitialLoading)
+                {
+                    RepaintProgress();
+                    return;
+                }
             }
 
             UpdateDiscovery();
             UpdateBranchFetching();
-            UpdateCliInstallOperation();
+            UpdateInstalledRefresh();
             activeAddPopup?.RepaintPopup();
+            if (IsGitHubInteractionBusy ||
+                isInstalledLoading ||
+                discoveryCoordinator.IsLoading ||
+                discoveryCoordinator.IsCheckingPackageManifest ||
+                discoveryCoordinator.IsValidatingPackageManifests ||
+                IsGhAuthenticationInProgress)
+            {
+                RepaintProgress();
+            }
         }
 
         private void OnGUI()
         {
             Styles.Initialize();
 
+            if (showWelcomeScreen)
+            {
+                DrawWelcomeScreen();
+                return;
+            }
+
             EditorGUILayout.BeginVertical();
             DrawToolbar();
 
-            if (isInitialLoading)
+            bool waitingForPreviousLoad =
+                backgroundLoadDeferred &&
+                !isInitialLoading &&
+                AreBackgroundLoadsDraining;
+            bool initialLoadBlocksCurrentTab = ShouldBlockCurrentTabDuringInitialLoad(
+                isInitialLoading,
+                initialGitStageReady,
+                currentTab);
+            if (initialLoadBlocksCurrentTab || waitingForPreviousLoad)
             {
                 GUILayout.FlexibleSpace();
-                EditorGUILayout.LabelField("Loading packages...", Styles.LoadingLabel);
+                DrawLoadingState(
+                    deferredRepositoryMutation.HasPending
+                        ? "Waiting for the package scan to stop..."
+                        : isInitialLoading && initialGitStageReady && currentTab == Tab.Discover
+                            ? "Checking GitHub CLI..."
+                        : waitingForPreviousLoad
+                        ? "Waiting for the previous package scan to stop..."
+                        : "Loading project packages...",
+                    deferredRepositoryMutation.HasPending
+                        ? $"The queued operation will start automatically: {deferredRepositoryMutation.Label}"
+                        : isInitialLoading && initialGitStageReady && currentTab == Tab.Discover
+                            ? "In Project is ready while the optional GitHub dependency and authentication checks finish."
+                        : waitingForPreviousLoad
+                        ? "The new scan will start as soon as the earlier background command has drained safely."
+                        : "Checking Git and scanning installed package submodules.",
+                    topSpacing: 0f);
                 GUILayout.FlexibleSpace();
                 EditorGUILayout.EndVertical();
                 return;
@@ -200,11 +394,173 @@ namespace MartinCalander.GitPackageManager.Editor
 
         internal void RefreshPackages()
         {
+            BeginBackgroundLoad(true);
+        }
+
+        private void BeginBackgroundLoad(bool isDependencyCheck)
+        {
+            dependencyCheckRequested |= isDependencyCheck;
+            // Authentication blocks only the optional gh stage. The required Git
+            // and installed-package stage must still initialize this window.
+            if (IsRepositoryOperationBusy ||
+                AreBackgroundLoadsDraining ||
+                !string.IsNullOrWhiteSpace(GitOperationService.RecoveryWarning))
+            {
+                backgroundLoadDeferred = true;
+                return;
+            }
+
             if (isInitialLoading)
                 return;
 
-            RefreshDependencies();
-            RefreshInstalled();
+            backgroundLoadDeferred = false;
+            isInitialLoading = true;
+            initialGitStageReady = false;
+            pendingInitialGitStageResult = null;
+            pendingLoadResult = null;
+            int generation = Interlocked.Increment(ref initialLoadGeneration);
+            long repositoryGeneration = GitOperationService.RepositoryGeneration;
+            var cancellationSource = new CancellationTokenSource();
+            var thread = new Thread(() =>
+            {
+                try
+                {
+                    RunInitialLoad(generation, repositoryGeneration, cancellationSource.Token);
+                }
+                finally
+                {
+                    lock (cancellationSource)
+                        cancellationSource.Dispose();
+                    Interlocked.Decrement(ref activeBackgroundLoadWorkers);
+                }
+            })
+            {
+                IsBackground = true,
+                Name = "Git Package Manager initial load"
+            };
+
+            initialLoadCancellationSource = cancellationSource;
+            initialLoadThread = thread;
+            Interlocked.Increment(ref activeBackgroundLoadWorkers);
+            try
+            {
+                thread.Start();
+            }
+            catch (Exception ex)
+            {
+                Interlocked.Decrement(ref activeBackgroundLoadWorkers);
+                cancellationSource.Dispose();
+                initialLoadCancellationSource = null;
+                initialLoadThread = null;
+                isInitialLoading = false;
+                installedStatus = BuildInitialLoadFailureMessage(
+                    "The package scan could not start",
+                    ex);
+                installedStatusType = MessageType.Error;
+            }
+        }
+
+        internal static bool AreBackgroundLoadsDraining =>
+            Volatile.Read(ref activeBackgroundLoadWorkers) > 0;
+
+        private bool RequestRepositoryReadCancellation(out string error)
+        {
+            RequestBackgroundLoadCancellation(initialLoadCancellationSource);
+            RequestBackgroundLoadCancellation(installedLoadCancellationSource);
+
+            bool initialStopped = initialLoadThread == null || !initialLoadThread.IsAlive;
+            bool installedStopped = installedLoadThread == null || !installedLoadThread.IsAlive;
+
+            if (initialStopped)
+            {
+                initialLoadCancellationSource = null;
+                initialLoadThread = null;
+            }
+
+            if (installedStopped)
+            {
+                installedLoadCancellationSource = null;
+                installedLoadThread = null;
+            }
+
+            if (initialStopped && installedStopped && !AreBackgroundLoadsDraining)
+            {
+                error = string.Empty;
+                return true;
+            }
+
+            error =
+                "A package scan is still stopping safely.";
+            return false;
+        }
+
+        internal static bool IsBackgroundLoadResultCurrent(
+            int resultLoadGeneration,
+            int currentLoadGeneration,
+            long resultRepositoryGeneration,
+            long currentRepositoryGeneration)
+        {
+            return resultLoadGeneration == currentLoadGeneration &&
+                   resultRepositoryGeneration == currentRepositoryGeneration;
+        }
+
+        internal static bool ShouldBlockCurrentTabDuringInitialLoad(
+            bool isLoading,
+            bool gitStageReady,
+            Tab currentTab)
+        {
+            return isLoading && (!gitStageReady || currentTab == Tab.Discover);
+        }
+
+        private static void RequestBackgroundLoadCancellation(
+            CancellationTokenSource cancellationSource)
+        {
+            try
+            {
+                if (cancellationSource != null)
+                {
+                    lock (cancellationSource)
+                        cancellationSource.Cancel();
+                }
+            }
+            catch (ObjectDisposedException)
+            {
+                // The worker completed between the lifecycle callback and cancellation.
+            }
+            catch (AggregateException)
+            {
+                // Cancellation is still requested even if an external callback failed.
+                // The drain barrier remains in place until the worker actually exits.
+            }
+        }
+
+        private static bool CancelAndDrainBackgroundLoad(
+            CancellationTokenSource cancellationSource,
+            Thread thread)
+        {
+            if (cancellationSource == null && thread == null)
+                return true;
+
+            RequestBackgroundLoadCancellation(cancellationSource);
+
+            if (thread == null ||
+                !thread.IsAlive ||
+                ReferenceEquals(Thread.CurrentThread, thread))
+            {
+                return thread == null || !thread.IsAlive;
+            }
+
+            return thread.Join(BackgroundLoadDrainTimeoutMs);
+        }
+
+        private void RepaintProgress()
+        {
+            double now = EditorApplication.timeSinceStartup;
+            if (now < nextProgressRepaintTime)
+                return;
+
+            nextProgressRepaintTime = now + 0.1;
+            Repaint();
         }
     }
 }

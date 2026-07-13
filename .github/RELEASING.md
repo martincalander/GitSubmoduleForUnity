@@ -10,6 +10,19 @@ Only maintainers identified in [MAINTAINERS.md](MAINTAINERS.md) with repository
 release access may publish a release. Release tags and GitHub release assets
 must originate from the canonical repository.
 
+Before enabling credentialed CI, configure two protected GitHub environments:
+
+- `unity-ci`, with required maintainer reviewers and environment-scoped
+  `UNITY_EMAIL`, `UNITY_PASSWORD`, plus either `UNITY_LICENSE` or `UNITY_SERIAL`;
+- `release`, with required maintainer reviewers and deployment restricted to
+  protected `v*` tags.
+
+Do not store Unity credentials as general repository secrets. Set the repository
+variable `UNITY_CI_ENABLED=true` only after `unity-ci` is protected. Protect
+`main` from direct/force pushes, require pull-request review and sanity checks,
+and add a tag protection rule for `v*` before publishing. These settings are
+repository controls and cannot be enforced by workflow YAML alone.
+
 ## Version Policy
 
 - **Patch** releases contain backward-compatible fixes and documentation
@@ -45,6 +58,12 @@ The version in [`package.json`](../package.json) and the tag without its leading
    pull request.
 8. Merge the release pull request only after required checks and review pass.
 
+Fork pull requests never receive Unity credentials. A maintainer must inspect
+the contribution and manually dispatch **Sanity Checks** with its reviewed,
+full 40-character commit SHA as the `ref` input to run the credentialed Unity
+gate before merge. Branch names and abbreviated revisions are intentionally
+rejected so the reviewed input cannot move before the job starts.
+
 ## Tag and Publish
 
 Create an annotated tag on the reviewed release commit:
@@ -60,9 +79,13 @@ Pushing the tag starts the Publish Release workflow. The workflow:
 
 1. validates the repository;
 2. verifies that the tag matches `package.json`;
-3. builds the UPM-compatible npm archive;
-4. generates `SHA256SUMS`;
-5. creates the GitHub release and attaches both assets.
+3. proves the tagged commit is reachable from `origin/main`;
+4. builds the UPM-compatible npm archive once and generates `SHA256SUMS`;
+5. extracts and tests those exact archive bytes in Unity;
+6. waits for approval in the protected `release` environment;
+7. creates the GitHub release and attaches the tested assets.
+
+Pre-release SemVer tags are published as GitHub pre-releases.
 
 The workflow can also be started manually for an existing tag. Manual dispatch
 does not create or move a tag.

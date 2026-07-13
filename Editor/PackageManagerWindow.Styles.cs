@@ -17,16 +17,28 @@ namespace MartinCalander.GitPackageManager.Editor
             public static GUIStyle LinkButton;
             public static GUIStyle SectionHeader;
             public static GUIStyle LoadingLabel;
+            public static GUIStyle LoadingDetailLabel;
             public static GUIStyle ListItemLabel;
             public static GUIStyle SelectedListItemLabel;
+            public static GUIStyle SelectedSubtitleLabel;
+            public static Texture[] LoadingSpinnerFrames;
             public static Color SelectionColor;
             public static Color SeparatorColor;
             public static bool Initialized;
+            private static bool initializedForProSkin;
+            private static Texture2D infoBoxTexture;
 
             public static void Initialize()
             {
-                if (Initialized)
+                bool isProSkin = EditorGUIUtility.isProSkin;
+                if (Initialized && initializedForProSkin == isProSkin)
                     return;
+
+                if (infoBoxTexture != null)
+                {
+                    Object.DestroyImmediate(infoBoxTexture);
+                    infoBoxTexture = null;
+                }
 
                 HeaderLabel = new GUIStyle(EditorStyles.boldLabel)
                 {
@@ -42,13 +54,13 @@ namespace MartinCalander.GitPackageManager.Editor
                     margin = new RectOffset(0, 0, 0, 4)
                 };
 
-                Color secondaryText = EditorGUIUtility.isProSkin
+                Color secondaryText = isProSkin
                     ? new Color(0.65f, 0.65f, 0.65f)
                     : new Color(0.35f, 0.35f, 0.35f);
-                SelectionColor = EditorGUIUtility.isProSkin
+                SelectionColor = isProSkin
                     ? new Color(0.17f, 0.36f, 0.53f, 1f)
                     : new Color(0.24f, 0.49f, 0.71f, 1f);
-                SeparatorColor = EditorGUIUtility.isProSkin
+                SeparatorColor = isProSkin
                     ? new Color(0.15f, 0.15f, 0.15f)
                     : new Color(0.68f, 0.68f, 0.68f);
 
@@ -64,9 +76,10 @@ namespace MartinCalander.GitPackageManager.Editor
                     padding = new RectOffset(12, 12, 10, 10),
                     margin = new RectOffset(0, 0, 8, 8)
                 };
-                InfoBox.normal.background = CreateColorTexture(EditorGUIUtility.isProSkin
+                infoBoxTexture = CreateColorTexture(isProSkin
                     ? new Color(0.22f, 0.22f, 0.22f, 1f)
                     : new Color(0.88f, 0.88f, 0.88f, 1f));
+                InfoBox.normal.background = infoBoxTexture;
 
                 InfoLabel = new GUIStyle(EditorStyles.label)
                 {
@@ -102,16 +115,28 @@ namespace MartinCalander.GitPackageManager.Editor
                     padding = new RectOffset(0, 0, 8, 4)
                 };
 
-                LoadingLabel = new GUIStyle(EditorStyles.centeredGreyMiniLabel)
+                LoadingLabel = new GUIStyle(EditorStyles.label)
                 {
-                    fontSize = 12
+                    fontSize = 12,
+                    alignment = TextAnchor.MiddleLeft
                 };
+
+                LoadingDetailLabel = new GUIStyle(EditorStyles.centeredGreyMiniLabel)
+                {
+                    fontSize = 10,
+                    alignment = TextAnchor.UpperCenter,
+                    wordWrap = true
+                };
+                LoadingSpinnerFrames = LoadLoadingSpinnerFrames(isProSkin);
 
                 ListItemLabel = new GUIStyle(EditorStyles.label);
                 SelectedListItemLabel = new GUIStyle(EditorStyles.label);
                 SelectedListItemLabel.normal.textColor = Color.white;
+                SelectedSubtitleLabel = new GUIStyle(SubtitleLabel);
+                SelectedSubtitleLabel.normal.textColor = Color.white;
 
                 Initialized = true;
+                initializedForProSkin = isProSkin;
             }
 
             private static Texture2D CreateColorTexture(Color color)

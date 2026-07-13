@@ -3,13 +3,14 @@ using System.Collections.Generic;
 
 namespace MartinCalander.GitPackageManager.Editor
 {
-    internal sealed class RepositoryCoordinator
+    internal sealed class RepositoryCoordinator : IDisposable
     {
-        private readonly Dictionary<string, List<string>> branchCache = new(StringComparer.OrdinalIgnoreCase);
-        private readonly Dictionary<string, string> branchErrors = new(StringComparer.OrdinalIgnoreCase);
-        private string branchFetchUrl = string.Empty;
+        private readonly Dictionary<string, List<string>> branchCache = new(StringComparer.Ordinal);
+        private readonly Dictionary<string, string> branchErrors = new(StringComparer.Ordinal);
+        private string branchFetchIdentity = string.Empty;
         private string pendingBranchFetchUrl = string.Empty;
         private AsyncCommandHandle branchFetchHandle;
+        private bool discardBranchFetchResult;
 
         internal void RequestBranches(string url)
         {
@@ -18,40 +19,65 @@ namespace MartinCalander.GitPackageManager.Editor
                 return;
             }
 
-            if (branchCache.ContainsKey(url) || branchErrors.ContainsKey(url))
+            if (!GitUtility.IsValidRepositoryUrl(url))
+                return;
+
+            string identity = GitHubUtility.GetRepositoryCacheIdentity(url);
+            if (string.IsNullOrEmpty(identity) ||
+                branchCache.ContainsKey(identity) ||
+                branchErrors.ContainsKey(identity))
             {
                 return;
             }
 
             if (branchFetchHandle != null)
             {
-                if (string.Equals(branchFetchUrl, url, StringComparison.OrdinalIgnoreCase))
+                if (string.Equals(branchFetchIdentity, identity, StringComparison.Ordinal))
+                {
+                    if (discardBranchFetchResult)
+                        pendingBranchFetchUrl = url;
                     return;
+                }
 
+                // Only the newest request is useful. Keep one live process and
+                // replace the queued request instead of spawning more workers.
                 pendingBranchFetchUrl = url;
                 return;
             }
 
-            if (!GitUtility.IsValidRepositoryUrl(url))
+            if (AsyncCommandDrainRegistry.IsDraining)
+            {
+                pendingBranchFetchUrl = url;
                 return;
+            }
 
-            StartBranchFetch(url);
+            StartBranchFetch(url, identity);
         }
 
-        private void StartBranchFetch(string url)
+        private bool StartBranchFetch(string url, string identity)
         {
-            branchFetchUrl = url;
-            branchErrors.Remove(url);
+            if (string.IsNullOrWhiteSpace(url) || string.IsNullOrEmpty(identity) ||
+                AsyncCommandDrainRegistry.IsDraining)
+            {
+                return false;
+            }
+
+            branchFetchIdentity = identity;
+            discardBranchFetchResult = false;
+            branchErrors.Remove(identity);
             branchFetchHandle = CliCommandRunner.RunAsync(
                 GitUtility.GitExecutable,
                 $"ls-remote --heads {GitUtility.Quote(url)}",
                 GitUtility.ProjectRoot);
+            return true;
         }
 
         internal bool IsFetchingBranches(string url)
         {
-            return branchFetchHandle != null &&
-                   string.Equals(branchFetchUrl, url, StringComparison.OrdinalIgnoreCase) &&
+            string identity = GitHubUtility.GetRepositoryCacheIdentity(url);
+            return !string.IsNullOrEmpty(identity) &&
+                   branchFetchHandle != null &&
+                   string.Equals(branchFetchIdentity, identity, StringComparison.Ordinal) &&
                    !TryGetCachedBranches(url, out _);
         }
 
@@ -59,6 +85,22 @@ namespace MartinCalander.GitPackageManager.Editor
         {
             if (branchFetchHandle == null)
             {
+                if (!string.IsNullOrWhiteSpace(pendingBranchFetchUrl) &&
+                    !AsyncCommandDrainRegistry.IsDraining)
+                {
+                    string pendingUrl = pendingBranchFetchUrl;
+                    string pendingIdentity = GitHubUtility.GetRepositoryCacheIdentity(pendingUrl);
+                    if (!string.IsNullOrEmpty(pendingIdentity) &&
+                        !branchCache.ContainsKey(pendingIdentity) &&
+                        !branchErrors.ContainsKey(pendingIdentity) &&
+                        GitUtility.IsValidRepositoryUrl(pendingUrl) &&
+                        StartBranchFetch(pendingUrl, pendingIdentity))
+                    {
+                        pendingBranchFetchUrl = string.Empty;
+                        return true;
+                    }
+                }
+
                 return false;
             }
 
@@ -68,39 +110,56 @@ namespace MartinCalander.GitPackageManager.Editor
             }
 
             CommandResult result = branchFetchHandle.Result;
+            string completedIdentity = branchFetchIdentity;
+            bool discardResult = discardBranchFetchResult;
             var branches = new List<string>();
-            if (result != null && result.IsSuccess)
+            bool outputComplete = result != null && !result.StdOutTruncated;
+            if (result != null && result.IsSuccess && outputComplete)
             {
                 branches = GitUtility.ParseRemoteBranches(result.StdOut);
             }
 
-            if (!string.IsNullOrWhiteSpace(branchFetchUrl))
+            if (!discardResult && !string.IsNullOrWhiteSpace(completedIdentity))
             {
-                branchCache[branchFetchUrl] = branches;
-                if (result == null || !result.IsSuccess)
+                branchCache[completedIdentity] = branches;
+                if (result != null && result.IsSuccess && !outputComplete)
+                {
+                    branchErrors[completedIdentity] =
+                        "Git returned more branch data than could be inspected safely. " +
+                        "The partial branch list was discarded; narrow the repository or retry from a terminal.";
+                }
+                else if (result == null || !result.IsSuccess)
                 {
                     string detail = result == null
                         ? "No result was returned."
                         : string.IsNullOrWhiteSpace(result.StdErr) ? result.StdOut : result.StdErr;
-                    branchErrors[branchFetchUrl] = string.IsNullOrWhiteSpace(detail)
+                    branchErrors[completedIdentity] = string.IsNullOrWhiteSpace(detail)
                         ? "Failed to load remote branches."
-                        : GitUtility.RedactCredentials(detail.Trim());
+                        : GitHubUtility.SanitizeUiDiagnostic(detail);
                 }
                 else if (branches.Count == 0)
                 {
-                    branchErrors[branchFetchUrl] = "No remote branches were found.";
+                    branchErrors[completedIdentity] = "No remote branches were found.";
                 }
             }
 
             branchFetchHandle = null;
-            branchFetchUrl = string.Empty;
+            branchFetchIdentity = string.Empty;
+            discardBranchFetchResult = false;
 
             if (!string.IsNullOrWhiteSpace(pendingBranchFetchUrl))
             {
                 string pendingUrl = pendingBranchFetchUrl;
                 pendingBranchFetchUrl = string.Empty;
-                if (!branchCache.ContainsKey(pendingUrl) && !branchErrors.ContainsKey(pendingUrl))
-                    StartBranchFetch(pendingUrl);
+                string pendingIdentity = GitHubUtility.GetRepositoryCacheIdentity(pendingUrl);
+                if (!string.IsNullOrEmpty(pendingIdentity) &&
+                    !branchCache.ContainsKey(pendingIdentity) &&
+                    !branchErrors.ContainsKey(pendingIdentity) &&
+                    GitUtility.IsValidRepositoryUrl(pendingUrl))
+                {
+                    if (!StartBranchFetch(pendingUrl, pendingIdentity))
+                        pendingBranchFetchUrl = pendingUrl;
+                }
             }
 
             return true;
@@ -109,8 +168,9 @@ namespace MartinCalander.GitPackageManager.Editor
         internal bool TryGetCachedBranches(string url, out List<string> branches)
         {
             branches = null;
-            return !string.IsNullOrWhiteSpace(url) &&
-                   branchCache.TryGetValue(url, out branches) &&
+            string identity = GitHubUtility.GetRepositoryCacheIdentity(url);
+            return !string.IsNullOrEmpty(identity) &&
+                   branchCache.TryGetValue(identity, out branches) &&
                    branches != null &&
                    branches.Count > 0;
         }
@@ -119,24 +179,37 @@ namespace MartinCalander.GitPackageManager.Editor
         {
             if (!string.IsNullOrWhiteSpace(url))
             {
-                branchCache.Remove(url);
-                branchErrors.Remove(url);
+                string identity = GitHubUtility.GetRepositoryCacheIdentity(url);
+                branchCache.Remove(identity);
+                branchErrors.Remove(identity);
             }
+        }
+
+        internal void ClearAllBranchCaches()
+        {
+            branchCache.Clear();
+            branchErrors.Clear();
+            pendingBranchFetchUrl = string.Empty;
+            if (branchFetchHandle != null)
+                discardBranchFetchResult = true;
         }
 
         internal bool TryGetBranchError(string url, out string error)
         {
             error = string.Empty;
-            return !string.IsNullOrWhiteSpace(url) && branchErrors.TryGetValue(url, out error);
+            string identity = GitHubUtility.GetRepositoryCacheIdentity(url);
+            return !string.IsNullOrEmpty(identity) && branchErrors.TryGetValue(identity, out error);
         }
 
-        internal void Dispose()
+        public void Dispose()
         {
             branchCache.Clear();
             branchErrors.Clear();
-            branchFetchUrl = string.Empty;
             pendingBranchFetchUrl = string.Empty;
+            AsyncCommandDrainRegistry.Retire(branchFetchHandle);
             branchFetchHandle = null;
+            branchFetchIdentity = string.Empty;
+            discardBranchFetchResult = false;
         }
     }
 }

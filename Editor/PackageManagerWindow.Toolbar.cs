@@ -6,13 +6,51 @@ namespace MartinCalander.GitPackageManager.Editor
 {
     public partial class GitPackageManagerWindow
     {
+        private const string ValidPackageFilterTooltip =
+            "Only show repositories whose root package.json declares a valid UPM package name and SemVer version.";
+
+        internal static bool CanNavigatePackageTabs(bool gitAvailable)
+        {
+            return gitAvailable;
+        }
+
+        internal static bool CanUseToolbarGitActions(
+            bool gitAvailable,
+            bool isLoading,
+            bool backgroundLoadsDraining)
+        {
+            return gitAvailable && !isLoading && !backgroundLoadsDraining;
+        }
+
+        internal static bool CanUseToolbarGitActions(
+            bool gitAvailable,
+            bool isInitialLoading,
+            bool isGitStageReady,
+            bool isInstalledLoading,
+            bool backgroundLoadsDraining)
+        {
+            if (!gitAvailable || isInstalledLoading)
+                return false;
+
+            if (isInitialLoading)
+                return isGitStageReady;
+
+            return !backgroundLoadsDraining;
+        }
+
         private void DrawToolbar()
         {
             EditorGUILayout.BeginHorizontal(EditorStyles.toolbar);
 
             Rect addButtonRect = GUILayoutUtility.GetRect(new GUIContent("+"), EditorStyles.toolbarDropDown, GUILayout.Width(24));
-            bool gitUiEnabled = !isInitialLoading && gitAvailable;
-            using (new EditorGUI.DisabledScope(!gitUiEnabled || activeOperation != null))
+            bool gitNavigationEnabled = CanNavigatePackageTabs(gitAvailable);
+            bool gitActionsEnabled = CanUseToolbarGitActions(
+                gitAvailable,
+                isInitialLoading,
+                initialGitStageReady,
+                isInstalledLoading,
+                AreBackgroundLoadsDraining);
+            using (new EditorGUI.DisabledScope(!gitActionsEnabled || IsRepositoryOperationBusy))
             {
                 if (EditorGUI.DropdownButton(addButtonRect, new GUIContent("+", "Add a Git submodule manually"), FocusType.Passive, EditorStyles.toolbarDropDown))
                 {
@@ -25,18 +63,34 @@ namespace MartinCalander.GitPackageManager.Editor
             GUILayout.Space(8);
 
             Tab previousTab = currentTab;
-            using (new EditorGUI.DisabledScope(!gitUiEnabled))
+            Tab requestedTab;
+            using (new EditorGUI.DisabledScope(!gitNavigationEnabled))
             {
-                if (GUILayout.Toggle(currentTab == Tab.Installed, "In Project", EditorStyles.toolbarButton))
-                    currentTab = Tab.Installed;
-                if (GUILayout.Toggle(currentTab == Tab.Discover, "GitHub", EditorStyles.toolbarButton))
-                    currentTab = Tab.Discover;
+                bool installedSelected = GUILayout.Toggle(
+                    currentTab == Tab.Installed,
+                    "In Project",
+                    EditorStyles.toolbarButton);
+                bool discoverSelected = GUILayout.Toggle(
+                    currentTab == Tab.Discover,
+                    "GitHub",
+                    EditorStyles.toolbarButton);
+                requestedTab = ResolveRequestedTab(currentTab, installedSelected, discoverSelected);
             }
 
-            if (previousTab != currentTab)
+            if (previousTab != requestedTab)
             {
+                if (previousTab == Tab.Installed)
+                    installedSearchFilter = searchFilter;
+                else
+                    discoverSearchFilter = searchFilter;
+
+                currentTab = requestedTab;
+                listScroll = Vector2.zero;
+                detailsScroll = Vector2.zero;
+                searchFilter = currentTab == Tab.Installed
+                    ? installedSearchFilter
+                    : discoverSearchFilter;
                 RefreshCurrentTabIfStale();
-                searchFilter = string.Empty;
                 Repaint();
             }
 
@@ -44,7 +98,8 @@ namespace MartinCalander.GitPackageManager.Editor
 
             if (currentTab == Tab.Discover)
             {
-                using (new EditorGUI.DisabledScope(!ghAvailable || !ghAuthenticated))
+                using (new EditorGUI.DisabledScope(
+                           !ghAvailable || !ghAuthenticated || IsGitHubInteractionBusy))
                 {
                     string ownerLabel = string.IsNullOrEmpty(discoveryCoordinator.SelectedOwner)
                         ? "Owner"
@@ -57,7 +112,10 @@ namespace MartinCalander.GitPackageManager.Editor
                         if (!string.IsNullOrEmpty(username))
                         {
                             bool isSelected = string.Equals(discoveryCoordinator.SelectedOwner, username, StringComparison.OrdinalIgnoreCase);
-                            menu.AddItem(new GUIContent(username), isSelected, () => discoveryCoordinator.SetOwner(username));
+                            menu.AddItem(
+                                new GUIContent(username),
+                                isSelected,
+                                () => SelectDiscoveryOwner(username));
                         }
 
                         if (discoveryCoordinator.Organizations.Count > 0)
@@ -67,7 +125,10 @@ namespace MartinCalander.GitPackageManager.Editor
                             {
                                 string orgCapture = org;
                                 bool isSelected = string.Equals(discoveryCoordinator.SelectedOwner, org, StringComparison.OrdinalIgnoreCase);
-                                menu.AddItem(new GUIContent(orgCapture), isSelected, () => discoveryCoordinator.SetOwner(orgCapture));
+                                menu.AddItem(
+                                    new GUIContent(orgCapture),
+                                    isSelected,
+                                    () => SelectDiscoveryOwner(orgCapture));
                             }
                         }
                         else if (!discoveryCoordinator.OrgsLoaded)
@@ -79,14 +140,23 @@ namespace MartinCalander.GitPackageManager.Editor
                     }
 
                     string filterLabel = GetFilterLabel();
-                    Rect filterRect = GUILayoutUtility.GetRect(new GUIContent(filterLabel), EditorStyles.toolbarDropDown, GUILayout.Width(120));
-                    if (EditorGUI.DropdownButton(filterRect, new GUIContent(filterLabel), FocusType.Passive, EditorStyles.toolbarDropDown))
+                    string filterTooltip = currentFilter == FilterOption.ValidPackagesOnly
+                        ? ValidPackageFilterTooltip
+                        : "Filter the repositories shown on this page.";
+                    var filterContent = new GUIContent(filterLabel, filterTooltip);
+                    Rect filterRect = GUILayoutUtility.GetRect(filterContent, EditorStyles.toolbarDropDown, GUILayout.Width(120));
+                    if (EditorGUI.DropdownButton(filterRect, filterContent, FocusType.Passive, EditorStyles.toolbarDropDown))
                     {
                         var menu = new GenericMenu();
-                        menu.AddItem(new GUIContent("All Repositories"), currentFilter == FilterOption.All, () => { currentFilter = FilterOption.All; selectedRepoIndex = -1; Repaint(); });
+                        menu.AddItem(new GUIContent("All Repositories"), currentFilter == FilterOption.All, () => SetFilter(FilterOption.All));
                         menu.AddSeparator("");
-                        menu.AddItem(new GUIContent("Public Only"), currentFilter == FilterOption.PublicOnly, () => { currentFilter = FilterOption.PublicOnly; selectedRepoIndex = -1; Repaint(); });
-                        menu.AddItem(new GUIContent("Private Only"), currentFilter == FilterOption.PrivateOnly, () => { currentFilter = FilterOption.PrivateOnly; selectedRepoIndex = -1; Repaint(); });
+                        menu.AddItem(new GUIContent("Public Only"), currentFilter == FilterOption.PublicOnly, () => SetFilter(FilterOption.PublicOnly));
+                        menu.AddItem(new GUIContent("Private Only"), currentFilter == FilterOption.PrivateOnly, () => SetFilter(FilterOption.PrivateOnly));
+                        menu.AddSeparator("");
+                        menu.AddItem(
+                            new GUIContent("Valid UPM Packages", ValidPackageFilterTooltip),
+                            currentFilter == FilterOption.ValidPackagesOnly,
+                            () => SetFilter(FilterOption.ValidPackagesOnly));
                         menu.DropDown(filterRect);
                     }
 
@@ -104,11 +174,17 @@ namespace MartinCalander.GitPackageManager.Editor
 
             GUILayout.FlexibleSpace();
 
-            Rect menuRect = GUILayoutUtility.GetRect(new GUIContent("..."), EditorStyles.toolbarButton, GUILayout.Width(24));
-            if (GUI.Button(menuRect, ":", EditorStyles.toolbarButton))
+            GUIContent menuContent = EditorGUIUtility.IconContent("_Menu");
+            menuContent.tooltip = "More options";
+            Rect menuRect = GUILayoutUtility.GetRect(menuContent, EditorStyles.toolbarButton, GUILayout.Width(24));
+            if (GUI.Button(menuRect, menuContent, EditorStyles.toolbarButton))
             {
                 var menu = new GenericMenu();
-                if (gitUiEnabled)
+                bool canRefreshCurrentTab = gitActionsEnabled &&
+                    (currentTab == Tab.Installed
+                        ? !IsRepositoryOperationBusy
+                        : !IsGitHubInteractionBusy);
+                if (canRefreshCurrentTab)
                     menu.AddItem(new GUIContent("Refresh"), false, RefreshCurrentTab);
                 else
                     menu.AddDisabledItem(new GUIContent("Refresh"));
@@ -116,17 +192,37 @@ namespace MartinCalander.GitPackageManager.Editor
                 menu.AddDisabledItem(new GUIContent(string.IsNullOrWhiteSpace(gitVersion) ? "Git unavailable" : FirstLine(gitVersion)));
                 menu.AddDisabledItem(new GUIContent(!ghAvailable ? "GitHub CLI not installed" : FirstLine(ghVersion)));
                 menu.AddSeparator("");
-                if (gitUiEnabled)
+                menu.AddItem(new GUIContent("Welcome & Setup..."), false, ShowWelcomeScreen);
+                menu.AddSeparator("");
+                if (gitActionsEnabled)
                 {
                     menu.AddItem(new GUIContent("Reset Window"), false, () =>
                     {
                         selectedInstalledIndex = -1;
                         selectedRepoIndex = -1;
+                        listScroll = Vector2.zero;
+                        detailsScroll = Vector2.zero;
                         searchFilter = string.Empty;
-                        currentFilter = FilterOption.All;
+                        installedSearchFilter = string.Empty;
+                        discoverSearchFilter = string.Empty;
+                        SetFilter(FilterOption.All);
                         currentSort = SortOption.Name;
                         operationStatus = string.Empty;
-                        RefreshCurrentTab();
+                        discoverStatus = string.Empty;
+                        discoverStatusType = MessageType.None;
+
+                        if (ghAvailable && ghAuthenticated)
+                        {
+                            discoveryCoordinator.EnsureUsername();
+                            discoveryCoordinator.LoadInitialPage();
+                        }
+                        else
+                        {
+                            discoveryCoordinator.Dispose();
+                        }
+
+                        if (currentTab == Tab.Installed)
+                            RefreshInstalled();
                     });
                 }
                 else
@@ -139,14 +235,43 @@ namespace MartinCalander.GitPackageManager.Editor
             EditorGUILayout.EndHorizontal();
         }
 
+        internal static Tab ResolveRequestedTab(Tab current, bool installedSelected, bool discoverSelected)
+        {
+            // On a tab click, IMGUI can report both the old and new toggles as selected.
+            if (current != Tab.Installed && installedSelected)
+                return Tab.Installed;
+            if (current != Tab.Discover && discoverSelected)
+                return Tab.Discover;
+
+            return current;
+        }
+
         private string GetFilterLabel()
         {
             return currentFilter switch
             {
                 FilterOption.PublicOnly => "Filter: Public",
                 FilterOption.PrivateOnly => "Filter: Private",
+                FilterOption.ValidPackagesOnly => "Filter: UPM",
                 _ => "Filter: All"
             };
+        }
+
+        private void SetFilter(FilterOption filter)
+        {
+            currentFilter = filter;
+            listScroll = Vector2.zero;
+            discoveryCoordinator.SetValidPackageFilterEnabled(filter == FilterOption.ValidPackagesOnly);
+
+            var repos = discoveryCoordinator.DisplayedRepos;
+            if (selectedRepoIndex >= 0 &&
+                (repos == null || selectedRepoIndex >= repos.Count || !PassesFilter(repos[selectedRepoIndex])))
+            {
+                selectedRepoIndex = -1;
+                detailsScroll = Vector2.zero;
+            }
+
+            Repaint();
         }
 
         private void SortRepos()
@@ -161,6 +286,17 @@ namespace MartinCalander.GitPackageManager.Editor
                 repos.Sort((a, b) => string.Compare(b.UpdatedAt, a.UpdatedAt, StringComparison.Ordinal));
 
             selectedRepoIndex = -1;
+            listScroll = Vector2.zero;
+            detailsScroll = Vector2.zero;
+            Repaint();
+        }
+
+        private void SelectDiscoveryOwner(string owner)
+        {
+            selectedRepoIndex = -1;
+            listScroll = Vector2.zero;
+            detailsScroll = Vector2.zero;
+            discoveryCoordinator.SetOwner(owner, discoverSearchFilter);
             Repaint();
         }
 
@@ -228,8 +364,27 @@ namespace MartinCalander.GitPackageManager.Editor
             if (!string.IsNullOrWhiteSpace(operationStatus))
                 EditorGUILayout.HelpBox(operationStatus, operationStatusType);
 
-            if (activeOperation != null)
-                EditorGUILayout.HelpBox(activeOperationLabel, MessageType.Info);
+            if (GitOperationService.IsBusy)
+                EditorGUILayout.HelpBox(GitOperationService.ActiveLabel, MessageType.Info);
+
+            string recoveryWarning = GitOperationService.RecoveryWarning;
+            if (!string.IsNullOrWhiteSpace(recoveryWarning))
+            {
+                EditorGUILayout.HelpBox(recoveryWarning, MessageType.Error);
+                if (GUILayout.Button("I reviewed the repository state", GUILayout.Height(20)))
+                {
+                    if (GitOperationService.TryAcknowledgeRecoveryWarning(out string recoveryError))
+                    {
+                        if (string.Equals(operationStatus, recoveryWarning, StringComparison.Ordinal))
+                            operationStatus = string.Empty;
+                    }
+                    else
+                    {
+                        operationStatus = recoveryError;
+                        operationStatusType = MessageType.Error;
+                    }
+                }
+            }
         }
 
         private void DrawDependencyCard(string title, string error, ToolKind tool)
@@ -260,7 +415,7 @@ namespace MartinCalander.GitPackageManager.Editor
             if (GUILayout.Button("Open download page", GUILayout.Height(22)))
                 Application.OpenURL(plan.InstallUrl);
 
-            using (new EditorGUI.DisabledScope(cliInstallOperation != null || activeOperation != null))
+            using (new EditorGUI.DisabledScope(IsGitHubInteractionBusy))
             {
                 if (GUILayout.Button("Check again", GUILayout.Height(22)))
                     CheckDependenciesAgain();
@@ -297,10 +452,10 @@ namespace MartinCalander.GitPackageManager.Editor
             if (GUILayout.Button("Open install guide", GUILayout.Height(22)))
                 Application.OpenURL(plan.InstallUrl);
 
-            using (new EditorGUI.DisabledScope(cliInstallOperation != null || activeOperation != null))
+            using (new EditorGUI.DisabledScope(IsGitHubInteractionBusy))
             {
                 if (GUILayout.Button("Check again", GUILayout.Height(22)))
-                    CheckDependenciesAgain();
+                    CheckDependenciesAgain(true);
             }
             EditorGUILayout.EndHorizontal();
 
@@ -312,28 +467,84 @@ namespace MartinCalander.GitPackageManager.Editor
 
         private void DrawGhAuthenticationCard()
         {
-            const string command = "gh auth login";
             EditorGUILayout.BeginVertical(EditorStyles.helpBox);
             EditorGUILayout.LabelField("GitHub CLI needs authentication.", EditorStyles.boldLabel);
             EditorGUILayout.LabelField(
-                "Authenticate in a normal terminal before loading repositories. Manual submodule installation with the + button still uses Git only.",
+                "Authenticate with github.com before loading repositories. Manual submodule installation with the + button still uses Git only.",
                 EditorStyles.wordWrappedLabel);
             if (!string.IsNullOrWhiteSpace(ghAuthError))
-                EditorGUILayout.HelpBox(FirstLine(ghAuthError.Trim()), MessageType.Warning);
-            EditorGUILayout.SelectableLabel(command, EditorStyles.textField, GUILayout.Height(EditorGUIUtility.singleLineHeight));
+            {
+                string safeError = GitUtility.RedactCredentials(ghAuthError.Trim());
+                EditorGUILayout.HelpBox(FirstLine(safeError), MessageType.Warning);
+            }
+            EditorGUILayout.SelectableLabel(
+                GitHubUtility.AuthenticationTerminalDisplayCommand,
+                EditorStyles.textField,
+                GUILayout.Height(EditorGUIUtility.singleLineHeight));
+
+            if (IsGhAuthenticationInProgress)
+            {
+                DrawLoadingState(
+                    "Waiting for GitHub authentication...",
+                    "Wait for GitHub CLI to copy the code, then paste it on GitHub's device page. If no code appears, cancel; after cancellation finishes, use the terminal command. Unity will warn if a restart is required first.",
+                    topSpacing: 2f);
+                if (GUILayout.Button("Open GitHub device page", GUILayout.Height(22)))
+                    TryOpenGitHubAuthenticationDevicePage();
+                if (GUILayout.Button("Cancel authentication", GUILayout.Height(22)))
+                    CancelGitHubAuthentication();
+                EditorGUILayout.EndVertical();
+                return;
+            }
+
+            if (DrawGitHubAuthenticationLifecycleNotice())
+            {
+                if (GUILayout.Button("Check authentication again", GUILayout.Height(22)))
+                    CheckDependenciesAgain(true);
+                EditorGUILayout.EndVertical();
+                return;
+            }
+
+            if (!GitHubUtility.SupportsClipboardAuthentication(ghVersion))
+            {
+                EditorGUILayout.HelpBox(
+                    "One-click authentication requires GitHub CLI 2.79.0 or newer. Update GitHub CLI, or copy the command above and run it in a visible terminal.",
+                    MessageType.Warning);
+                EditorGUILayout.BeginHorizontal();
+                if (GUILayout.Button("Copy terminal command", GUILayout.Height(22)))
+                {
+                    EditorGUIUtility.systemCopyBuffer = GitHubUtility.AuthenticationTerminalDisplayCommand;
+                    installStatus = "Compatible GitHub CLI authentication command copied to the clipboard.";
+                    installStatusType = MessageType.Info;
+                }
+                if (GUILayout.Button("Open update guide", GUILayout.Height(22)))
+                    Application.OpenURL(CliInstaller.GetInstallUrl(ToolKind.GitHubCli));
+                if (GUILayout.Button("Check again", GUILayout.Height(22)))
+                    CheckDependenciesAgain(true);
+                EditorGUILayout.EndHorizontal();
+                EditorGUILayout.EndVertical();
+                return;
+            }
 
             EditorGUILayout.BeginHorizontal();
+            using (new EditorGUI.DisabledScope(IsGitHubInteractionBusy))
+            {
+                if (GUILayout.Button("Authenticate with GitHub...", GUILayout.Height(22)))
+                    StartGitHubAuthentication();
+            }
+
             if (GUILayout.Button("Copy auth command", GUILayout.Height(22)))
             {
-                EditorGUIUtility.systemCopyBuffer = command;
+                EditorGUIUtility.systemCopyBuffer = GitHubUtility.AuthenticationTerminalDisplayCommand;
                 installStatus = "GitHub CLI authentication command copied to the clipboard.";
                 installStatusType = MessageType.Info;
             }
-
             if (GUILayout.Button("Open authentication guide", GUILayout.Height(22)))
-                Application.OpenURL("https://cli.github.com/manual/gh_auth_login");
-            if (GUILayout.Button("Check again", GUILayout.Height(22)))
-                CheckDependenciesAgain();
+                Application.OpenURL(GitHubUtility.AuthenticationGuideUrl);
+            using (new EditorGUI.DisabledScope(IsGitHubInteractionBusy))
+            {
+                if (GUILayout.Button("Check again", GUILayout.Height(22)))
+                    CheckDependenciesAgain(true);
+            }
             EditorGUILayout.EndHorizontal();
             EditorGUILayout.EndVertical();
         }
@@ -343,39 +554,24 @@ namespace MartinCalander.GitPackageManager.Editor
             if (!plan.CanRunAutomatically)
                 return;
 
-            using (new EditorGUI.DisabledScope(cliInstallOperation != null || activeOperation != null))
+            bool canStart = CanStartCliInstall(
+                IsGitHubInteractionBusy,
+                AreBackgroundLoadsDraining,
+                !string.IsNullOrWhiteSpace(GitOperationService.RecoveryWarning));
+            using (new EditorGUI.DisabledScope(!canStart))
             {
-                string label = cliInstallOperation == null ? $"Install {displayName}..." : "Installing...";
+                string label = !cliInstallInProgress ? $"Install {displayName}..." : "Installing...";
                 if (GUILayout.Button(label, GUILayout.Height(22)))
                     StartCliInstall(tool, displayName);
             }
         }
 
-        private void CheckDependenciesAgain()
+        private void CheckDependenciesAgain(bool includeGitHub = false)
         {
-            RefreshDependencies();
-            if (!gitAvailable)
-            {
-                installStatus = "Git is still unavailable. Review the installer error or use the official download page.";
-                installStatusType = MessageType.Warning;
-            }
-            else if (currentTab == Tab.Discover && !ghAvailable)
-            {
-                installStatus = "GitHub CLI is still unavailable. Manual installation through the + button remains available.";
-                installStatusType = MessageType.Warning;
-            }
-            else if (currentTab == Tab.Discover && !ghAuthenticated)
-            {
-                installStatus = "GitHub CLI is installed but not authenticated. Run 'gh auth login' in a terminal.";
-                installStatusType = MessageType.Warning;
-            }
-            else
-            {
-                installStatus = "Command-line tools checked successfully.";
-                installStatusType = MessageType.Info;
-                RefreshCurrentTab();
-            }
-
+            dependencyCheckIncludesGitHub |= includeGitHub;
+            installStatus = "Checking command-line tools...";
+            installStatusType = MessageType.Info;
+            BeginBackgroundLoad(true);
             Repaint();
         }
     }

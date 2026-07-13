@@ -1,12 +1,15 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Text.RegularExpressions;
 using System.Threading;
 using NUnit.Framework;
 using UnityEngine;
+using UnityEngine.TestTools;
 
 namespace MartinCalander.GitPackageManager.Editor.Tests
 {
+    [Parallelizable(ParallelScope.None)]
     public sealed class GitPackageManagerUtilitiesTests
     {
         private ICommandRunner previousRunner;
@@ -24,6 +27,324 @@ namespace MartinCalander.GitPackageManager.Editor.Tests
         }
 
         [Test]
+        public void CompletionOutcome_UnconfirmedTerminationAlwaysRemainsUnsafe()
+        {
+            var result = new CommandResult
+            {
+                ExitCode = 0,
+                TerminationConfirmed = false
+            };
+
+            GitOperationCompletionOutcome outcome = GitOperationService.ResolveCompletionOutcome(
+                result,
+                _ => GitOperationCompletionOutcome.Succeeded);
+
+            Assert.That(outcome, Is.EqualTo(GitOperationCompletionOutcome.FailedUnsafe));
+        }
+
+        [Test]
+        public void CompletionNotification_ExceptionCannotChangeResolvedSafetyOutcome()
+        {
+            var result = new CommandResult
+            {
+                ExitCode = 0,
+                TerminationConfirmed = true
+            };
+            GitOperationCompletionOutcome outcome = GitOperationService.ResolveCompletionOutcome(
+                result,
+                _ => GitOperationCompletionOutcome.Succeeded);
+
+            LogAssert.Expect(
+                LogType.Exception,
+                new Regex("InvalidOperationException: simulated UI notification failure"));
+            GitOperationService.NotifyCompletion(
+                result,
+                _ => throw new InvalidOperationException("simulated UI notification failure"));
+
+            Assert.That(outcome, Is.EqualTo(GitOperationCompletionOutcome.Succeeded));
+        }
+
+        [TestCase((int)GitPackageManagerWindow.Tab.Discover, true, true, (int)GitPackageManagerWindow.Tab.Installed)]
+        [TestCase((int)GitPackageManagerWindow.Tab.Installed, true, true, (int)GitPackageManagerWindow.Tab.Discover)]
+        [TestCase((int)GitPackageManagerWindow.Tab.Installed, true, false, (int)GitPackageManagerWindow.Tab.Installed)]
+        [TestCase((int)GitPackageManagerWindow.Tab.Discover, false, true, (int)GitPackageManagerWindow.Tab.Discover)]
+        public void ResolveRequestedTab_HandlesImguiToggleSelection(
+            int current,
+            bool installedSelected,
+            bool discoverSelected,
+            int expected)
+        {
+            Assert.That(
+                (int)GitPackageManagerWindow.ResolveRequestedTab(
+                    (GitPackageManagerWindow.Tab)current,
+                    installedSelected,
+                    discoverSelected),
+                Is.EqualTo(expected));
+        }
+
+        [TestCase(true, true)]
+        [TestCase(false, false)]
+        public void PackageTabNavigation_DependsOnKnownGitAvailabilityNotRefreshState(
+            bool gitAvailable,
+            bool expected)
+        {
+            Assert.That(
+                GitPackageManagerWindow.CanNavigatePackageTabs(gitAvailable),
+                Is.EqualTo(expected));
+            Assert.That(
+                GitPackageManagerWindow.CanUseToolbarGitActions(
+                    gitAvailable,
+                    isLoading: true,
+                    backgroundLoadsDraining: false),
+                Is.False,
+                "A refresh may block mutations without blocking navigation between tabs.");
+        }
+
+        [TestCase(true, false, false, false, false, true)]
+        [TestCase(false, false, false, false, false, false)]
+        [TestCase(true, true, false, false, false, false)]
+        [TestCase(true, false, true, false, false, false)]
+        [TestCase(true, false, false, true, false, false)]
+        [TestCase(true, false, false, false, true, false)]
+        public void InstalledRefresh_IsEnabledOnlyWhenItsHandlerCanStart(
+            bool gitAvailable,
+            bool installedLoading,
+            bool backgroundLoadsDraining,
+            bool operationBusy,
+            bool recoveryRequiresReview,
+            bool expected)
+        {
+            Assert.That(
+                GitPackageManagerWindow.CanRefreshInstalledPackages(
+                    gitAvailable,
+                    installedLoading,
+                    backgroundLoadsDraining,
+                    operationBusy,
+                    recoveryRequiresReview),
+                Is.EqualTo(expected));
+        }
+
+        [TestCase(true, true, (int)GitPackageManagerWindow.Tab.Installed, false)]
+        [TestCase(true, true, (int)GitPackageManagerWindow.Tab.Discover, true)]
+        [TestCase(true, false, (int)GitPackageManagerWindow.Tab.Installed, true)]
+        [TestCase(false, false, (int)GitPackageManagerWindow.Tab.Discover, false)]
+        public void InitialDependencyLoad_BlocksOnlyUntilGitStageOrOnGitHubTab(
+            bool isLoading,
+            bool gitStageReady,
+            int currentTab,
+            bool expected)
+        {
+            Assert.That(
+                GitPackageManagerWindow.ShouldBlockCurrentTabDuringInitialLoad(
+                    isLoading,
+                    gitStageReady,
+                    (GitPackageManagerWindow.Tab)currentTab),
+                Is.EqualTo(expected));
+        }
+
+        [TestCase(5, 5, 9L, 9L, true)]
+        [TestCase(4, 5, 9L, 9L, false)]
+        [TestCase(5, 5, 8L, 9L, false)]
+        public void BackgroundLoadResult_IsAppliedOnlyForBothCurrentGenerations(
+            int resultLoadGeneration,
+            int currentLoadGeneration,
+            long resultRepositoryGeneration,
+            long currentRepositoryGeneration,
+            bool expected)
+        {
+            Assert.That(
+                GitPackageManagerWindow.IsBackgroundLoadResultCurrent(
+                    resultLoadGeneration,
+                    currentLoadGeneration,
+                    resultRepositoryGeneration,
+                    currentRepositoryGeneration),
+                Is.EqualTo(expected));
+        }
+
+        [Test]
+        public void DeferredRepositoryMutationQueue_PreservesExactlyTheFirstOperationUntilReady()
+        {
+            var queue = new DeferredRepositoryMutationQueue();
+            var competingWindowQueue = new DeferredRepositoryMutationQueue();
+            int firstRuns = 0;
+            int secondRuns = 0;
+
+            Assert.That(queue.TryEnqueue("  First mutation  ", () => firstRuns++), Is.True);
+            Assert.That(competingWindowQueue.TryEnqueue("Second mutation", () => secondRuns++), Is.False);
+            Assert.That(queue.HasPending, Is.True);
+            Assert.That(queue.Label, Is.EqualTo("First mutation"));
+            Assert.That(queue.TryDequeueWhenReady(false, out _), Is.False);
+            Assert.That(queue.HasPending, Is.True);
+
+            Assert.That(queue.TryDequeueWhenReady(true, out Action queuedMutation), Is.True);
+            queuedMutation();
+
+            Assert.That(firstRuns, Is.EqualTo(1));
+            Assert.That(secondRuns, Is.Zero);
+            Assert.That(queue.HasPending, Is.False);
+            Assert.That(queue.Label, Is.Empty);
+            Assert.That(competingWindowQueue.TryEnqueue("Second mutation", () => secondRuns++), Is.True);
+            competingWindowQueue.Clear();
+        }
+
+        [Test]
+        public void DeferredRepositoryMutationQueue_ClearPreventsExecutionAfterWindowDisable()
+        {
+            var queue = new DeferredRepositoryMutationQueue();
+            Assert.That(queue.TryEnqueue("Remove package", () => { }), Is.True);
+
+            queue.Clear();
+
+            Assert.That(queue.TryDequeueWhenReady(true, out _), Is.False);
+            Assert.That(queue.HasPending, Is.False);
+        }
+
+        [Test]
+        public void VirtualizedRows_ClampAStaleScrollOffsetAndKeepTailRowsVisible()
+        {
+            Assert.That(
+                GitPackageManagerWindow.ClampVirtualizedScrollOffset(10000f, 5, 24f),
+                Is.EqualTo(120f));
+            Assert.That(
+                GitPackageManagerWindow.ClampVirtualizedScrollOffset(float.NaN, 5, 24f),
+                Is.Zero);
+
+            GitPackageManagerWindow.CalculateVisibleRowRange(
+                10000f,
+                100,
+                24f,
+                120f,
+                out int firstRow,
+                out int lastRow);
+
+            Assert.That(firstRow, Is.EqualTo(92));
+            Assert.That(lastRow, Is.EqualTo(100));
+
+            GitPackageManagerWindow.CalculateVisibleRowRange(
+                10000f,
+                5,
+                24f,
+                400f,
+                out firstRow,
+                out lastRow);
+
+            Assert.That(firstRow, Is.Zero);
+            Assert.That(lastRow, Is.EqualTo(5));
+        }
+
+        [Test]
+        public void GitHubStageFailure_PreservesGitAndInstalledPackageState()
+        {
+            var packages = new List<GitPackageInfo> { new GitPackageInfo { Name = "package" } };
+            var result = new GitPackageManagerWindow.InitialLoadResult
+            {
+                GitAvailable = true,
+                GitVersion = "git version 2.50.0",
+                PackagesSuccess = true,
+                Packages = packages,
+                GhAvailable = true,
+                GhAuthenticated = true
+            };
+
+            GitPackageManagerWindow.RecordInitialLoadFailure(
+                result,
+                GitPackageManagerWindow.InitialLoadStage.GitHub,
+                new InvalidOperationException("gh probe failed"));
+
+            Assert.That(result.GitAvailable, Is.True);
+            Assert.That(result.GitVersion, Is.EqualTo("git version 2.50.0"));
+            Assert.That(result.PackagesSuccess, Is.True);
+            Assert.That(result.Packages, Is.SameAs(packages));
+            Assert.That(result.GhAvailable, Is.False);
+            Assert.That(result.GhAuthenticated, Is.False);
+            Assert.That(result.GhError, Does.Contain("gh probe failed"));
+        }
+
+        [Test]
+        public void InstalledPackageStageFailure_PreservesGitAndBoundsTheDiagnostic()
+        {
+            var result = new GitPackageManagerWindow.InitialLoadResult
+            {
+                GitAvailable = true,
+                GitVersion = "git version 2.50.0",
+                PackagesSuccess = true,
+                Packages = new List<GitPackageInfo> { new GitPackageInfo { Name = "stale" } }
+            };
+
+            GitPackageManagerWindow.RecordInitialLoadFailure(
+                result,
+                GitPackageManagerWindow.InitialLoadStage.InstalledPackages,
+                new InvalidOperationException(new string('x', 10000)));
+
+            Assert.That(result.GitAvailable, Is.True);
+            Assert.That(result.GitVersion, Is.EqualTo("git version 2.50.0"));
+            Assert.That(result.PackagesSuccess, Is.False);
+            Assert.That(result.Packages, Is.Empty);
+            Assert.That(result.PackagesError.Length, Is.LessThanOrEqualTo(GitHubUtility.MaxUiDiagnosticCharacters));
+            Assert.That(result.PackagesError, Does.Contain("installed package scan"));
+        }
+
+        [Test]
+        public void ManualPackageName_IsNotReplacedWithoutAUrlEdit()
+        {
+            const string manualName = "my intentional draft";
+
+            string resolved = GitPackageManagerWindow.ResolvePackageNameAfterUrlEdit(
+                manualName,
+                false,
+                "com.example.previous",
+                "com.example.automatic");
+
+            Assert.That(resolved, Is.EqualTo(manualName));
+        }
+
+        [Test]
+        public void UrlEdit_UpdatesThePackageNameSuggestionOnce()
+        {
+            string resolved = GitPackageManagerWindow.ResolvePackageNameAfterUrlEdit(
+                "com.example.old",
+                true,
+                "com.example.old",
+                "com.example.new");
+
+            Assert.That(resolved, Is.EqualTo("com.example.new"));
+        }
+
+        [Test]
+        public void UrlEdit_PreservesACustomPackageName()
+        {
+            const string customName = "my intentional draft";
+
+            string resolved = GitPackageManagerWindow.ResolvePackageNameAfterUrlEdit(
+                customName,
+                true,
+                "com.example.previous",
+                "com.example.new");
+
+            Assert.That(resolved, Is.EqualTo(customName));
+        }
+
+        [Test]
+        public void AddFromUrlPopup_HasRoomForDiagnosticsAndScrollableControls()
+        {
+            Vector2 size = GitPackageManagerWindow.GetAddFromUrlPopupSize();
+
+            Assert.That(size.x, Is.GreaterThanOrEqualTo(420f));
+            Assert.That(size.y, Is.GreaterThanOrEqualTo(300f));
+        }
+
+        [TestCase(false, (int)UnityEditor.MessageType.Warning)]
+        [TestCase(true, (int)UnityEditor.MessageType.Error)]
+        public void DiscoveryDrainStatus_EscalatesRestartRequirement(
+            bool requiresEditorRestart,
+            int expectedMessageType)
+        {
+            Assert.That(
+                (int)GitPackageManagerWindow.GetDiscoveryDrainStatusType(requiresEditorRestart),
+                Is.EqualTo(expectedMessageType));
+        }
+
+        [Test]
         public void TryReadPackageNameFromJson_ReadsStructuredName()
         {
             var success = GitUtility.TryReadPackageNameFromJson(
@@ -32,6 +353,143 @@ namespace MartinCalander.GitPackageManager.Editor.Tests
 
             Assert.That(success, Is.True);
             Assert.That(packageName, Is.EqualTo("com.martincalander.gitpackagemanager"));
+        }
+
+        [Test]
+        public void TryReadPackageNameFromJson_PreservesLenientLegacyBehavior()
+        {
+            var success = GitUtility.TryReadPackageNameFromJson(
+                "{ \"name\": \" Not-A-Valid-UPM-Name \" }",
+                out var packageName);
+
+            Assert.That(success, Is.True);
+            Assert.That(packageName, Is.EqualTo("Not-A-Valid-UPM-Name"));
+        }
+
+        [Test]
+        public void TryReadValidPackageManifestFromJson_AcceptsValidUpmManifest()
+        {
+            var success = GitUtility.TryReadValidPackageManifestFromJson(
+                "  { \"name\": \"com.example.valid-package\", \"version\": \"1.2.3-beta.1+build.001\", \"displayName\": \"Valid Package\" }  ",
+                out var packageName,
+                out var error);
+
+            Assert.That(success, Is.True, error);
+            Assert.That(packageName, Is.EqualTo("com.example.valid-package"));
+            Assert.That(error, Is.Empty);
+        }
+
+        [TestCase(0.0, 0)]
+        [TestCase(0.099, 0)]
+        [TestCase(0.101, 1)]
+        [TestCase(1.101, 11)]
+        [TestCase(1.201, 0)]
+        [TestCase(-1.0, 0)]
+        public void LoadingSpinnerFrameIndex_AdvancesAtTenFramesPerSecond(double timeSeconds, int expectedFrame)
+        {
+            Assert.That(GitPackageManagerWindow.GetLoadingSpinnerFrameIndex(timeSeconds), Is.EqualTo(expectedFrame));
+        }
+
+        [TestCase("com.example.package")]
+        [TestCase("org.example.my-package")]
+        [TestCase("uk.co.example.package")]
+        public void IsValidUpmPackageName_AcceptsReverseDomainNames(string packageName)
+        {
+            Assert.That(GitUtility.IsValidUpmPackageName(packageName), Is.True);
+        }
+
+        [TestCase("my-package")]
+        [TestCase("some_package")]
+        [TestCase("example.package")]
+        [TestCase("com.package")]
+        public void IsValidUpmPackageName_RejectsNamesWithoutFullReverseDomainNotation(string packageName)
+        {
+            Assert.That(GitUtility.IsValidUpmPackageName(packageName), Is.False);
+        }
+
+        [TestCase(null, "empty")]
+        [TestCase("", "empty")]
+        [TestCase("   \r\n\t", "empty")]
+        [TestCase("[]", "JSON object")]
+        [TestCase("\"package\"", "JSON object")]
+        [TestCase("{ \"name\": \"com.example.package\", \"version\": ", "JSON object")]
+        public void TryReadValidPackageManifestFromJson_RejectsInvalidInput(string json, string expectedError)
+        {
+            var success = GitUtility.TryReadValidPackageManifestFromJson(json, out var packageName, out var error);
+
+            Assert.That(success, Is.False);
+            Assert.That(packageName, Is.Empty);
+            Assert.That(error, Does.Contain(expectedError));
+        }
+
+        [Test]
+        public void TryReadValidPackageManifestFromJson_RejectsOversizedInput()
+        {
+            string json = "{\"name\":\"com.example.package\",\"version\":\"1.0.0\",\"padding\":\"" +
+                          new string('a', 1024 * 1024) +
+                          "\"}";
+
+            var success = GitUtility.TryReadValidPackageManifestFromJson(json, out var packageName, out var error);
+
+            Assert.That(success, Is.False);
+            Assert.That(packageName, Is.Empty);
+            Assert.That(error, Does.Contain("1 MiB"));
+        }
+
+        [TestCase("{ \"version\": \"1.0.0\" }", "UPM package name")]
+        [TestCase("{ \"name\": \"Com.Example.Package\", \"version\": \"1.0.0\" }", "UPM package name")]
+        [TestCase("{ \"name\": \"my-package\", \"version\": \"1.0.0\" }", "UPM package name")]
+        [TestCase("{ \"name\": \"example.package\", \"version\": \"1.0.0\" }", "UPM package name")]
+        [TestCase("{ \"name\": \"com.example.package\" }", "SemVer 2.0")]
+        [TestCase("{ \"name\": \"com.example.package\", \"version\": \"01.0.0\" }", "SemVer 2.0")]
+        public void TryReadValidPackageManifestFromJson_RejectsInvalidRequiredFields(string json, string expectedError)
+        {
+            var success = GitUtility.TryReadValidPackageManifestFromJson(json, out var packageName, out var error);
+
+            Assert.That(success, Is.False);
+            Assert.That(packageName, Is.Empty);
+            Assert.That(error, Does.Contain(expectedError));
+        }
+
+        [TestCase("0.0.0")]
+        [TestCase("1.2.3")]
+        [TestCase("10.20.30-alpha")]
+        [TestCase("1.0.0-alpha.1")]
+        [TestCase("1.0.0-0.3.7")]
+        [TestCase("1.0.0-x.7.z.92")]
+        [TestCase("1.0.0-x-y-z.--")]
+        [TestCase("1.0.0+20130313144700")]
+        [TestCase("1.0.0-beta+exp.sha.5114f85")]
+        [TestCase("1.0.0+001")]
+        [TestCase("999999999999999999999999.0.1")]
+        public void IsValidSemanticVersion_AcceptsSemVer2Versions(string version)
+        {
+            Assert.That(GitUtility.IsValidSemanticVersion(version), Is.True);
+        }
+
+        [TestCase(null)]
+        [TestCase("")]
+        [TestCase(" 1.0.0")]
+        [TestCase("1.0.0 ")]
+        [TestCase("v1.0.0")]
+        [TestCase("1.0")]
+        [TestCase("1.0.0.0")]
+        [TestCase("01.0.0")]
+        [TestCase("1.01.0")]
+        [TestCase("1.0.01")]
+        [TestCase("1.0.0-")]
+        [TestCase("1.0.0-alpha..1")]
+        [TestCase("1.0.0-01")]
+        [TestCase("1.0.0-alpha_1")]
+        [TestCase("1.0.0+")]
+        [TestCase("1.0.0+build..1")]
+        [TestCase("1.0.0+build_1")]
+        [TestCase("1.0.0+build+other")]
+        [TestCase("1.0.0-alpha+build+other")]
+        [TestCase("1.0.0-α")]
+        public void IsValidSemanticVersion_RejectsNonSemVer2Versions(string version)
+        {
+            Assert.That(GitUtility.IsValidSemanticVersion(version), Is.False);
         }
 
         [Test]
@@ -247,6 +705,274 @@ namespace MartinCalander.GitPackageManager.Editor.Tests
                 Is.EqualTo(DependencyGateState.Ready));
         }
 
+        [TestCase(false, false, true)]
+        [TestCase(false, true, false)]
+        [TestCase(true, false, false)]
+        [TestCase(true, true, false)]
+        public void WelcomeSettings_ShowOnlyOnce(
+            bool persisted,
+            bool shownThisSession,
+            bool expected)
+        {
+            Assert.That(
+                GitPackageManagerUserSettings.ShouldShowWelcome(persisted, shownThisSession),
+                Is.EqualTo(expected));
+        }
+
+        [TestCase(-10, GitPackageManagerUserSettings.MinimumRefreshIntervalMinutes)]
+        [TestCase(1, 1)]
+        [TestCase(17, 17)]
+        [TestCase(60, 60)]
+        [TestCase(500, GitPackageManagerUserSettings.MaximumRefreshIntervalMinutes)]
+        public void UserSettings_ClampRefreshInterval(int input, int expected)
+        {
+            Assert.That(
+                GitPackageManagerUserSettings.ClampRefreshIntervalMinutes(input),
+                Is.EqualTo(expected));
+        }
+
+        [Test]
+        public void UserSettings_UseProjectLocalUserSettingsPath()
+        {
+            Assert.That(
+                GitPackageManagerUserSettings.SettingsFilePath,
+                Is.EqualTo("UserSettings/GitPackageManagerSettings.asset"));
+        }
+
+        [TestCase(-1, (int)GitPackageManagerStartupTab.InProject)]
+        [TestCase(0, (int)GitPackageManagerStartupTab.InProject)]
+        [TestCase(1, (int)GitPackageManagerStartupTab.GitHub)]
+        [TestCase(99, (int)GitPackageManagerStartupTab.InProject)]
+        public void UserSettings_NormalizeStartupTab(int input, int expected)
+        {
+            Assert.That(
+                (int)GitPackageManagerUserSettings.NormalizeStartupTab(
+                    (GitPackageManagerStartupTab)input),
+                Is.EqualTo(expected));
+        }
+
+        [TestCase(-1, (int)GitPackageManagerDefaultGitHubFilter.AllRepositories)]
+        [TestCase(0, (int)GitPackageManagerDefaultGitHubFilter.AllRepositories)]
+        [TestCase(1, (int)GitPackageManagerDefaultGitHubFilter.ValidUpmPackages)]
+        [TestCase(99, (int)GitPackageManagerDefaultGitHubFilter.AllRepositories)]
+        public void UserSettings_NormalizeDefaultGitHubFilter(int input, int expected)
+        {
+            Assert.That(
+                (int)GitPackageManagerUserSettings.NormalizeDefaultGitHubFilter(
+                    (GitPackageManagerDefaultGitHubFilter)input),
+                Is.EqualTo(expected));
+        }
+
+        [TestCase(false, 3600.0, 300.0, false)]
+        [TestCase(true, 299.0, 300.0, false)]
+        [TestCase(true, 300.0, 300.0, false)]
+        [TestCase(true, 301.0, 300.0, true)]
+        [TestCase(true, 1.0, -1.0, true)]
+        public void InProjectRefresh_RespectsPreferenceAndInterval(
+            bool enabled,
+            double elapsedSeconds,
+            double intervalSeconds,
+            bool expected)
+        {
+            Assert.That(
+                GitPackageManagerWindow.ShouldRefreshInstalledPackagesOnReturn(
+                    enabled,
+                    elapsedSeconds,
+                    intervalSeconds),
+                Is.EqualTo(expected));
+        }
+
+        [Test]
+        public void WelcomePresentation_IsRecordedOnlyAfterARepaint()
+        {
+            Assert.That(
+                GitPackageManagerWindow.ShouldRecordWelcomeShown(true, false, EventType.Layout),
+                Is.False);
+            Assert.That(
+                GitPackageManagerWindow.ShouldRecordWelcomeShown(true, false, EventType.Repaint),
+                Is.True);
+            Assert.That(
+                GitPackageManagerWindow.ShouldRecordWelcomeShown(false, false, EventType.Repaint),
+                Is.False);
+            Assert.That(
+                GitPackageManagerWindow.ShouldRecordWelcomeShown(true, true, EventType.Repaint),
+                Is.False);
+        }
+
+        [TestCase(false, false, false)]
+        [TestCase(false, true, true)]
+        [TestCase(true, false, true)]
+        [TestCase(true, true, true)]
+        public void WelcomeReopen_PreservesWhetherThePreferenceWasActuallyRecorded(
+            bool persisted,
+            bool shownThisSession,
+            bool expected)
+        {
+            Assert.That(
+                GitPackageManagerWindow.IsWelcomePreferenceAlreadyRecorded(
+                    persisted,
+                    shownThisSession),
+                Is.EqualTo(expected));
+        }
+
+        [TestCase(true, true, true, true, (int)GitPackageManagerWindow.WelcomeSetupState.Checking)]
+        [TestCase(false, false, true, true, (int)GitPackageManagerWindow.WelcomeSetupState.GitMissing)]
+        [TestCase(false, true, false, false, (int)GitPackageManagerWindow.WelcomeSetupState.GitHubCliMissing)]
+        [TestCase(false, true, true, false, (int)GitPackageManagerWindow.WelcomeSetupState.GitHubAuthenticationMissing)]
+        [TestCase(false, true, true, true, (int)GitPackageManagerWindow.WelcomeSetupState.Ready)]
+        public void WelcomeSetupState_UsesStableDependencyPrecedence(
+            bool checking,
+            bool git,
+            bool gh,
+            bool authenticated,
+            int expected)
+        {
+            Assert.That(
+                (int)GitPackageManagerWindow.GetWelcomeSetupState(checking, git, gh, authenticated),
+                Is.EqualTo(expected));
+        }
+
+        [TestCase(true, true, false)]
+        [TestCase(false, false, false)]
+        [TestCase(false, true, true)]
+        public void WelcomeCanFinish_RequiresCompletedGitCheck(
+            bool checking,
+            bool git,
+            bool expected)
+        {
+            Assert.That(GitPackageManagerWindow.CanFinishWelcome(checking, git), Is.EqualTo(expected));
+        }
+
+        [TestCase(519f, true)]
+        [TestCase(520f, false)]
+        [TestCase(620f, false)]
+        public void WelcomeActions_StackOnlyAtNarrowWidths(float width, bool expected)
+        {
+            Assert.That(GitPackageManagerWindow.ShouldStackWelcomeActions(width), Is.EqualTo(expected));
+        }
+
+        [Test]
+        public void GitHubAuthenticationPlan_UsesFixedBrowserFlowWithoutTokens()
+        {
+            IReadOnlyList<string> arguments = GitHubUtility.BuildAuthenticationArguments();
+
+            Assert.That(arguments, Is.EqualTo(new[]
+            {
+                "auth",
+                "login",
+                "--hostname",
+                "github.com",
+                "--git-protocol",
+                "https",
+                "--web",
+                "--clipboard"
+            }));
+            Assert.That(arguments, Does.Not.Contain("--with-token"));
+            Assert.That(GitHubUtility.AuthenticationDisplayCommand, Does.Not.Contain("token"));
+            Assert.That(GitHubUtility.AuthenticationTerminalDisplayCommand, Does.Not.Contain("--clipboard"));
+            Assert.That(GitHubUtility.AuthenticationTerminalDisplayCommand, Does.Not.Contain("--git-protocol"));
+            Assert.That(GitHubUtility.BuildAuthenticationStatusArguments(), Is.EqualTo(new[]
+            {
+                "api",
+                "user",
+                "--hostname",
+                "github.com",
+                "--jq",
+                ".login"
+            }));
+            Assert.That(
+                GitHubUtility.AuthenticationDeviceUrl,
+                Is.EqualTo("https://github.com/login/device"));
+        }
+
+        [TestCase("gh version 2.78.0 (2025-08-01)", false)]
+        [TestCase("gh version 2.79.0 (2025-09-09)", true)]
+        [TestCase("gh version 2.96.0 (2026-07-02)", true)]
+        [TestCase("unexpected output", false)]
+        [TestCase(null, false)]
+        public void GitHubAuthenticationCompatibility_RequiresClipboardCapableVersion(
+            string versionOutput,
+            bool expected)
+        {
+            Assert.That(
+                GitHubUtility.SupportsClipboardAuthentication(versionOutput),
+                Is.EqualTo(expected));
+        }
+
+        [Test]
+        public void GitHubAuthenticationFailure_DoesNotExposeCommandOutput()
+        {
+            var result = new CommandResult
+            {
+                ExitCode = 1,
+                StdOut = "one-time-code-SECRET",
+                StdErr = "https://user:secret@github.com/login/device",
+                TerminationConfirmed = true
+            };
+
+            string message = GitPackageManagerWindow.BuildGitHubAuthenticationFailureMessage(result);
+
+            Assert.That(message, Does.Contain("exit code 1"));
+            Assert.That(message, Does.Not.Contain("one-time-code-SECRET"));
+            Assert.That(message, Does.Not.Contain("user:secret"));
+        }
+
+        [Test]
+        public void GitHubAuthenticationFailure_UnconfirmedTerminationRequiresRestart()
+        {
+            var result = new CommandResult
+            {
+                ExitCode = -1,
+                Cancelled = true,
+                TerminationConfirmed = false
+            };
+
+            string message = GitPackageManagerWindow.BuildGitHubAuthenticationFailureMessage(result);
+
+            Assert.That(message, Does.Contain("could not confirm"));
+            Assert.That(message, Does.Contain("Restart Unity"));
+        }
+
+        [Test]
+        public void IsCurrentPackage_DetectsPackageIdOrInstalledPath()
+        {
+            Assert.That(
+                GitPackageManagerWindow.IsCurrentPackage(new GitPackageInfo
+                {
+                    PackageName = "com.martincalander.gitpackagemanager",
+                    Path = "Packages/com.example.renamedfolder"
+                }),
+                Is.True);
+            Assert.That(
+                GitPackageManagerWindow.IsCurrentPackage(new GitPackageInfo
+                {
+                    PackageName = null,
+                    Path = @"Packages\com.martincalander.gitpackagemanager"
+                }),
+                Is.True);
+            Assert.That(
+                GitPackageManagerWindow.IsCurrentPackage(new GitPackageInfo
+                {
+                    PackageName = "com.example.otherpackage",
+                    Path = "Packages/com.example.otherpackage"
+                }),
+                Is.False);
+            Assert.That(GitPackageManagerWindow.IsCurrentPackage(null), Is.False);
+        }
+
+        [Test]
+        public void BuildSelfRemovalWarning_ExplainsImpactAndRecovery()
+        {
+            string warning = GitPackageManagerWindow.BuildSelfRemovalWarning(
+                "Packages/com.martincalander.gitpackagemanager");
+
+            Assert.That(warning, Does.Contain("Git Package Manager itself"));
+            Assert.That(warning, Does.Contain("window will close"));
+            Assert.That(warning, Does.Contain("reinstall"));
+            Assert.That(warning, Does.Contain("UPM"));
+            Assert.That(warning, Does.Contain("reviewed and committed"));
+        }
+
         [Test]
         public void BuildCliInstallFailureMessage_PreservesActionableErrorAndRedactsCredentials()
         {
@@ -295,7 +1021,7 @@ namespace MartinCalander.GitPackageManager.Editor.Tests
         {
             var runner = new FakeCommandRunner(spec => Fail(spec, "network unavailable"));
             CliCommandRunner.CurrentRunner = runner;
-            var coordinator = new RepositoryCoordinator();
+            using var coordinator = new RepositoryCoordinator();
             const string url = "https://github.com/owner/repo.git";
 
             coordinator.RequestBranches(url);
@@ -332,7 +1058,7 @@ namespace MartinCalander.GitPackageManager.Editor.Tests
             });
             CliCommandRunner.CurrentRunner = runner;
 
-            var coordinator = new DiscoveryCoordinator();
+            using var coordinator = new DiscoveryCoordinator();
             coordinator.EnsureUsername();
             coordinator.LoadInitialPage();
 
@@ -361,7 +1087,7 @@ namespace MartinCalander.GitPackageManager.Editor.Tests
             });
             CliCommandRunner.CurrentRunner = runner;
 
-            var coordinator = new DiscoveryCoordinator();
+            using var coordinator = new DiscoveryCoordinator();
             coordinator.EnsureUsername();
 
             // Wait for username to resolve
@@ -396,7 +1122,7 @@ namespace MartinCalander.GitPackageManager.Editor.Tests
             });
             CliCommandRunner.CurrentRunner = runner;
 
-            var coordinator = new DiscoveryCoordinator();
+            using var coordinator = new DiscoveryCoordinator();
             coordinator.LoadInitialPage();
 
             WaitForDiscovery(coordinator, 2);
@@ -428,6 +1154,9 @@ namespace MartinCalander.GitPackageManager.Editor.Tests
         {
             var runner = new FakeCommandRunner(spec =>
             {
+                if (spec.Arguments.Contains("api user --jq"))
+                    return Success("owner");
+
                 if (spec.Arguments.Contains("user/repos"))
                 {
                     Thread.Sleep(30);
@@ -441,7 +1170,7 @@ namespace MartinCalander.GitPackageManager.Editor.Tests
             });
             CliCommandRunner.CurrentRunner = runner;
 
-            var coordinator = new DiscoveryCoordinator();
+            using var coordinator = new DiscoveryCoordinator();
             coordinator.LoadInitialPage();
             coordinator.SetSearchQuery("newest", 0);
             coordinator.Tick(1.0);
@@ -450,6 +1179,42 @@ namespace MartinCalander.GitPackageManager.Editor.Tests
 
             Assert.That(coordinator.DisplayedRepos, Has.Count.EqualTo(1));
             Assert.That(coordinator.DisplayedRepos[0].Name, Is.EqualTo("repo-100"));
+        }
+
+        [Test]
+        public void DiscoveryCoordinator_DisposeClearsAuthenticatedAccountState()
+        {
+            var runner = new FakeCommandRunner(spec =>
+            {
+                if (spec.Arguments.Contains("api user --jq"))
+                    return Success("signed-in-user");
+                if (spec.Arguments.Contains("user/orgs"))
+                    return Success("example-org");
+                return Fail(spec, "Unexpected");
+            });
+            CliCommandRunner.CurrentRunner = runner;
+
+            var coordinator = new DiscoveryCoordinator();
+            coordinator.EnsureUsername();
+            var timeoutAt = DateTime.UtcNow.AddSeconds(2);
+            while (DateTime.UtcNow < timeoutAt &&
+                   (string.IsNullOrEmpty(coordinator.Username) || !coordinator.OrgsLoaded))
+            {
+                coordinator.Tick(0);
+                Thread.Sleep(10);
+            }
+
+            Assert.That(coordinator.Username, Is.EqualTo("signed-in-user"));
+            Assert.That(coordinator.SelectedOwner, Is.EqualTo("signed-in-user"));
+            Assert.That(coordinator.Organizations, Does.Contain("example-org"));
+
+            coordinator.Dispose();
+
+            Assert.That(coordinator.Username, Is.Empty);
+            Assert.That(coordinator.SelectedOwner, Is.Empty);
+            Assert.That(coordinator.Organizations, Is.Empty);
+            Assert.That(coordinator.OrgsLoaded, Is.False);
+            Assert.That(coordinator.HasNextPage, Is.False);
         }
 
         // ── Helpers ──
@@ -502,7 +1267,8 @@ namespace MartinCalander.GitPackageManager.Editor.Tests
             {
                 ExitCode = 0,
                 StdOut = stdOut,
-                StdErr = string.Empty
+                StdErr = string.Empty,
+                TerminationConfirmed = true
             };
         }
 
@@ -512,7 +1278,8 @@ namespace MartinCalander.GitPackageManager.Editor.Tests
             {
                 ExitCode = 1,
                 StdOut = string.Empty,
-                StdErr = $"{error}: {spec.FileName} {spec.Arguments}"
+                StdErr = $"{error}: {spec.FileName} {spec.Arguments}",
+                TerminationConfirmed = true
             };
         }
 

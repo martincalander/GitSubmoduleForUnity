@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import argparse
 import json
 import re
 import sys
@@ -12,6 +13,59 @@ from urllib.parse import unquote
 
 ROOT = Path(__file__).resolve().parents[2]
 ERRORS: list[str] = []
+
+# SemVer 2.0.0 requires plain ASCII digits, forbids leading zeroes in core
+# numbers and numeric pre-release identifiers, and permits leading zeroes in
+# build identifiers. Keep release tag validation on this same implementation.
+SEMVER_PATTERN = re.compile(
+    r"^(?P<major>0|[1-9][0-9]*)\."
+    r"(?P<minor>0|[1-9][0-9]*)\."
+    r"(?P<patch>0|[1-9][0-9]*)"
+    r"(?:-(?P<prerelease>"
+    r"(?:0|[1-9][0-9]*|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*)"
+    r"(?:\.(?:0|[1-9][0-9]*|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*))*"
+    r"))?"
+    r"(?:\+(?P<build>[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?$"
+)
+
+
+def parse_semver(version: str) -> re.Match[str] | None:
+    return SEMVER_PATTERN.fullmatch(version)
+
+
+def semver_self_check_errors() -> list[str]:
+    valid = (
+        "0.0.0",
+        "1.2.3",
+        "1.0.0-alpha",
+        "1.0.0-alpha.1",
+        "1.0.0-0.3.7",
+        "1.0.0-x.7.z.92",
+        "1.0.0-x-y-z.--",
+        "1.0.0+build.01",
+        "1.0.0-beta+exp.sha.5114f85",
+    )
+    invalid = (
+        "1",
+        "1.2",
+        "1.2.3.4",
+        "01.2.3",
+        "1.02.3",
+        "1.2.03",
+        "1.0.0-",
+        "1.0.0-01",
+        "1.0.0-alpha..1",
+        "1.0.0+",
+        "1.0.0+build..1",
+        "1.0.0-alpha_beta",
+        "v1.0.0",
+        "1.0.0\n",
+        "１.0.0",
+    )
+
+    errors = [f"accepted invalid version {value!r}" for value in invalid if parse_semver(value)]
+    errors.extend(f"rejected valid version {value!r}" for value in valid if not parse_semver(value))
+    return errors
 
 
 def fail(message: str) -> None:
@@ -43,8 +97,8 @@ def check_package_json() -> None:
 
     if package.get("name") != "com.martincalander.gitpackagemanager":
         fail("package.json name must be com.martincalander.gitpackagemanager")
-    if not re.fullmatch(r"\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?", str(package.get("version", ""))):
-        fail("package.json version is not valid SemVer")
+    if not parse_semver(str(package.get("version", ""))):
+        fail("package.json version is not valid SemVer 2.0.0")
     if package.get("license") != "MIT":
         fail("package.json license must be MIT")
     author = package.get("author") or {}
@@ -52,7 +106,11 @@ def check_package_json() -> None:
         fail("package.json author.name must attribute Martin Calander")
 
     dependencies = package.get("dependencies") or {}
-    if dependencies != {"com.unity.modules.imgui": "1.0.0"}:
+    expected_dependencies = {
+        "com.unity.modules.imgui": "1.0.0",
+        "com.unity.modules.jsonserialize": "1.0.0",
+    }
+    if dependencies != expected_dependencies:
         fail("package.json contains unexpected dependencies")
 
 
@@ -171,7 +229,37 @@ def check_markdown_links() -> None:
                 fail(f"Broken local link: {document.relative_to(ROOT)} -> {raw_target}")
 
 
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--check-release-tag",
+        metavar="TAG",
+        help=(
+            "validate one v-prefixed SemVer 2.0.0 release tag and print whether "
+            "it is a pre-release"
+        ),
+    )
+    return parser.parse_args()
+
+
 def main() -> int:
+    args = parse_args()
+
+    self_check_errors = semver_self_check_errors()
+    if self_check_errors:
+        for error in self_check_errors:
+            print(f"ERROR: Internal SemVer self-check {error}.", file=sys.stderr)
+        return 1
+
+    if args.check_release_tag is not None:
+        tag = args.check_release_tag
+        match = parse_semver(tag[1:]) if tag.startswith("v") else None
+        if not match:
+            print(f"ERROR: Invalid SemVer 2.0.0 release tag: {tag!r}", file=sys.stderr)
+            return 1
+        print("true" if match.group("prerelease") is not None else "false")
+        return 0
+
     check_package_json()
     check_required_files()
     check_unity_meta_files()

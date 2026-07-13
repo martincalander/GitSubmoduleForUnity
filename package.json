@@ -4,7 +4,7 @@
   "displayName": "Git Package Manager",
   "description": "Reliable, cross-platform Unity Editor tooling for discovering and managing Git submodule packages under Packages/.",
   "unity": "2021.3",
-  "unityRelease": "0b1",
+  "unityRelease": "0f1",
   "documentationUrl": "https://github.com/martincalander/com.martincalander.gitpackagemanager/blob/main/Documentation~/index.md",
   "changelogUrl": "https://github.com/martincalander/com.martincalander.gitpackagemanager/blob/main/CHANGELOG.md",
   "licensesUrl": "https://github.com/martincalander/com.martincalander.gitpackagemanager/blob/main/LICENSE.md",
@@ -29,6 +29,7 @@
     "url": "https://github.com/martincalander/com.martincalander.gitpackagemanager/issues"
   },
   "dependencies": {
-    "com.unity.modules.imgui": "1.0.0"
+    "com.unity.modules.imgui": "1.0.0",
+    "com.unity.modules.jsonserialize": "1.0.0"
   }
 }

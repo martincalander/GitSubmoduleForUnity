@@ -37,8 +37,11 @@ The package launches `git` and optional `gh` processes with
 `UseShellExecute = false`. It does not execute user input through a shell.
 
 - repository URLs, branch names, package names, and managed paths are validated;
+- network repositories are limited to HTTPS and SSH; plaintext `http://`,
+  `git://`, embedded credentials, and executable remote helpers are rejected;
 - mutations are restricted to direct `Packages/com.author.package` paths;
-- stdout and stderr are redirected and drained concurrently;
+- stdout and stderr are redirected, drained concurrently, bounded, and treated
+  as unusable for structural parsing when incomplete;
 - commands have bounded timeouts;
 - interactive credential prompts are disabled;
 - missing CLI tools are never installed silently: supported native installer
@@ -63,6 +66,9 @@ credential manager, SSH agent, and GitHub CLI.
 
 The package reads project `.gitmodules` and package metadata. Mutating package
 operations are constrained to validated direct children of `Packages/`.
+Persisted submodule URLs, local Git configuration, worktree origins, and
+postconditions are revalidated around mutations. Root manifests must be bounded
+regular UTF-8 files rather than symbolic links or reparse points.
 
 ## User Responsibilities
 

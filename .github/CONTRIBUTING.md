@@ -95,6 +95,12 @@ In Unity:
 If a platform or Unity version could not be tested, state that clearly in the
 pull request.
 
+CI runs license-free structure, Markdown, archive, and portability checks on
+every pull request. Unity credentials are never exposed to pull-request code.
+After reviewing a contribution, a maintainer can manually dispatch the
+**Sanity Checks** workflow with the reviewed commit as its `ref` to run the
+protected Unity compile and EditMode-test gate.
+
 ## Pull Request Checklist
 
 - Keep one logical change per pull request.

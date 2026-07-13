@@ -34,7 +34,8 @@ standard and visible to normal Git tooling.
 ## What It Does
 
 - Lists Git submodules installed directly under `Packages/`.
-- Adds a package from any Git repository URL.
+- Adds a package from a secure HTTPS or SSH repository URL, or from an explicit
+  local repository path.
 - Discovers repositories from GitHub users and organizations when `gh` is
   available.
 - Validates that a repository contains a root UPM `package.json` before keeping
@@ -59,7 +60,12 @@ for GitHub repository discovery. If a tool is missing, Git Package Manager
 shows an official installation link and a platform-specific command. On
 supported macOS and Windows setups, it can run that native command only after
 showing it and receiving your explicit confirmation. Linux installation stays
-in your terminal so administrator prompts remain visible.
+in your terminal so administrator prompts remain visible. The first time the
+window is opened in a project, a guided setup page checks both tools and offers
+the same install actions. If `gh` is installed but not authenticated, the page
+can start GitHub CLI's device login, open GitHub's device page, and verify the
+resulting session. One-click login requires GitHub CLI 2.79.0 or newer; older
+versions keep a compatible visible-terminal command available.
 
 ## Installation
 
@@ -75,9 +81,11 @@ managed by the tool are still added to the project as Git submodules.
 
 ## Usage
 
-1. Verify that `git --version` works in a terminal.
-2. For GitHub discovery, install `gh` and run `gh auth login`.
-3. Open **Window > Package Management > Git Package Manager**.
+1. Open **Window > Package Management > Git Package Manager**.
+2. Complete the one-time setup page. Git is required; GitHub CLI is optional
+   but recommended for repository discovery.
+3. If prompted, install Git or GitHub CLI with explicit approval, then choose
+   **Authenticate with GitHub...** to complete the browser login.
 4. Use **In Project** to manage installed package submodules.
 5. Use **GitHub** to find package repositories visible to your account.
 6. Use the **+** menu to add a repository directly by URL.
@@ -95,7 +103,9 @@ repositories:
 - searches execute through the GitHub API rather than filtering a full local
   download;
 - owner, search, and page changes cancel stale in-flight results;
-- package validation runs only for the selected repository;
+- package validation normally runs only for the selected repository;
+- the **Valid UPM Packages** filter checks the current page in small batches
+  and shows only repositories with a valid root manifest;
 - branch information is loaded only when requested.
 
 Without GitHub CLI, direct Git URLs and installed-submodule management remain
@@ -106,6 +116,10 @@ workflow; `gh` is required only for the **GitHub** discovery tab.
 
 - Managed paths must be direct children of `Packages/` with a valid
   `com.author.package` name.
+- Network repositories must use HTTPS or SSH (including SCP-style SSH URLs).
+  Plaintext `http://` and `git://` transports are rejected to prevent an
+  in-transit repository substitution; explicit local and `file://` repositories
+  remain supported.
 - Commands are executed without a shell, so repository input is not evaluated
   as shell syntax.
 - Git credential prompts are disabled inside Editor processes to prevent Unity
@@ -113,7 +127,11 @@ workflow; `gh` is required only for the **GitHub** discovery tab.
 - Standard output and error are drained concurrently and operations use bounded
   timeouts.
 - A newly cloned repository is rolled back when its root package validation
-  fails.
+  fails. The manifest must be a regular, bounded UTF-8 file with a reverse-domain
+  package name and a SemVer 2.0 version.
+- Persisted `.gitmodules`, local Git configuration, and worktree origins are
+  revalidated before a mutation, and incomplete structural Git output fails
+  closed instead of being partially trusted.
 - Network-heavy add and update operations run off the Editor UI thread, and
   failed additions clean safe partial-clone artifacts or report exact manual
   recovery steps.

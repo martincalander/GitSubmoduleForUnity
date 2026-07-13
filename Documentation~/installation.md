@@ -26,13 +26,36 @@ organization discovery plus remote `package.json` validation.
 
 ```bash
 gh --version
-gh auth login
-gh auth status -h github.com
+gh auth login --hostname github.com --web
+gh api user --hostname github.com --jq .login
 ```
 
 Install it from [cli.github.com](https://cli.github.com/).
 The editor provides the same opt-in assistance when GitHub CLI is missing.
-Linux commands remain in your terminal so administrator prompts are visible.
+Linux install commands remain in your terminal so administrator prompts are
+visible. When GitHub CLI is installed but unauthenticated, the welcome page and
+GitHub dependency card can start its device login. Unity opens GitHub's device
+page, GitHub CLI copies the one-time code to the clipboard, and the editor makes
+a fresh authenticated `gh api user` request before enabling discovery. If
+clipboard access fails, cancel the in-editor flow and run the displayed command
+in a visible terminal after cancellation finishes so the code remains visible.
+If Unity cannot confirm the authentication process stopped, restart Unity before
+retrying. One-click login requires GitHub CLI
+2.79.0 or newer. The approval dialog also discloses that its non-interactive
+flow selects HTTPS as GitHub CLI's host-wide Git protocol; the terminal fallback
+leaves that choice interactive.
+
+## First Open
+
+Open **Window > Package Management > Git Package Manager**. A one-time welcome
+page checks Git, GitHub CLI, and GitHub authentication for the current user. Its
+shown flag is stored per user and project under Unity's ignored
+`UserSettings/` directory. The page can be opened again manually from
+**Welcome & Setup...** in the window menu.
+
+The same per-user file stores the Git Package Manager options shown under
+Unity's **Preferences > Git Package Manager** page. That page also provides an
+**Open Welcome & Setup** button.
 
 ## Add the Package with UPM
 
@@ -77,6 +100,11 @@ The package uses `System.Diagnostics.Process` without a shell, so command
 arguments follow the platform's normal process rules. Paths are normalized for
 Git configuration while Windows backslashes are preserved when quoting local
 repository locations.
+
+Network packages must use HTTPS or SSH. Plaintext `http://` and `git://`
+transports and URLs containing passwords or access tokens are rejected.
+Explicit local paths and `file://` repositories remain available for local
+development.
 
 ## Upgrade or Remove
 

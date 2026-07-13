@@ -5,6 +5,8 @@ namespace MartinCalander.GitPackageManager.Editor
 {
     public partial class GitPackageManagerWindow
     {
+        private string lastAutoDerivedPackageName = string.Empty;
+
         private void ShowAddFromUrlPopup(Rect buttonRect)
         {
             addStatus = string.Empty;
@@ -26,8 +28,17 @@ namespace MartinCalander.GitPackageManager.Editor
             GUILayout.Label("URL", Styles.InfoLabel, GUILayout.Width(80));
             addUrl = EditorGUILayout.TextField(addUrl);
             EditorGUILayout.EndHorizontal();
-            if (EditorGUI.EndChangeCheck() && TryDerivePackageNameFromUrl(addUrl, out string derivedName))
-                addPackageName = derivedName;
+            bool urlChanged = EditorGUI.EndChangeCheck();
+            if (TryDerivePackageNameFromUrl(addUrl, out string derivedName))
+            {
+                addPackageName = ResolvePackageNameAfterUrlEdit(
+                    addPackageName,
+                    urlChanged,
+                    lastAutoDerivedPackageName,
+                    derivedName);
+                if (urlChanged)
+                    lastAutoDerivedPackageName = derivedName;
+            }
 
             EditorGUILayout.BeginHorizontal();
             GUILayout.Label("Branch", Styles.InfoLabel, GUILayout.Width(80));
@@ -39,12 +50,6 @@ namespace MartinCalander.GitPackageManager.Editor
             GUILayout.Label("Package Name", Styles.InfoLabel, GUILayout.Width(80));
             addPackageName = EditorGUILayout.TextField(addPackageName);
             EditorGUILayout.EndHorizontal();
-
-            if (TryDerivePackageNameFromUrl(addUrl, out string autoName) &&
-                (string.IsNullOrWhiteSpace(addPackageName) || !GitUtility.IsValidPackageName(addPackageName)))
-            {
-                addPackageName = autoName;
-            }
 
             EditorGUILayout.Space(8);
             string validationError = ValidatePackageInput(addUrl, addPackageName, addBranch);
@@ -60,7 +65,7 @@ namespace MartinCalander.GitPackageManager.Editor
 
             using (new EditorGUI.DisabledScope(
                        !gitAvailable ||
-                       activeOperation != null ||
+                       IsRepositoryOperationBusy ||
                        !string.IsNullOrWhiteSpace(validationError)))
             {
                 if (GUILayout.Button("Add", GUILayout.Height(24)))
@@ -68,9 +73,28 @@ namespace MartinCalander.GitPackageManager.Editor
             }
         }
 
+        internal static string ResolvePackageNameAfterUrlEdit(
+            string currentPackageName,
+            bool urlChanged,
+            string previousDerivedPackageName,
+            string newDerivedPackageName)
+        {
+            bool isStillAutomatic = string.IsNullOrWhiteSpace(currentPackageName) ||
+                                    string.Equals(
+                                        currentPackageName,
+                                        previousDerivedPackageName,
+                                        System.StringComparison.Ordinal);
+            return urlChanged &&
+                   isStillAutomatic &&
+                   !string.IsNullOrWhiteSpace(newDerivedPackageName)
+                ? newDerivedPackageName
+                : currentPackageName;
+        }
+
         private sealed class AddFromUrlPopup : PopupWindowContent
         {
             private readonly GitPackageManagerWindow owner;
+            private Vector2 scrollPosition;
 
             public AddFromUrlPopup(GitPackageManagerWindow owner)
             {
@@ -79,13 +103,15 @@ namespace MartinCalander.GitPackageManager.Editor
 
             public override Vector2 GetWindowSize()
             {
-                return new Vector2(400f, 230f);
+                return GetAddFromUrlPopupSize();
             }
 
             public override void OnGUI(Rect rect)
             {
                 Styles.Initialize();
+                scrollPosition = EditorGUILayout.BeginScrollView(scrollPosition);
                 owner.DrawAddByUrl();
+                EditorGUILayout.EndScrollView();
             }
 
             public override void OnClose()
@@ -102,6 +128,11 @@ namespace MartinCalander.GitPackageManager.Editor
             {
                 editorWindow?.Repaint();
             }
+        }
+
+        internal static Vector2 GetAddFromUrlPopupSize()
+        {
+            return new Vector2(440f, 320f);
         }
     }
 }

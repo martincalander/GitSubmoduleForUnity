@@ -23,14 +23,34 @@ Run:
 
 ```bash
 gh --version
-gh auth status -h github.com
+gh api user --hostname github.com --jq .login
 ```
 
-If authentication fails, use `gh auth login`. Ensure the active account can see
-the user or organization repositories you expect.
+If authentication fails, use the in-editor **Authenticate with GitHub...**
+action or run `gh auth login --hostname github.com --web` in a visible terminal.
+Ensure the active account can see the user or organization repositories you
+expect.
 
-The editor can help install `gh`, but authentication always remains a separate
-user action in a normal terminal.
+One-click authentication requires GitHub CLI 2.79.0 or newer and working system
+clipboard access. If no device code is available to paste, cancel the in-editor
+flow and use the visible-terminal command after cancellation finishes so the
+code remains visible. Restart Unity first if the editor reports that process
+termination could not be confirmed.
+
+If Unity reports that `GH_TOKEN` or `GITHUB_TOKEN` controls GitHub CLI, the
+one-click flow cannot replace that environment-provided identity. Remove or
+update the variable, restart Unity, and click **Check again**, or authenticate
+from a terminal where the variable is unset. If a script reload interrupted an
+authentication attempt, restart Unity before starting another one; this avoids
+leaving two hidden GitHub CLI login processes active.
+
+## A Repository URL Is Rejected
+
+Use HTTPS or SSH for network repositories. Plaintext `http://` and `git://`
+transports are blocked because they cannot protect package code from
+substitution in transit. Explicit local paths and `file://` repositories are
+supported. Do not place passwords or access tokens in a URL; configure Git's
+credential manager or SSH agent in a normal terminal.
 
 ## A Command Times Out or Appears to Need Credentials
 
@@ -84,6 +104,14 @@ Confirm the parent repository records the new submodule commit with:
 git status
 git submodule status
 ```
+
+## Unity Reports an Interrupted Repository Operation
+
+Do not dismiss the recovery warning until you have inspected `git status`,
+`.gitmodules`, the package path, and any Git or SSH processes that may still be
+running. The warning is retained when process termination, rollback, or a
+postcondition cannot be proven. Once the repository is safe, use the recovery
+acknowledgement in the window and refresh again.
 
 ## A Teammate Cannot Clone a Private Package
 
