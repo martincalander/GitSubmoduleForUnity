@@ -87,6 +87,8 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   and report the failure inside Preferences instead of throwing through IMGUI.
 - Count a manually opened first-time welcome page as shown, preventing an
   unexpected second automatic presentation on the next window open.
+- Keep the notification-safety regression test from writing its intentional
+  callback exception to Unity's Console while preserving production reporting.
 
 ## [1.0.0] - 2026-07-12
 

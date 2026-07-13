@@ -761,7 +761,8 @@ namespace MartinCalander.GitPackageManager.Editor
 
         internal static void NotifyCompletion(
             CommandResult result,
-            Action<CommandResult> notification)
+            Action<CommandResult> notification,
+            Action<Exception> exceptionHandler = null)
         {
             if (notification == null)
                 return;
@@ -772,14 +773,15 @@ namespace MartinCalander.GitPackageManager.Editor
             }
             catch (Exception ex)
             {
-                Debug.LogException(ex);
+                ReportNotificationException(ex, exceptionHandler);
             }
         }
 
         internal static void NotifyCompletion(
             CommandResult result,
             GitOperationCompletionOutcome effectiveOutcome,
-            Action<CommandResult, GitOperationCompletionOutcome> notification)
+            Action<CommandResult, GitOperationCompletionOutcome> notification,
+            Action<Exception> exceptionHandler = null)
         {
             if (notification == null)
                 return;
@@ -791,8 +793,21 @@ namespace MartinCalander.GitPackageManager.Editor
             }
             catch (Exception ex)
             {
-                Debug.LogException(ex);
+                ReportNotificationException(ex, exceptionHandler);
             }
+        }
+
+        private static void ReportNotificationException(
+            Exception exception,
+            Action<Exception> exceptionHandler)
+        {
+            if (exceptionHandler != null)
+            {
+                exceptionHandler(exception);
+                return;
+            }
+
+            Debug.LogException(exception);
         }
 
         internal static GitOperationCompletionOutcome ApplyFinalizationSafety(

@@ -1,11 +1,9 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
-using System.Text.RegularExpressions;
 using System.Threading;
 using NUnit.Framework;
 using UnityEngine;
-using UnityEngine.TestTools;
 
 namespace MartinCalander.GitPackageManager.Editor.Tests
 {
@@ -54,14 +52,15 @@ namespace MartinCalander.GitPackageManager.Editor.Tests
                 result,
                 _ => GitOperationCompletionOutcome.Succeeded);
 
-            LogAssert.Expect(
-                LogType.Exception,
-                new Regex("InvalidOperationException: simulated UI notification failure"));
+            Exception notificationException = null;
             GitOperationService.NotifyCompletion(
                 result,
-                _ => throw new InvalidOperationException("simulated UI notification failure"));
+                _ => throw new InvalidOperationException("simulated UI notification failure"),
+                exception => notificationException = exception);
 
             Assert.That(outcome, Is.EqualTo(GitOperationCompletionOutcome.Succeeded));
+            Assert.That(notificationException, Is.TypeOf<InvalidOperationException>());
+            Assert.That(notificationException.Message, Is.EqualTo("simulated UI notification failure"));
         }
 
         [TestCase((int)GitPackageManagerWindow.Tab.Discover, true, true, (int)GitPackageManagerWindow.Tab.Installed)]
