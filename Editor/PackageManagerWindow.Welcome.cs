@@ -9,7 +9,7 @@ namespace MartinCalander.GitPackageManager.Editor
         private const float WelcomeMaximumWidth = 620f;
         private const float WelcomeStackActionsBelowWidth = 520f;
         private const string DocumentationUrl =
-            "https://github.com/martincalander/com.martincalander.gitpackagemanager#usage";
+            "https://github.com/martincalander/GitPackageManager#usage";
 
         private static bool welcomeShownThisSession;
 

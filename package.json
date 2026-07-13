@@ -5,9 +5,9 @@
   "description": "Reliable, cross-platform Unity Editor tooling for discovering and managing Git submodule packages under Packages/.",
   "unity": "2021.3",
   "unityRelease": "0f1",
-  "documentationUrl": "https://github.com/martincalander/com.martincalander.gitpackagemanager/blob/main/Documentation~/index.md",
-  "changelogUrl": "https://github.com/martincalander/com.martincalander.gitpackagemanager/blob/main/CHANGELOG.md",
-  "licensesUrl": "https://github.com/martincalander/com.martincalander.gitpackagemanager/blob/main/LICENSE.md",
+  "documentationUrl": "https://github.com/martincalander/GitPackageManager/blob/main/Documentation~/index.md",
+  "changelogUrl": "https://github.com/martincalander/GitPackageManager/blob/main/CHANGELOG.md",
+  "licensesUrl": "https://github.com/martincalander/GitPackageManager/blob/main/LICENSE.md",
   "license": "MIT",
   "keywords": [
     "GitHub",
@@ -23,10 +23,10 @@
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/martincalander/com.martincalander.gitpackagemanager.git"
+    "url": "https://github.com/martincalander/GitPackageManager.git"
   },
   "bugs": {
-    "url": "https://github.com/martincalander/com.martincalander.gitpackagemanager/issues"
+    "url": "https://github.com/martincalander/GitPackageManager/issues"
   },
   "dependencies": {
     "com.unity.modules.imgui": "1.0.0",

@@ -20,8 +20,8 @@ submodules as embedded UPM packages under `Packages/`.
 - [Architecture and safety model](architecture.md)
 - [Roadmap](roadmap.md)
 - [Changelog](../CHANGELOG.md)
-- [Support](https://github.com/martincalander/com.martincalander.gitpackagemanager/blob/main/.github/SUPPORT.md)
-- [Security policy](https://github.com/martincalander/com.martincalander.gitpackagemanager/blob/main/.github/SECURITY.md)
+- [Support](https://github.com/martincalander/GitPackageManager/blob/main/.github/SUPPORT.md)
+- [Security policy](https://github.com/martincalander/GitPackageManager/blob/main/.github/SECURITY.md)
 
 ## Product Boundaries
 

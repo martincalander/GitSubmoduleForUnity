@@ -99,7 +99,7 @@ does not create or move a tag.
 - Install the tag from a clean Unity project:
 
   ```text
-  https://github.com/martincalander/com.martincalander.gitpackagemanager.git#v1.0.1
+  https://github.com/martincalander/GitPackageManager.git#v1.0.1
   ```
 
 - Confirm the package imports, the editor window opens, and the documented

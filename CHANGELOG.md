@@ -39,8 +39,10 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Changed
 
 - Renamed the UPM package from `com.essentials.gitpackagemanager` to
-  `com.martincalander.gitpackagemanager`, including its repository, assembly,
-  namespace, installation URLs, and Unity submodule path.
+  `com.martincalander.gitpackagemanager` and aligned its assembly, namespace,
+  and Unity submodule path.
+- Renamed the GitHub repository to `GitPackageManager` while keeping the UPM
+  package identifier `com.martincalander.gitpackagemanager` unchanged.
 - Git now gates all package operations, while GitHub CLI gates only authenticated
   repository discovery; manual additions require Git only.
 - Manual additions run asynchronously, accept an empty default-branch field,
@@ -135,6 +137,6 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Basic project submodule listing, update, remove, and branch operations.
 - Early GitHub discovery and direct URL installation.
 
-[Unreleased]: https://github.com/martincalander/com.martincalander.gitpackagemanager/compare/v1.0.0...HEAD
-[1.0.0]: https://github.com/martincalander/com.martincalander.gitpackagemanager/releases/tag/v1.0.0
-[0.1.0]: https://github.com/martincalander/com.martincalander.gitpackagemanager/releases/tag/v0.1.0
+[Unreleased]: https://github.com/martincalander/GitPackageManager/compare/v1.0.0...HEAD
+[1.0.0]: https://github.com/martincalander/GitPackageManager/releases/tag/v1.0.0
+[0.1.0]: https://github.com/martincalander/GitPackageManager/releases/tag/v0.1.0

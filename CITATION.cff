@@ -5,8 +5,8 @@ type: software
 authors:
   - family-names: Calander
     given-names: Martin
-repository-code: https://github.com/martincalander/com.martincalander.gitpackagemanager
-url: https://github.com/martincalander/com.martincalander.gitpackagemanager
+repository-code: https://github.com/martincalander/GitPackageManager
+url: https://github.com/martincalander/GitPackageManager
 license: MIT
 version: 1.0.0
 date-released: 2026-07-12

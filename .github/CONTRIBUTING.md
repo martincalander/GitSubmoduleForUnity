@@ -31,7 +31,7 @@ scope.
 Add a fork or working clone below a Unity project's `Packages/` directory:
 
 ```bash
-git clone https://github.com/<your-user>/com.martincalander.gitpackagemanager.git \
+git clone https://github.com/<your-user>/GitPackageManager.git \
   Packages/com.martincalander.gitpackagemanager
 ```
 

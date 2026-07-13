@@ -503,10 +503,10 @@ namespace MartinCalander.GitPackageManager.Editor.Tests
         public void TryParseGitHubRepo_ParsesCommonGitHubUrls()
         {
             Assert.That(
-                GitHubUtility.TryParseGitHubRepo("https://github.com/martincalander/com.martincalander.gitpackagemanager.git", out var httpsOwner, out var httpsRepo),
+                GitHubUtility.TryParseGitHubRepo("https://github.com/martincalander/GitPackageManager.git", out var httpsOwner, out var httpsRepo),
                 Is.True);
             Assert.That(httpsOwner, Is.EqualTo("martincalander"));
-            Assert.That(httpsRepo, Is.EqualTo("com.martincalander.gitpackagemanager"));
+            Assert.That(httpsRepo, Is.EqualTo("GitPackageManager"));
 
             Assert.That(
                 GitHubUtility.TryParseGitHubRepo("git@github.com:EssentialsForUnity/com.essentials.extensions.git", out var sshOwner, out var sshRepo),
