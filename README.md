@@ -1,5 +1,17 @@
 <p align="center">
-  <img src="Documentation~/Images/Brand/logo-mark.png" alt="Git Package Manager logo" width="112">
+  <a href="https://git-scm.com/" title="Git">
+    <picture>
+      <img src="GPMIcon.png" alt="Git" width="72" height="72">
+    </picture>
+  </a>
+  &nbsp;&nbsp;&nbsp;&nbsp;
+  <a href="https://unity.com/" title="Unity">
+    <picture>
+      <source media="(prefers-color-scheme: dark)" srcset="https://cdn.simpleicons.org/unity/FFFFFF">
+      <source media="(prefers-color-scheme: light)" srcset="https://cdn.simpleicons.org/unity/000000">
+      <img src="https://cdn.simpleicons.org/unity/000000" alt="Unity" width="72" height="72">
+    </picture>
+  </a>
 </p>
 
 # Git Package Manager
@@ -7,8 +19,8 @@
 Manage Unity packages as real Git submodules, directly from the Editor.
 
 <p align="center">
-  <a href="https://github.com/martincalander/GitSubmoduleForUnity/actions/workflows/ci.yml"><img alt="Sanity Checks" src="https://github.com/martincalander/GitSubmoduleForUnity/actions/workflows/ci.yml/badge.svg"></a>
-  <a href="https://github.com/martincalander/GitSubmoduleForUnity/releases"><img alt="Package version" src="https://img.shields.io/github/package-json/v/martincalander/GitSubmoduleForUnity?filename=package.json&label=package"></a>
+  <a href="https://github.com/martincalander/com.martincalander.gitpackagemanager/actions/workflows/ci.yml"><img alt="Sanity Checks" src="https://github.com/martincalander/com.martincalander.gitpackagemanager/actions/workflows/ci.yml/badge.svg"></a>
+  <a href="https://github.com/martincalander/com.martincalander.gitpackagemanager/releases"><img alt="Package version" src="https://img.shields.io/github/package-json/v/martincalander/com.martincalander.gitpackagemanager?filename=package.json&label=package"></a>
   <img alt="Unity 2021.3 or newer" src="https://img.shields.io/badge/Unity-2021.3%2B-222C37?logo=unity&logoColor=white">
   <img alt="Editor only" src="https://img.shields.io/badge/scope-Editor%20only-555">
   <a href="LICENSE.md"><img alt="MIT License" src="https://img.shields.io/badge/license-MIT-blue"></a>
@@ -55,7 +67,7 @@ Open **Window > Package Manager**, select **Add package from git URL…**, and
 enter:
 
 ```text
-https://github.com/martincalander/GitSubmoduleForUnity.git
+https://github.com/martincalander/com.martincalander.gitpackagemanager.git
 ```
 
 Git Package Manager itself is installed as a UPM Git dependency. Packages
@@ -110,7 +122,7 @@ workflow; `gh` is required only for the **GitHub** discovery tab.
   shown in a confirmation dialog before it can run.
 
 See the [architecture and safety model](Documentation~/architecture.md) and
-[security policy](https://github.com/martincalander/GitSubmoduleForUnity/blob/main/.github/SECURITY.md)
+[security policy](https://github.com/martincalander/com.martincalander.gitpackagemanager/blob/main/.github/SECURITY.md)
 for implementation and reporting details.
 
 ## Documentation
@@ -119,11 +131,11 @@ for implementation and reporting details.
 - [User guide](Documentation~/user-guide.md)
 - [Troubleshooting](Documentation~/troubleshooting.md)
 - [Architecture and safety model](Documentation~/architecture.md)
-- [Contributing](https://github.com/martincalander/GitSubmoduleForUnity/blob/main/.github/CONTRIBUTING.md)
-- [Support](https://github.com/martincalander/GitSubmoduleForUnity/blob/main/.github/SUPPORT.md)
-- [Governance](https://github.com/martincalander/GitSubmoduleForUnity/blob/main/.github/GOVERNANCE.md)
-- [Maintainers](https://github.com/martincalander/GitSubmoduleForUnity/blob/main/.github/MAINTAINERS.md)
-- [Releasing](https://github.com/martincalander/GitSubmoduleForUnity/blob/main/.github/RELEASING.md)
+- [Contributing](https://github.com/martincalander/com.martincalander.gitpackagemanager/blob/main/.github/CONTRIBUTING.md)
+- [Support](https://github.com/martincalander/com.martincalander.gitpackagemanager/blob/main/.github/SUPPORT.md)
+- [Governance](https://github.com/martincalander/com.martincalander.gitpackagemanager/blob/main/.github/GOVERNANCE.md)
+- [Maintainers](https://github.com/martincalander/com.martincalander.gitpackagemanager/blob/main/.github/MAINTAINERS.md)
+- [Releasing](https://github.com/martincalander/com.martincalander.gitpackagemanager/blob/main/.github/RELEASING.md)
 - [Roadmap](Documentation~/roadmap.md)
 - [Changelog](CHANGELOG.md)
 
@@ -131,9 +143,9 @@ for implementation and reporting details.
 
 Bug reports, documentation corrections, focused improvements, and
 cross-platform test results are welcome. Read
-[CONTRIBUTING.md](https://github.com/martincalander/GitSubmoduleForUnity/blob/main/.github/CONTRIBUTING.md)
+[CONTRIBUTING.md](https://github.com/martincalander/com.martincalander.gitpackagemanager/blob/main/.github/CONTRIBUTING.md)
 before opening a pull request and follow the
-[Code of Conduct](https://github.com/martincalander/GitSubmoduleForUnity/blob/main/.github/CODE_OF_CONDUCT.md).
+[Code of Conduct](https://github.com/martincalander/com.martincalander.gitpackagemanager/blob/main/.github/CODE_OF_CONDUCT.md).
 
 ## License
 
@@ -144,6 +156,13 @@ retained with copies or substantial portions of the software. Additional
 attribution information is available in [NOTICE.md](NOTICE.md) and
 [AUTHORS.md](AUTHORS.md).
 
-Unity, Git, and GitHub are trademarks of their respective owners. This
-independent project is not affiliated with or endorsed by Unity Technologies,
-the Git Project, or GitHub, Inc.
+Git and the Git logo are either registered trademarks or trademarks of Software
+Freedom Conservancy, Inc., corporate home of the Git Project. The Git logo was
+created by Jason Long and is licensed under
+[CC BY 3.0](https://creativecommons.org/licenses/by/3.0/).
+
+Git Package Manager is not sponsored by or affiliated with Unity Technologies
+or its affiliates. Unity and the Unity logo are trademarks or registered
+trademarks of Unity Technologies or its affiliates in the U.S. and elsewhere.
+GitHub is a trademark of GitHub, Inc. This project is not endorsed by any of
+those trademark owners.

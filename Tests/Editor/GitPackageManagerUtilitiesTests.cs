@@ -5,7 +5,7 @@ using System.Threading;
 using NUnit.Framework;
 using UnityEngine;
 
-namespace Essentials.GitPackageManager.Editor.Tests
+namespace MartinCalander.GitPackageManager.Editor.Tests
 {
     public sealed class GitPackageManagerUtilitiesTests
     {
@@ -27,11 +27,11 @@ namespace Essentials.GitPackageManager.Editor.Tests
         public void TryReadPackageNameFromJson_ReadsStructuredName()
         {
             var success = GitUtility.TryReadPackageNameFromJson(
-                "{ \"name\": \"com.essentials.gitpackagemanager\", \"displayName\": \"Git Package Manager\" }",
+                "{ \"name\": \"com.martincalander.gitpackagemanager\", \"displayName\": \"Git Package Manager\" }",
                 out var packageName);
 
             Assert.That(success, Is.True);
-            Assert.That(packageName, Is.EqualTo("com.essentials.gitpackagemanager"));
+            Assert.That(packageName, Is.EqualTo("com.martincalander.gitpackagemanager"));
         }
 
         [Test]
@@ -46,10 +46,10 @@ namespace Essentials.GitPackageManager.Editor.Tests
         public void TryParseGitHubRepo_ParsesCommonGitHubUrls()
         {
             Assert.That(
-                GitHubUtility.TryParseGitHubRepo("https://github.com/EssentialsForUnity/com.essentials.gitpackagemanager.git", out var httpsOwner, out var httpsRepo),
+                GitHubUtility.TryParseGitHubRepo("https://github.com/martincalander/com.martincalander.gitpackagemanager.git", out var httpsOwner, out var httpsRepo),
                 Is.True);
-            Assert.That(httpsOwner, Is.EqualTo("EssentialsForUnity"));
-            Assert.That(httpsRepo, Is.EqualTo("com.essentials.gitpackagemanager"));
+            Assert.That(httpsOwner, Is.EqualTo("martincalander"));
+            Assert.That(httpsRepo, Is.EqualTo("com.martincalander.gitpackagemanager"));
 
             Assert.That(
                 GitHubUtility.TryParseGitHubRepo("git@github.com:EssentialsForUnity/com.essentials.extensions.git", out var sshOwner, out var sshRepo),
@@ -62,21 +62,21 @@ namespace Essentials.GitPackageManager.Editor.Tests
         public void ParseSubmoduleCommitMap_ParsesTrackedAndUninitializedEntries()
         {
             const string statusOutput =
-                "-1234567890abcdef1234567890abcdef12345678 Packages/com.essentials.gitpackagemanager\n" +
+                "-1234567890abcdef1234567890abcdef12345678 Packages/com.martincalander.gitpackagemanager\n" +
                 " abcdef0123456789abcdef0123456789abcdef01 Packages\\com.essentials.extensions (heads/main)\n";
 
             var commitMap = GitUtility.ParseSubmoduleCommitMap(statusOutput);
 
-            Assert.That(commitMap["Packages/com.essentials.gitpackagemanager"], Is.EqualTo("1234567890abcdef1234567890abcdef12345678"));
+            Assert.That(commitMap["Packages/com.martincalander.gitpackagemanager"], Is.EqualTo("1234567890abcdef1234567890abcdef12345678"));
             Assert.That(commitMap["Packages/com.essentials.extensions"], Is.EqualTo("abcdef0123456789abcdef0123456789abcdef01"));
         }
 
         [Test]
         public void NormalizePath_ReplacesBackslashesAndTrimsWhitespace()
         {
-            var normalized = GitUtility.NormalizePath(@"  Packages\com.essentials.gitpackagemanager  ");
+            var normalized = GitUtility.NormalizePath(@"  Packages\com.martincalander.gitpackagemanager  ");
 
-            Assert.That(normalized, Is.EqualTo("Packages/com.essentials.gitpackagemanager"));
+            Assert.That(normalized, Is.EqualTo("Packages/com.martincalander.gitpackagemanager"));
         }
 
         [TestCase("Packages/com.user.repo", true)]

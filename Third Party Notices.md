@@ -8,13 +8,14 @@ Editor. The package includes the Git logomark described below.
 
 ### Git Logomark
 
-- Files: `Editor/GitEditorWindowIcon.png` and
+- Files: `GPMIcon.png`, `Editor/GitEditorWindowIcon.png`, and
   `Editor/GitEditorWindowIconLight.png`
 - Creator: Jason Long
 - Source: [Git logo downloads](https://git-scm.com/community/logos)
 - License: [Creative Commons Attribution 3.0 Unported](https://creativecommons.org/licenses/by/3.0/)
-- Use: one-color Git logomark variants recolored to Unity's built-in dark- and
-  light-skin icon values for the Editor window tab
+- Use: the official full-color Git icon for package artwork and one-color
+  variants recolored to Unity's built-in dark- and light-skin icon values for
+  the Editor window tab
 
 ## External Tools
 

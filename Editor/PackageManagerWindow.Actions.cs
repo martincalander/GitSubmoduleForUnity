@@ -5,7 +5,7 @@ using System.Threading;
 using UnityEditor;
 using UnityEngine;
 
-namespace Essentials.GitPackageManager.Editor
+namespace MartinCalander.GitPackageManager.Editor
 {
     public partial class GitPackageManagerWindow
     {

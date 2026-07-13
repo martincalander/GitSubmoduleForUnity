@@ -6,7 +6,7 @@ using System.Runtime.InteropServices;
 using System.Text;
 using System.Threading;
 
-namespace Essentials.GitPackageManager.Editor
+namespace MartinCalander.GitPackageManager.Editor
 {
     internal sealed class CommandSpec
     {

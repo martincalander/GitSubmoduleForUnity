@@ -41,8 +41,8 @@ def check_package_json() -> None:
     if missing:
         fail(f"package.json missing fields: {', '.join(missing)}")
 
-    if package.get("name") != "com.essentials.gitpackagemanager":
-        fail("package.json name must be com.essentials.gitpackagemanager")
+    if package.get("name") != "com.martincalander.gitpackagemanager":
+        fail("package.json name must be com.martincalander.gitpackagemanager")
     if not re.fullmatch(r"\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?", str(package.get("version", ""))):
         fail("package.json version is not valid SemVer")
     if package.get("license") != "MIT":
@@ -77,9 +77,11 @@ def check_required_files() -> None:
         "Documentation~/troubleshooting.md",
         "Documentation~/architecture.md",
         "Documentation~/roadmap.md",
-        "Documentation~/branding.md",
+        "GPMIcon.png",
+        "Editor/MartinCalander.GitPackageManager.Editor.asmdef",
         "Editor/GitEditorWindowIcon.png",
         "Editor/GitEditorWindowIconLight.png",
+        "Tests/Editor/MartinCalander.GitPackageManager.Editor.Tests.asmdef",
         ".github/workflows/ci.yml",
         ".github/workflows/release.yml",
         ".github/ISSUE_TEMPLATE/support_request.yml",

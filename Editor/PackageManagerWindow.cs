@@ -4,7 +4,7 @@ using System.Threading;
 using UnityEditor;
 using UnityEngine;
 
-namespace Essentials.GitPackageManager.Editor
+namespace MartinCalander.GitPackageManager.Editor
 {
     public partial class GitPackageManagerWindow : EditorWindow
     {
@@ -126,7 +126,7 @@ namespace Essentials.GitPackageManager.Editor
                 ? "GitEditorWindowIcon.png"
                 : "GitEditorWindowIconLight.png";
             var icon = AssetDatabase.LoadAssetAtPath<Texture2D>(
-                $"Packages/com.essentials.gitpackagemanager/Editor/{iconFileName}");
+                $"Packages/com.martincalander.gitpackagemanager/Editor/{iconFileName}");
             titleContent = new GUIContent("Git Package Manager", icon);
         }
 

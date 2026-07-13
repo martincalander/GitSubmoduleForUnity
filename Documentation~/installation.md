@@ -39,13 +39,13 @@ Linux commands remain in your terminal so administrator prompts are visible.
 Use **Window > Package Manager > + > Add package from git URL…**:
 
 ```text
-https://github.com/martincalander/GitSubmoduleForUnity.git
+https://github.com/martincalander/com.martincalander.gitpackagemanager.git
 ```
 
 To install a specific released version, append a Git tag:
 
 ```text
-https://github.com/martincalander/GitSubmoduleForUnity.git#v1.0.0
+https://github.com/martincalander/com.martincalander.gitpackagemanager.git#v1.0.0
 ```
 
 ## Team Clone Setup

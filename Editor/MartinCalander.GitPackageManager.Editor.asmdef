@@ -1,6 +1,6 @@
 {
-    "name": "GitPackageManager.Editor",
-    "rootNamespace": "Essentials.GitPackageManager.Editor",
+    "name": "MartinCalander.GitPackageManager.Editor",
+    "rootNamespace": "MartinCalander.GitPackageManager.Editor",
     "references": [],
     "includePlatforms": [
         "Editor"

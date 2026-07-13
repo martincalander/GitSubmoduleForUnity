@@ -1,4 +1,4 @@
-namespace Essentials.GitPackageManager.Editor
+namespace MartinCalander.GitPackageManager.Editor
 {
     internal sealed class GitHubRepo
     {

@@ -3,7 +3,7 @@
     "MD013": false,
     "MD024": { "siblings_only": true },
     "MD033": {
-      "allowed_elements": ["a", "br", "code", "img", "p"]
+      "allowed_elements": ["a", "br", "code", "img", "p", "picture", "source"]
     },
     "MD041": false
   }

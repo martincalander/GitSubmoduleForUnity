@@ -5,7 +5,7 @@ using System.Runtime.InteropServices;
 using System.Text.RegularExpressions;
 using UnityEngine;
 
-namespace Essentials.GitPackageManager.Editor
+namespace MartinCalander.GitPackageManager.Editor
 {
     [Serializable]
     internal sealed class PackageJsonMetadata

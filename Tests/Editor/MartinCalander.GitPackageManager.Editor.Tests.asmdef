@@ -1,8 +1,8 @@
 {
-    "name": "GitPackageManager.Editor.Tests",
-    "rootNamespace": "Essentials.GitPackageManager.Editor.Tests",
+    "name": "MartinCalander.GitPackageManager.Editor.Tests",
+    "rootNamespace": "MartinCalander.GitPackageManager.Editor.Tests",
     "references": [
-        "GitPackageManager.Editor"
+        "MartinCalander.GitPackageManager.Editor"
     ],
     "includePlatforms": [
         "Editor"

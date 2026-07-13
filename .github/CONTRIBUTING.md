@@ -31,8 +31,8 @@ scope.
 Add a fork or working clone below a Unity project's `Packages/` directory:
 
 ```bash
-git clone https://github.com/<your-user>/GitSubmoduleForUnity.git \
-  Packages/com.essentials.gitpackagemanager
+git clone https://github.com/<your-user>/com.martincalander.gitpackagemanager.git \
+  Packages/com.martincalander.gitpackagemanager
 ```
 
 Open the Unity project, then open **Window > Package Management > Git Package
@@ -86,7 +86,7 @@ npm pack --dry-run
 In Unity:
 
 1. verify the package compiles without warnings or errors;
-2. run `GitPackageManager.Editor.Tests` in EditMode;
+2. run `MartinCalander.GitPackageManager.Editor.Tests` in EditMode;
 3. exercise the changed workflow manually;
 4. inspect the Console for new warnings or errors;
 5. test the relevant CLI-missing, authentication, or failure state;

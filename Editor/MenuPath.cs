@@ -1,6 +1,6 @@
 using UnityEditor;
 
-namespace Essentials.GitPackageManager.Editor
+namespace MartinCalander.GitPackageManager.Editor
 {
     internal static class MenuPath
     {

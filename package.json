@@ -1,13 +1,13 @@
 {
-  "name": "com.essentials.gitpackagemanager",
+  "name": "com.martincalander.gitpackagemanager",
   "version": "1.0.0",
   "displayName": "Git Package Manager",
   "description": "Reliable, cross-platform Unity Editor tooling for discovering and managing Git submodule packages under Packages/.",
   "unity": "2021.3",
   "unityRelease": "0b1",
-  "documentationUrl": "https://github.com/martincalander/GitSubmoduleForUnity/blob/main/Documentation~/index.md",
-  "changelogUrl": "https://github.com/martincalander/GitSubmoduleForUnity/blob/main/CHANGELOG.md",
-  "licensesUrl": "https://github.com/martincalander/GitSubmoduleForUnity/blob/main/LICENSE.md",
+  "documentationUrl": "https://github.com/martincalander/com.martincalander.gitpackagemanager/blob/main/Documentation~/index.md",
+  "changelogUrl": "https://github.com/martincalander/com.martincalander.gitpackagemanager/blob/main/CHANGELOG.md",
+  "licensesUrl": "https://github.com/martincalander/com.martincalander.gitpackagemanager/blob/main/LICENSE.md",
   "license": "MIT",
   "keywords": [
     "GitHub",
@@ -23,10 +23,10 @@
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/martincalander/GitSubmoduleForUnity.git"
+    "url": "https://github.com/martincalander/com.martincalander.gitpackagemanager.git"
   },
   "bugs": {
-    "url": "https://github.com/martincalander/GitSubmoduleForUnity/issues"
+    "url": "https://github.com/martincalander/com.martincalander.gitpackagemanager/issues"
   },
   "dependencies": {
     "com.unity.modules.imgui": "1.0.0"
