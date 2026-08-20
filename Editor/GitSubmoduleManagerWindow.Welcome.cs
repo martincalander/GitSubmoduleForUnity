@@ -2,14 +2,14 @@ using System;
 using UnityEditor;
 using UnityEngine;
 
-namespace MartinCalander.GitPackageManager.Editor
+namespace MartinCalander.GitSubmoduleManager.Editor
 {
-    public partial class GitPackageManagerWindow
+    public partial class GitSubmoduleManagerWindow
     {
         private const float WelcomeMaximumWidth = 620f;
         private const float WelcomeStackActionsBelowWidth = 520f;
         private const string DocumentationUrl =
-            "https://github.com/martincalander/GitPackageManager#usage";
+            "https://github.com/martincalander/GitSubmoduleManager#usage";
 
         private static bool welcomeShownThisSession;
 
@@ -92,8 +92,8 @@ namespace MartinCalander.GitPackageManager.Editor
         {
             welcomeScroll = Vector2.zero;
             resetWelcomeScroll = true;
-            bool persisted = GitPackageManagerUserSettings.instance.HasShownWelcome;
-            showWelcomeScreen = GitPackageManagerUserSettings.ShouldShowWelcome(
+            bool persisted = GitSubmoduleManagerUserSettings.Instance.HasShownWelcome;
+            showWelcomeScreen = GitSubmoduleManagerUserSettings.ShouldShowWelcome(
                 persisted,
                 welcomeShownThisSession);
             welcomePreferenceRecorded = IsWelcomePreferenceAlreadyRecorded(
@@ -107,7 +107,7 @@ namespace MartinCalander.GitPackageManager.Editor
             resetWelcomeScroll = true;
             showWelcomeScreen = true;
             welcomePreferenceRecorded = IsWelcomePreferenceAlreadyRecorded(
-                GitPackageManagerUserSettings.instance.HasShownWelcome,
+                GitSubmoduleManagerUserSettings.Instance.HasShownWelcome,
                 welcomeShownThisSession);
             BeginBackgroundLoad(false);
             Repaint();
@@ -115,7 +115,7 @@ namespace MartinCalander.GitPackageManager.Editor
 
         internal static void OpenWelcomeFromPreferences()
         {
-            var window = GetWindow<GitPackageManagerWindow>("Git Package Manager");
+            var window = GetWindow<GitSubmoduleManagerWindow>("Git Submodule Manager");
             window.ApplyThemeIcon();
             window.Show();
             window.ShowWelcomeScreen();
@@ -136,13 +136,13 @@ namespace MartinCalander.GitPackageManager.Editor
             welcomePreferenceRecorded = true;
             try
             {
-                if (!GitPackageManagerUserSettings.instance.TryMarkWelcomeShown(out string error))
+                if (!GitSubmoduleManagerUserSettings.Instance.TryMarkWelcomeShown(out string error))
                     Debug.LogWarning(error);
             }
             catch (Exception exception)
             {
                 Debug.LogWarning(
-                    "Git Package Manager could not save its welcome-screen preference: " +
+                    "Git Submodule Manager could not save its welcome-screen preference: " +
                     exception.Message);
             }
         }
@@ -223,7 +223,7 @@ namespace MartinCalander.GitPackageManager.Editor
             }
 
             EditorGUILayout.BeginVertical();
-            EditorGUILayout.LabelField("Welcome to Git Package Manager", Styles.TitleLabel);
+            EditorGUILayout.LabelField("Welcome to Git Submodule Manager", Styles.TitleLabel);
             EditorGUILayout.LabelField(
                 "Manage Git-backed Unity packages as submodules under Packages/.",
                 Styles.SubtitleLabel);

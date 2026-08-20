@@ -9,7 +9,7 @@
 ## Contributors
 
 Community contributions are credited through the repository's
-[contributors page](https://github.com/martincalander/GitPackageManager/graphs/contributors).
+[contributors page](https://github.com/martincalander/GitSubmoduleManager/graphs/contributors).
 
 By contributing, you agree that your work is distributed under the project's
 [MIT License](LICENSE.md).

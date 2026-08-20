@@ -1,6 +1,6 @@
 {
-    "name": "MartinCalander.GitPackageManager.Editor",
-    "rootNamespace": "MartinCalander.GitPackageManager.Editor",
+    "name": "MartinCalander.GitSubmoduleManager.Editor",
+    "rootNamespace": "MartinCalander.GitSubmoduleManager.Editor",
     "references": [],
     "includePlatforms": [
         "Editor"

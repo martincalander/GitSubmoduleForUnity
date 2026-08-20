@@ -5,12 +5,12 @@ using System.Runtime.InteropServices;
 using System.Threading;
 using NUnit.Framework;
 
-namespace MartinCalander.GitPackageManager.Editor.Tests
+namespace MartinCalander.GitSubmoduleManager.Editor.Tests
 {
     [Parallelizable(ParallelScope.None)]
-    public sealed class GitPackageManagerValidationContractTests
+    public sealed class GitSubmoduleManagerValidationContractTests
     {
-        [TestCase("com.martincalander.gitpackagemanager")]
+        [TestCase("com.martincalander.gitsubmodulemanager")]
         [TestCase("com.kamgam.component-drag-helper")]
         [TestCase("com.mibdev.fullscreen_editor")]
         [TestCase("com.vendor.package-2d_tools")]
@@ -260,20 +260,20 @@ namespace MartinCalander.GitPackageManager.Editor.Tests
             };
 
             Assert.That(
-                GitPackageManagerWindow.BuildInstalledPackageIdentity(refreshedSamePackage),
-                Is.EqualTo(GitPackageManagerWindow.BuildInstalledPackageIdentity(original)));
+                GitSubmoduleManagerWindow.BuildInstalledPackageIdentity(refreshedSamePackage),
+                Is.EqualTo(GitSubmoduleManagerWindow.BuildInstalledPackageIdentity(original)));
             Assert.That(
-                GitPackageManagerWindow.BuildInstalledPackageIdentity(replacementAtSameIndex),
-                Is.Not.EqualTo(GitPackageManagerWindow.BuildInstalledPackageIdentity(original)));
+                GitSubmoduleManagerWindow.BuildInstalledPackageIdentity(replacementAtSameIndex),
+                Is.Not.EqualTo(GitSubmoduleManagerWindow.BuildInstalledPackageIdentity(original)));
         }
 
         [Test]
         public void InstalledBranchPresentation_DoesNotInventMainForRepositoryDefault()
         {
-            Assert.That(GitPackageManagerWindow.NormalizeInstalledBranch(null), Is.Empty);
-            Assert.That(GitPackageManagerWindow.NormalizeInstalledBranch("   "), Is.Empty);
-            Assert.That(GitPackageManagerWindow.GetInstalledBranchLabel(string.Empty), Is.EqualTo("repository default"));
-            Assert.That(GitPackageManagerWindow.GetInstalledBranchLabel(" feature/test "), Is.EqualTo("feature/test"));
+            Assert.That(GitSubmoduleManagerWindow.NormalizeInstalledBranch(null), Is.Empty);
+            Assert.That(GitSubmoduleManagerWindow.NormalizeInstalledBranch("   "), Is.Empty);
+            Assert.That(GitSubmoduleManagerWindow.GetInstalledBranchLabel(string.Empty), Is.EqualTo("repository default"));
+            Assert.That(GitSubmoduleManagerWindow.GetInstalledBranchLabel(" feature/test "), Is.EqualTo("feature/test"));
         }
     }
 
@@ -411,7 +411,7 @@ namespace MartinCalander.GitPackageManager.Editor.Tests
     }
 
     [Parallelizable(ParallelScope.None)]
-    public sealed class GitPackageManagerSafetyIntegrationTests
+    public sealed class GitSubmoduleManagerSafetyIntegrationTests
     {
         private const string PackagePath = "Packages/com.example.integration-package";
 
@@ -430,7 +430,7 @@ namespace MartinCalander.GitPackageManager.Editor.Tests
             previousRunner = CliCommandRunner.CurrentRunner;
             CliCommandRunner.ResetRunner();
 
-            sandboxRoot = Path.Combine(Path.GetTempPath(), "GitPackageManagerTests-" + Guid.NewGuid().ToString("N"));
+            sandboxRoot = Path.Combine(Path.GetTempPath(), "GitSubmoduleManagerTests-" + Guid.NewGuid().ToString("N"));
             parentRoot = Path.Combine(sandboxRoot, "parent");
             sourceRoot = Path.Combine(sandboxRoot, "source");
             Directory.CreateDirectory(parentRoot);
@@ -871,7 +871,7 @@ namespace MartinCalander.GitPackageManager.Editor.Tests
             Assert.That(cleaned, Is.True, notice);
             Assert.That(File.Exists(Path.Combine(cleanParent, ".gitmodules")), Is.False);
             Assert.That(Git(cleanParent, "status --porcelain=v2 -- .gitmodules \"" + PackagePath + "\"").StdOut, Is.Empty);
-            string recoveryRoot = Path.Combine(cleanParent, "Library", "GitPackageManager", "Recovery");
+            string recoveryRoot = Path.Combine(cleanParent, "Library", "GitSubmoduleManager", "Recovery");
             string[] recoveredMarkers = Directory.GetFiles(recoveryRoot, "late-file.txt", SearchOption.AllDirectories);
             Assert.That(recoveredMarkers, Has.Length.EqualTo(1));
             Assert.That(File.ReadAllText(recoveredMarkers[0]), Is.EqualTo("must be preserved\n"));
@@ -1590,7 +1590,7 @@ namespace MartinCalander.GitPackageManager.Editor.Tests
         private void InitializeRepository(string path)
         {
             ExpectGit(path, "init");
-            ExpectGit(path, "config user.name \"Git Package Manager Tests\"");
+            ExpectGit(path, "config user.name \"Git Submodule Manager Tests\"");
             ExpectGit(path, "config user.email \"tests@example.invalid\"");
         }
 

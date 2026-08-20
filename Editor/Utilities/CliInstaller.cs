@@ -1,7 +1,7 @@
 using System;
 using UnityEngine;
 
-namespace MartinCalander.GitPackageManager.Editor
+namespace MartinCalander.GitSubmoduleManager.Editor
 {
     internal sealed class CliInstallPlan
     {

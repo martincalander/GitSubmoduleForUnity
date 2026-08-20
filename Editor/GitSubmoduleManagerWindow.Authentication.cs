@@ -2,13 +2,15 @@ using System;
 using UnityEditor;
 using UnityEngine;
 
-namespace MartinCalander.GitPackageManager.Editor
+namespace MartinCalander.GitSubmoduleManager.Editor
 {
-    public partial class GitPackageManagerWindow
+    public partial class GitSubmoduleManagerWindow
     {
         private const int GitHubAuthenticationTimeoutMs = 10 * 60 * 1000;
         private const double GitHubAuthenticationBrowserDelaySeconds = 1.5;
         private const string GitHubAuthenticationSessionKey =
+            "MartinCalander.GitSubmoduleManager.GitHubAuthenticationInFlight";
+        private const string LegacyGitHubAuthenticationSessionKey =
             "MartinCalander.GitPackageManager.GitHubAuthenticationInFlight";
 
         private static readonly object GitHubAuthenticationGate = new object();
@@ -131,7 +133,7 @@ namespace MartinCalander.GitPackageManager.Editor
                 "If no code is available to paste, cancel and run the displayed command in a " +
                 "visible terminal after cancellation finishes. Unity will tell you if a restart " +
                 "is required first. The automated flow sets GitHub CLI's host-wide Git protocol " +
-                "for github.com to HTTPS. Git Package Manager never receives or stores your GitHub token.";
+                "for github.com to HTTPS. Git Submodule Manager never receives or stores your GitHub token.";
             if (!EditorUtility.DisplayDialog(
                     "Authenticate with GitHub?",
                     prompt,
@@ -375,7 +377,7 @@ namespace MartinCalander.GitPackageManager.Editor
             EditorGUILayout.HelpBox(
                 ghAuthenticationHandle != null
                     ? "GitHub authentication is finishing. Git-only package operations remain available."
-                    : "GitHub authentication is active in another Git Package Manager window. Git-only package operations remain available.",
+                    : "GitHub authentication is active in another Git Submodule Manager window. Git-only package operations remain available.",
                 MessageType.Info);
             return true;
         }
@@ -393,14 +395,15 @@ namespace MartinCalander.GitPackageManager.Editor
                 // SessionState survives domain reloads but is cleared by a full
                 // Editor restart. A surviving marker means the previous domain
                 // lost the only handle capable of proving process termination.
-                if (SessionState.GetBool(GitHubAuthenticationSessionKey, false))
+                if (SessionState.GetBool(GitHubAuthenticationSessionKey, false) ||
+                    SessionState.GetBool(LegacyGitHubAuthenticationSessionKey, false))
                     RequireGitHubAuthenticationRestart();
             }
             catch (Exception exception)
             {
                 RequireGitHubAuthenticationRestart();
                 Debug.LogWarning(
-                    "[Git Package Manager] GitHub authentication ownership could not be read: " +
+                    "[Git Submodule Manager] GitHub authentication ownership could not be read: " +
                     exception.Message);
             }
         }
@@ -460,6 +463,8 @@ namespace MartinCalander.GitPackageManager.Editor
             try
             {
                 SessionState.SetBool(GitHubAuthenticationSessionKey, value);
+                if (!value)
+                    SessionState.SetBool(LegacyGitHubAuthenticationSessionKey, false);
                 error = string.Empty;
                 return true;
             }
@@ -515,7 +520,7 @@ namespace MartinCalander.GitPackageManager.Editor
             string exit = result.ExitCode == 0 ? string.Empty : $" (exit code {result.ExitCode})";
             return
                 $"GitHub authentication did not complete{exit}. Retry, or run 'gh auth login' in a terminal. " +
-                "No token or device code was stored by Git Package Manager.";
+                "No token or device code was stored by Git Submodule Manager.";
         }
     }
 }

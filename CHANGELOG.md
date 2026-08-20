@@ -1,6 +1,6 @@
 # Changelog
 
-All notable changes to Git Package Manager are documented here.
+All notable changes to Git Submodule Manager are documented here.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
@@ -23,7 +23,7 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Dependency-gate, installer-failure, local-repository, and branch-fetch
   regression coverage.
 - A persistent self-removal warning and a second explicit confirmation before
-  Git Package Manager can remove its own submodule.
+  Git Submodule Manager can remove its own submodule.
 - Dirty-work, local-only commit, interrupted-operation, process cancellation,
   linked-worktree, and cross-platform repository integration coverage.
 - A project-wide operation journal for recovery after an interrupted mutation.
@@ -38,6 +38,14 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- Renamed the product from Git Package Manager to Git Submodule Manager,
+  including the UPM package ID, editor and test assemblies, namespaces,
+  serialized editor types, menu and Preferences UI, documentation, and tests.
+  This is a breaking package/source identity change: existing consumers must
+  replace the manifest dependency key, assembly-definition references,
+  namespaces, and `GitPackageManagerWindow` references. Serialized editor types
+  carry migration metadata, while legacy preferences and interrupted-operation
+  state remain recoverable across the rename.
 - Renamed the UPM package from `com.essentials.gitpackagemanager` to
   `com.martincalander.gitpackagemanager` and aligned its assembly, namespace,
   and Unity submodule path.
@@ -137,6 +145,6 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Basic project submodule listing, update, remove, and branch operations.
 - Early GitHub discovery and direct URL installation.
 
-[Unreleased]: https://github.com/martincalander/GitPackageManager/compare/v1.0.0...HEAD
-[1.0.0]: https://github.com/martincalander/GitPackageManager/releases/tag/v1.0.0
-[0.1.0]: https://github.com/martincalander/GitPackageManager/releases/tag/v0.1.0
+[Unreleased]: https://github.com/martincalander/GitSubmoduleManager/compare/v1.0.0...HEAD
+[1.0.0]: https://github.com/martincalander/GitSubmoduleManager/releases/tag/v1.0.0
+[0.1.0]: https://github.com/martincalander/GitSubmoduleManager/releases/tag/v0.1.0

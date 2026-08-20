@@ -1,6 +1,6 @@
 using NUnit.Framework;
 
-namespace MartinCalander.GitPackageManager.Editor.Tests
+namespace MartinCalander.GitSubmoduleManager.Editor.Tests
 {
     public sealed class GitOperationServiceCompletionTests
     {

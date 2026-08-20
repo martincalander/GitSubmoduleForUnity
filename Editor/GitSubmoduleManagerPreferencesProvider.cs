@@ -3,9 +3,9 @@ using System.Collections.Generic;
 using UnityEditor;
 using UnityEngine;
 
-namespace MartinCalander.GitPackageManager.Editor
+namespace MartinCalander.GitSubmoduleManager.Editor
 {
-    internal sealed class GitPackageManagerPreferencesProvider : SettingsProvider
+    internal sealed class GitSubmoduleManagerPreferencesProvider : SettingsProvider
     {
         private string saveError = string.Empty;
 
@@ -33,31 +33,31 @@ namespace MartinCalander.GitPackageManager.Editor
             "Valid UPM Packages"
         };
 
-        private GitPackageManagerPreferencesProvider()
-            : base("Preferences/Git Package Manager", SettingsScope.User)
+        private GitSubmoduleManagerPreferencesProvider()
+            : base("Preferences/Git Submodule Manager", SettingsScope.User)
         {
-            label = "Git Package Manager";
+            label = "Git Submodule Manager";
             keywords = new HashSet<string>(SearchKeywords, StringComparer.OrdinalIgnoreCase);
         }
 
         [SettingsProvider]
         internal static SettingsProvider CreateProvider()
         {
-            return new GitPackageManagerPreferencesProvider();
+            return new GitSubmoduleManagerPreferencesProvider();
         }
 
         public override void OnGUI(string searchContext)
         {
-            GitPackageManagerUserSettings settings = GitPackageManagerUserSettings.instance;
+            GitSubmoduleManagerUserSettings settings = GitSubmoduleManagerUserSettings.Instance;
 
             EditorGUILayout.LabelField("General", EditorStyles.boldLabel);
             EditorGUI.BeginChangeCheck();
 
-            GitPackageManagerStartupTab startupTab =
-                (GitPackageManagerStartupTab)EditorGUILayout.Popup(
+            GitSubmoduleManagerStartupTab startupTab =
+                (GitSubmoduleManagerStartupTab)EditorGUILayout.Popup(
                     new GUIContent(
                         "Startup Tab",
-                        "The tab selected when the Git Package Manager window opens."),
+                        "The tab selected when the Git Submodule Manager window opens."),
                     (int)settings.StartupTab,
                     StartupTabLabels);
 
@@ -75,17 +75,17 @@ namespace MartinCalander.GitPackageManager.Editor
                         "Refresh Interval (Minutes)",
                         "How stale the In Project list may be before returning to the tab refreshes it."),
                     settings.RefreshIntervalMinutes,
-                    GitPackageManagerUserSettings.MinimumRefreshIntervalMinutes,
-                    GitPackageManagerUserSettings.MaximumRefreshIntervalMinutes);
+                    GitSubmoduleManagerUserSettings.MinimumRefreshIntervalMinutes,
+                    GitSubmoduleManagerUserSettings.MaximumRefreshIntervalMinutes);
             }
 
             EditorGUILayout.Space(10f);
             EditorGUILayout.LabelField("GitHub", EditorStyles.boldLabel);
-            GitPackageManagerDefaultGitHubFilter defaultFilter =
-                (GitPackageManagerDefaultGitHubFilter)EditorGUILayout.Popup(
+            GitSubmoduleManagerDefaultGitHubFilter defaultFilter =
+                (GitSubmoduleManagerDefaultGitHubFilter)EditorGUILayout.Popup(
                     new GUIContent(
                         "Default Filter",
-                        "The repository filter selected when the Git Package Manager window opens."),
+                        "The repository filter selected when the Git Submodule Manager window opens."),
                     (int)settings.DefaultGitHubFilter,
                     GitHubFilterLabels);
             EditorGUILayout.HelpBox(
@@ -110,11 +110,11 @@ namespace MartinCalander.GitPackageManager.Editor
             EditorGUILayout.LabelField("Setup", EditorStyles.boldLabel);
             EditorGUILayout.HelpBox(
                 "These preferences are stored per user and project in " +
-                GitPackageManagerUserSettings.SettingsFilePath + ".",
+                GitSubmoduleManagerUserSettings.SettingsFilePath + ".",
                 MessageType.None);
 
             if (GUILayout.Button("Open Welcome & Setup", GUILayout.Width(180f)))
-                GitPackageManagerWindow.OpenWelcomeFromPreferences();
+                GitSubmoduleManagerWindow.OpenWelcomeFromPreferences();
         }
     }
 }

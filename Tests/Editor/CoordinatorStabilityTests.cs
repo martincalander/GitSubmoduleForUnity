@@ -8,7 +8,7 @@ using NUnit.Framework;
 
 [assembly: LevelOfParallelism(1)]
 
-namespace MartinCalander.GitPackageManager.Editor.Tests
+namespace MartinCalander.GitSubmoduleManager.Editor.Tests
 {
     [Parallelizable(ParallelScope.None)]
     public sealed class CoordinatorStabilityTests
@@ -35,17 +35,17 @@ namespace MartinCalander.GitPackageManager.Editor.Tests
             Assert.That(arguments, Is.EqualTo("api user --jq .login --hostname github.com"));
         }
 
-        [TestCase(true, false, (int)GitPackageManagerWindow.WelcomeCheckStage.Git)]
-        [TestCase(true, true, (int)GitPackageManagerWindow.WelcomeCheckStage.GitHub)]
-        [TestCase(false, false, (int)GitPackageManagerWindow.WelcomeCheckStage.Complete)]
-        [TestCase(false, true, (int)GitPackageManagerWindow.WelcomeCheckStage.Complete)]
+        [TestCase(true, false, (int)GitSubmoduleManagerWindow.WelcomeCheckStage.Git)]
+        [TestCase(true, true, (int)GitSubmoduleManagerWindow.WelcomeCheckStage.GitHub)]
+        [TestCase(false, false, (int)GitSubmoduleManagerWindow.WelcomeCheckStage.Complete)]
+        [TestCase(false, true, (int)GitSubmoduleManagerWindow.WelcomeCheckStage.Complete)]
         public void WelcomeCheckStage_SeparatesRequiredGitFromOptionalGitHubWork(
             bool isInitialLoading,
             bool isGitStageReady,
             int expected)
         {
             Assert.That(
-                (int)GitPackageManagerWindow.GetWelcomeCheckStage(
+                (int)GitSubmoduleManagerWindow.GetWelcomeCheckStage(
                     isInitialLoading,
                     isGitStageReady),
                 Is.EqualTo(expected));
@@ -61,13 +61,13 @@ namespace MartinCalander.GitPackageManager.Editor.Tests
             bool isGitAvailable,
             bool expected)
         {
-            var checkStage = GitPackageManagerWindow.GetWelcomeCheckStage(
+            var checkStage = GitSubmoduleManagerWindow.GetWelcomeCheckStage(
                 isInitialLoading,
                 isGitStageReady);
 
             Assert.That(
-                GitPackageManagerWindow.CanFinishWelcome(
-                    checkStage == GitPackageManagerWindow.WelcomeCheckStage.Git,
+                GitSubmoduleManagerWindow.CanFinishWelcome(
+                    checkStage == GitSubmoduleManagerWindow.WelcomeCheckStage.Git,
                     isGitAvailable),
                 Is.EqualTo(expected));
         }
@@ -86,7 +86,7 @@ namespace MartinCalander.GitPackageManager.Editor.Tests
             bool expected)
         {
             Assert.That(
-                GitPackageManagerWindow.CanUseToolbarGitActions(
+                GitSubmoduleManagerWindow.CanUseToolbarGitActions(
                     gitAvailable,
                     isInitialLoading,
                     isGitStageReady,
@@ -106,7 +106,7 @@ namespace MartinCalander.GitPackageManager.Editor.Tests
             bool expected)
         {
             Assert.That(
-                GitPackageManagerWindow.CanStartCliInstall(
+                GitSubmoduleManagerWindow.CanStartCliInstall(
                     interactionBusy,
                     backgroundLoadsDraining,
                     recoveryRequiresReview),
@@ -122,9 +122,9 @@ namespace MartinCalander.GitPackageManager.Editor.Tests
             {
                 repo.ManifestState = state;
                 Assert.That(
-                    GitPackageManagerWindow.PassesFilter(
+                    GitSubmoduleManagerWindow.PassesFilter(
                         repo,
-                        GitPackageManagerWindow.FilterOption.ValidPackagesOnly),
+                        GitSubmoduleManagerWindow.FilterOption.ValidPackagesOnly),
                     Is.EqualTo(state == PackageManifestState.Valid),
                     state.ToString());
             }
@@ -447,8 +447,8 @@ namespace MartinCalander.GitPackageManager.Editor.Tests
         [Test]
         public void SearchPaths_PreferTrustedAbsolutePathsAndRejectImplicitCurrentDirectory()
         {
-            string trusted = Path.GetFullPath(Path.Combine(Path.GetTempPath(), "gpm-trusted-bin"));
-            string inherited = Path.GetFullPath(Path.Combine(Path.GetTempPath(), "gpm-inherited-bin"));
+            string trusted = Path.GetFullPath(Path.Combine(Path.GetTempPath(), "git-submodule-manager-trusted-bin"));
+            string inherited = Path.GetFullPath(Path.Combine(Path.GetTempPath(), "git-submodule-manager-inherited-bin"));
             string inheritedPath = string.Join(
                 Path.PathSeparator.ToString(),
                 new[] { "relative-bin", string.Empty, inherited, "." });
@@ -579,7 +579,7 @@ namespace MartinCalander.GitPackageManager.Editor.Tests
         [Test]
         public void RepositoryCacheIdentity_PreservesLocalPathCaseOnCaseSensitivePlatforms()
         {
-            string parent = Path.Combine(Path.GetTempPath(), "gpm-cache-identity");
+            string parent = Path.Combine(Path.GetTempPath(), "git-submodule-manager-cache-identity");
             string upper = GitHubUtility.GetRepositoryCacheIdentity(Path.Combine(parent, "Repo"));
             string lower = GitHubUtility.GetRepositoryCacheIdentity(Path.Combine(parent, "repo"));
 

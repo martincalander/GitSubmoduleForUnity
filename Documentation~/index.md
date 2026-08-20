@@ -1,13 +1,13 @@
-# Git Package Manager
+# Git Submodule Manager
 
-Git Package Manager is an editor-only Unity package for managing Git
+Git Submodule Manager is an editor-only Unity package for managing Git
 submodules as embedded UPM packages under `Packages/`.
 
 ## Start Here
 
 1. Follow [Installation](installation.md) to install Git, optionally configure
    GitHub CLI, and add the package.
-2. Open **Window > Package Management > Git Package Manager**.
+2. Open **Window > Package Management > Git Submodule Manager**.
 3. Continue with the [User Guide](user-guide.md).
 4. Use [Troubleshooting](troubleshooting.md) when a CLI, credential, or
    submodule command fails.
@@ -20,12 +20,12 @@ submodules as embedded UPM packages under `Packages/`.
 - [Architecture and safety model](architecture.md)
 - [Roadmap](roadmap.md)
 - [Changelog](../CHANGELOG.md)
-- [Support](https://github.com/martincalander/GitPackageManager/blob/main/.github/SUPPORT.md)
-- [Security policy](https://github.com/martincalander/GitPackageManager/blob/main/.github/SECURITY.md)
+- [Support](https://github.com/martincalander/GitSubmoduleManager/blob/main/.github/SUPPORT.md)
+- [Security policy](https://github.com/martincalander/GitSubmoduleManager/blob/main/.github/SECURITY.md)
 
 ## Product Boundaries
 
-Git Package Manager intentionally manages one workflow:
+Git Submodule Manager intentionally manages one workflow:
 
 - Git repositories;
 - represented as Git submodules;

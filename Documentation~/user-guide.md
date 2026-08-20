@@ -1,6 +1,6 @@
 # User Guide
 
-Open the window from **Window > Package Management > Git Package Manager**.
+Open the window from **Window > Package Management > Git Submodule Manager**.
 
 ## Welcome and Setup
 
@@ -15,7 +15,7 @@ authenticated, choose **Authenticate with GitHub...**. Unity opens GitHub's
 device page and GitHub CLI copies its one-time device code to the clipboard. If
 no code is available, cancel and run the displayed command in a visible
 terminal after cancellation finishes. If Unity cannot confirm that the process
-stopped, restart Unity before retrying. Git Package Manager never accepts or
+stopped, restart Unity before retrying. Git Submodule Manager never accepts or
 stores a token, and discovery is enabled only after a fresh active-account
 authentication-status check succeeds.
 One-click login requires GitHub CLI 2.79.0 or newer; older versions show the
@@ -27,15 +27,17 @@ at any time from **Welcome & Setup...** in the window menu.
 
 ## Preferences
 
-Open **Edit > Preferences > Git Package Manager** on Windows and Linux, or
-**Unity > Settings > Git Package Manager** on macOS. The user preferences let
+Open **Edit > Preferences > Git Submodule Manager** on Windows and Linux, or
+**Unity > Settings > Git Submodule Manager** on macOS. The user preferences let
 you choose the startup tab, the initial GitHub repository filter, and whether
 **In Project** refreshes when revisited after a configurable interval.
 
 Choose **Open Welcome & Setup** to run the dependency and authentication setup
 again. Settings are stored per user and project in
-`UserSettings/GitPackageManagerSettings.asset`; they do not modify the package
-or create team-shared project settings.
+`UserSettings/GitSubmoduleManagerSettings.asset`; they do not modify the package
+or create team-shared project settings. On first use after the rename, an
+existing `UserSettings/GitPackageManagerSettings.asset` file is copied to the
+new path without deleting the original.
 
 ## Dependency Status
 
@@ -140,7 +142,7 @@ back.
 ## Private Repositories
 
 Private repositories rely on the user's existing Git credential manager and,
-for discovery, GitHub CLI authentication. Git Package Manager never stores
+for discovery, GitHub CLI authentication. Git Submodule Manager never stores
 tokens, passwords, SSH keys, or credential-helper output.
 
 Every teammate and build machine must independently have access to each private

@@ -1,6 +1,6 @@
-# Contributing to Git Package Manager
+# Contributing to Git Submodule Manager
 
-Thank you for helping make Git Package Manager more reliable for Unity teams.
+Thank you for helping make Git Submodule Manager more reliable for Unity teams.
 Contributions are welcome under the [MIT License](../LICENSE.md) and must follow the
 [Code of Conduct](CODE_OF_CONDUCT.md).
 
@@ -31,11 +31,11 @@ scope.
 Add a fork or working clone below a Unity project's `Packages/` directory:
 
 ```bash
-git clone https://github.com/<your-user>/GitPackageManager.git \
-  Packages/com.martincalander.gitpackagemanager
+git clone https://github.com/<your-user>/GitSubmoduleManager.git \
+  Packages/com.martincalander.gitsubmodulemanager
 ```
 
-Open the Unity project, then open **Window > Package Management > Git Package
+Open the Unity project, then open **Window > Package Management > Git Submodule
 Manager**.
 
 Do not edit Unity-generated solution or project files. Let Unity import new
@@ -45,7 +45,7 @@ package files and generate `.meta` files.
 
 ```text
 Editor/
-├── PackageManagerWindow.*      editor UI and actions
+├── GitSubmoduleManagerWindow.* editor UI and actions
 ├── DiscoveryCoordinator.cs    paged GitHub state
 ├── RepositoryCoordinator.cs   lazy branch loading
 ├── Models/                    internal data objects
@@ -86,7 +86,7 @@ npm pack --dry-run
 In Unity:
 
 1. verify the package compiles without warnings or errors;
-2. run `MartinCalander.GitPackageManager.Editor.Tests` in EditMode;
+2. run `MartinCalander.GitSubmoduleManager.Editor.Tests` in EditMode;
 3. exercise the changed workflow manually;
 4. inspect the Console for new warnings or errors;
 5. test the relevant CLI-missing, authentication, or failure state;
@@ -132,6 +132,6 @@ Do not open a public issue for a vulnerability. Follow
 
 ## Attribution
 
-Git Package Manager was created by Martin Calander. Contributors retain
+Git Submodule Manager was created by Martin Calander. Contributors retain
 authorship of their contributions; the combined project is distributed under
 the [MIT License](../LICENSE.md).

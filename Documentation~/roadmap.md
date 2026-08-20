@@ -1,6 +1,6 @@
 # Roadmap
 
-Git Package Manager prioritizes predictable Git behavior, cross-platform
+Git Submodule Manager prioritizes predictable Git behavior, cross-platform
 compatibility, and a native Unity Editor experience over feature count.
 
 ## Current Priorities

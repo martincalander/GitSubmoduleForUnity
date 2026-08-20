@@ -16,11 +16,11 @@ discovery.
 
 ## Where to Ask
 
-- Use the [support request form](https://github.com/martincalander/GitPackageManager/issues/new?template=support_request.yml)
+- Use the [support request form](https://github.com/martincalander/GitSubmoduleManager/issues/new?template=support_request.yml)
   for setup questions and usage help.
-- Use the [bug report form](https://github.com/martincalander/GitPackageManager/issues/new?template=bug_report.yml)
+- Use the [bug report form](https://github.com/martincalander/GitSubmoduleManager/issues/new?template=bug_report.yml)
   for reproducible defects.
-- Use the [feature request form](https://github.com/martincalander/GitPackageManager/issues/new?template=feature_request.yml)
+- Use the [feature request form](https://github.com/martincalander/GitSubmoduleManager/issues/new?template=feature_request.yml)
   for scoped enhancements.
 - Follow [SECURITY.md](SECURITY.md) for vulnerabilities. Do not publish
   security-sensitive details in a public issue.

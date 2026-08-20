@@ -1,7 +1,7 @@
 using System;
 using System.Collections.Generic;
 
-namespace MartinCalander.GitPackageManager.Editor
+namespace MartinCalander.GitSubmoduleManager.Editor
 {
     internal sealed class RepositoryCoordinator : IDisposable
     {

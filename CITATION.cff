@@ -1,12 +1,10 @@
 cff-version: 1.2.0
 message: If you use this software, please cite it using these metadata.
-title: Git Package Manager
+title: Git Submodule Manager
 type: software
 authors:
   - family-names: Calander
     given-names: Martin
-repository-code: https://github.com/martincalander/GitPackageManager
-url: https://github.com/martincalander/GitPackageManager
+repository-code: https://github.com/martincalander/GitSubmoduleManager
+url: https://github.com/martincalander/GitSubmoduleManager
 license: MIT
-version: 1.0.0
-date-released: 2026-07-12

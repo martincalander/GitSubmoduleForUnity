@@ -1,6 +1,6 @@
 # Repository Publication Checklist
 
-Use this checklist when publishing or transferring Git Package Manager. These
+Use this checklist when publishing or transferring Git Submodule Manager. These
 settings are not stored in Git and must be configured in GitHub.
 
 ## General

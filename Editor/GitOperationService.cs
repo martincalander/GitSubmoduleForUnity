@@ -5,7 +5,7 @@ using System.Threading;
 using UnityEditor;
 using UnityEngine;
 
-namespace MartinCalander.GitPackageManager.Editor
+namespace MartinCalander.GitSubmoduleManager.Editor
 {
     internal enum GitOperationCompletionOutcome
     {
@@ -52,14 +52,26 @@ namespace MartinCalander.GitPackageManager.Editor
         private const int MaximumCommitLength = 128;
         private const long MaximumJournalBytes = 64 * 1024;
         private const string AutoRefreshSessionKey =
+            "MartinCalander.GitSubmoduleManager.RecoveryOwnsAutoRefresh";
+        private const string LegacyAutoRefreshSessionKey =
             "MartinCalander.GitPackageManager.RecoveryOwnsAutoRefresh";
 
         private static readonly object Gate = new object();
-        private static readonly string JournalPath = Path.Combine(
+        private static readonly string CurrentJournalPath = Path.Combine(
+            GitUtility.ProjectRoot,
+            "Library",
+            "GitSubmoduleManager",
+            "active-operation.json");
+        private static readonly string LegacyJournalPath = Path.Combine(
             GitUtility.ProjectRoot,
             "Library",
             "GitPackageManager",
             "active-operation.json");
+
+        private static string JournalPath => ResolveJournalPath(CurrentJournalPath, LegacyJournalPath);
+
+        private static bool HasConflictingJournalFiles =>
+            HaveConflictingJournalFiles(CurrentJournalPath, LegacyJournalPath);
 
         private static AsyncCommandHandle commandHandle;
         private static Thread taskThread;
@@ -82,6 +94,18 @@ namespace MartinCalander.GitPackageManager.Editor
         private static long repositoryGeneration;
 
         internal static long RepositoryGeneration => Interlocked.Read(ref repositoryGeneration);
+
+        internal static string ResolveJournalPath(string currentPath, string legacyPath)
+        {
+            if (File.Exists(currentPath))
+                return currentPath;
+            return File.Exists(legacyPath) ? legacyPath : currentPath;
+        }
+
+        internal static bool HaveConflictingJournalFiles(string currentPath, string legacyPath)
+        {
+            return File.Exists(currentPath) && File.Exists(legacyPath);
+        }
 
         internal static string RecoveryWarning
         {
@@ -328,7 +352,7 @@ namespace MartinCalander.GitPackageManager.Editor
                 taskThread = new Thread(() => RunTask(task, cancellationToken))
                 {
                     IsBackground = true,
-                    Name = "Git Package Manager operation"
+                    Name = "Git Submodule Manager operation"
                 };
                 TryUpdateActiveJournalState("running");
                 RegisterPolling();
@@ -421,6 +445,50 @@ namespace MartinCalander.GitPackageManager.Editor
 
         internal static bool TryAcknowledgeRecoveryWarning(out string error)
         {
+            lock (Gate)
+            {
+                if (reserved || commandHandle != null || taskThread != null)
+                {
+                    error = $"Another repository operation is already running: {activeLabel}";
+                    return false;
+                }
+            }
+
+            if (HasConflictingJournalFiles)
+            {
+                error =
+                    "Both the current and legacy operation journals exist. Preserve and inspect both files, " +
+                    "then remove only the obsolete marker before acknowledging recovery.";
+                return false;
+            }
+
+            // The conflict warning deliberately does not pick either journal. Once the
+            // user removes the obsolete copy, pin and reload the surviving journal so
+            // auto-refresh ownership and cleanup refer to the same inspected file.
+            string acknowledgementJournalPath = JournalPath;
+            LoadRecoveryWarning(
+                acknowledgementJournalPath,
+                out bool journalExistedWhenInspected,
+                out string inspectedOperationId);
+
+            if (!IsAcknowledgementJournalStable(
+                    acknowledgementJournalPath,
+                    journalExistedWhenInspected,
+                    out error))
+            {
+                return false;
+            }
+
+            if (journalExistedWhenInspected &&
+                !IsValidJournalOperationId(inspectedOperationId))
+            {
+                error =
+                    "The recovery journal has no valid operation identity and cannot be removed automatically. " +
+                    "Preserve it for review, remove it manually only when safe, and restart the Unity Editor if " +
+                    "the recovery warning reports uncertain auto-refresh ownership.";
+                return false;
+            }
+
             bool shouldRestoreAutoRefresh;
             lock (Gate)
             {
@@ -430,7 +498,7 @@ namespace MartinCalander.GitPackageManager.Editor
                     return false;
                 }
 
-                if (string.IsNullOrWhiteSpace(recoveryWarning) && !File.Exists(JournalPath))
+                if (string.IsNullOrWhiteSpace(recoveryWarning) && !journalExistedWhenInspected)
                 {
                     error = string.Empty;
                     return true;
@@ -455,6 +523,14 @@ namespace MartinCalander.GitPackageManager.Editor
                 EditorApplication.LockReloadAssemblies();
                 reloadLockAcquired = true;
 
+                if (!IsAcknowledgementJournalStable(
+                        acknowledgementJournalPath,
+                        journalExistedWhenInspected,
+                        out error))
+                {
+                    return false;
+                }
+
                 if (shouldRestoreAutoRefresh)
                 {
                     AssetDatabase.AllowAutoRefresh();
@@ -462,21 +538,35 @@ namespace MartinCalander.GitPackageManager.Editor
                         recoveryOwnsAutoRefresh = false;
                     try
                     {
-                        SessionState.SetBool(AutoRefreshSessionKey, false);
+                        SetAutoRefreshSessionMarker(false);
                     }
                     catch (Exception ex)
                     {
                         Debug.LogWarning(
-                            $"[Git Package Manager] Failed to clear the auto-refresh session marker: {ex.Message}");
+                            $"[Git Submodule Manager] Failed to clear the auto-refresh session marker: {ex.Message}");
                     }
-                    TryUpdateRecoveryJournalAutoRefreshState(false);
+                    TryUpdateRecoveryJournalAutoRefreshState(
+                        acknowledgementJournalPath,
+                        inspectedOperationId,
+                        false);
                 }
 
                 // Unsafe package files are imported only after the user has
                 // reviewed and explicitly acknowledged the recovery warning.
                 AssetDatabase.Refresh(ImportAssetOptions.ForceUpdate);
 
-                acknowledgementCompleted = TryDeleteJournal(out error);
+                if (!IsAcknowledgementJournalStable(
+                        acknowledgementJournalPath,
+                        journalExistedWhenInspected,
+                        out error))
+                {
+                    return false;
+                }
+
+                acknowledgementCompleted = TryDeleteJournal(
+                    acknowledgementJournalPath,
+                    inspectedOperationId,
+                    out error);
             }
             catch (Exception ex)
             {
@@ -539,7 +629,7 @@ namespace MartinCalander.GitPackageManager.Editor
             GitOperationMetadata metadata,
             out string error)
         {
-            if (GitPackageManagerWindow.AreBackgroundLoadsDraining)
+            if (GitSubmoduleManagerWindow.AreBackgroundLoadsDraining)
             {
                 error =
                     "A package scan is still stopping. Wait for it to finish before starting a repository mutation.";
@@ -592,7 +682,7 @@ namespace MartinCalander.GitPackageManager.Editor
                 {
                     AssetDatabase.DisallowAutoRefresh();
                     controlsAutoRefresh = true;
-                    SessionState.SetBool(AutoRefreshSessionKey, true);
+                    SetAutoRefreshSessionMarker(true);
                     TryUpdateActiveJournalAutoRefreshState(true);
                 }
 
@@ -906,7 +996,7 @@ namespace MartinCalander.GitPackageManager.Editor
                         stateIsSafe = false;
                         shouldRefreshAssets = false;
                         Debug.LogWarning(
-                            $"[Git Package Manager] Failed to restore AssetDatabase auto-refresh: {ex.Message}");
+                            $"[Git Submodule Manager] Failed to restore AssetDatabase auto-refresh: {ex.Message}");
                     }
                 }
 
@@ -919,7 +1009,7 @@ namespace MartinCalander.GitPackageManager.Editor
                     catch (Exception ex)
                     {
                         stateIsSafe = false;
-                        Debug.LogWarning($"[Git Package Manager] Final AssetDatabase refresh failed: {ex.Message}");
+                        Debug.LogWarning($"[Git Submodule Manager] Final AssetDatabase refresh failed: {ex.Message}");
                     }
                 }
 
@@ -929,7 +1019,7 @@ namespace MartinCalander.GitPackageManager.Editor
                     if (!journalDeleted)
                     {
                         stateIsSafe = false;
-                        Debug.LogWarning($"[Git Package Manager] {deleteError}");
+                        Debug.LogWarning($"[Git Submodule Manager] {deleteError}");
                     }
                 }
 
@@ -973,7 +1063,7 @@ namespace MartinCalander.GitPackageManager.Editor
                 }
                 catch (Exception ex)
                 {
-                    Debug.LogWarning($"[Git Package Manager] Failed to unregister operation polling: {ex.Message}");
+                    Debug.LogWarning($"[Git Submodule Manager] Failed to unregister operation polling: {ex.Message}");
                 }
 
                 try
@@ -982,7 +1072,7 @@ namespace MartinCalander.GitPackageManager.Editor
                 }
                 catch (Exception ex)
                 {
-                    Debug.LogWarning($"[Git Package Manager] Failed to dispose task cancellation state: {ex.Message}");
+                    Debug.LogWarning($"[Git Submodule Manager] Failed to dispose task cancellation state: {ex.Message}");
                 }
 
                 try
@@ -1107,7 +1197,7 @@ namespace MartinCalander.GitPackageManager.Editor
             }
             catch (Exception ex)
             {
-                Debug.LogWarning($"[Git Package Manager] Failed to request command cancellation: {ex.Message}");
+                Debug.LogWarning($"[Git Submodule Manager] Failed to request command cancellation: {ex.Message}");
             }
 
             try
@@ -1116,7 +1206,7 @@ namespace MartinCalander.GitPackageManager.Editor
             }
             catch (Exception ex)
             {
-                Debug.LogWarning($"[Git Package Manager] Failed to request task cancellation: {ex.Message}");
+                Debug.LogWarning($"[Git Submodule Manager] Failed to request task cancellation: {ex.Message}");
             }
 
             bool commandTerminated = activeCommand == null ||
@@ -1218,14 +1308,33 @@ namespace MartinCalander.GitPackageManager.Editor
             TryWriteJournalUpdate(snapshot, true);
         }
 
-        private static void TryUpdateRecoveryJournalAutoRefreshState(bool isSuppressed)
+        private static void TryUpdateRecoveryJournalAutoRefreshState(
+            string journalPath,
+            string expectedOperationId,
+            bool isSuppressed)
         {
-            if (!TryReadJournal(out GitOperationJournal journal, out _))
-                return;
+            try
+            {
+                if (!TryReadJournal(journalPath, out GitOperationJournal journal, out _))
+                    return;
 
-            journal.autoRefreshSuppressed = isSuppressed;
-            journal.updatedUtc = DateTime.UtcNow.ToString("O");
-            TryWriteJournalUpdate(journal, false);
+                if (!string.IsNullOrWhiteSpace(expectedOperationId) &&
+                    !string.Equals(journal.operationId, expectedOperationId, StringComparison.Ordinal))
+                {
+                    Debug.LogWarning(
+                        "[Git Submodule Manager] The recovery journal changed ownership and was not updated.");
+                    return;
+                }
+
+                journal.autoRefreshSuppressed = isSuppressed;
+                journal.updatedUtc = DateTime.UtcNow.ToString("O");
+                WriteJournal(journalPath, journal, true, expectedOperationId);
+            }
+            catch (Exception ex)
+            {
+                Debug.LogWarning(
+                    $"[Git Submodule Manager] Failed to update operation journal: {ex.Message}");
+            }
         }
 
         private static void TryWriteJournalUpdate(
@@ -1259,7 +1368,7 @@ namespace MartinCalander.GitPackageManager.Editor
             {
                 // The original atomic journal remains intact when replacement
                 // fails. The operation may continue, but recovery stays cautious.
-                Debug.LogWarning($"[Git Package Manager] Failed to update operation journal: {ex.Message}");
+                Debug.LogWarning($"[Git Submodule Manager] Failed to update operation journal: {ex.Message}");
             }
         }
 
@@ -1268,20 +1377,29 @@ namespace MartinCalander.GitPackageManager.Editor
             bool replaceExisting,
             string expectedOperationId)
         {
+            WriteJournal(JournalPath, journal, replaceExisting, expectedOperationId);
+        }
+
+        private static void WriteJournal(
+            string journalPath,
+            GitOperationJournal journal,
+            bool replaceExisting,
+            string expectedOperationId)
+        {
             if (journal == null)
                 throw new InvalidOperationException("The operation journal was not initialized.");
 
-            if (!GitUtility.TryValidateProjectOwnedPath(JournalPath, out string pathError))
+            if (!GitUtility.TryValidateProjectOwnedPath(journalPath, out string pathError))
                 throw new IOException(pathError);
 
-            string directory = Path.GetDirectoryName(JournalPath);
+            string directory = Path.GetDirectoryName(journalPath);
             if (string.IsNullOrWhiteSpace(directory))
                 throw new InvalidOperationException("The operation journal directory could not be resolved.");
 
             Directory.CreateDirectory(directory);
             string temporaryPath = Path.Combine(
                 directory,
-                Path.GetFileName(JournalPath) + "." + Guid.NewGuid().ToString("N") + ".tmp");
+                Path.GetFileName(journalPath) + "." + Guid.NewGuid().ToString("N") + ".tmp");
 
             try
             {
@@ -1300,12 +1418,15 @@ namespace MartinCalander.GitPackageManager.Editor
 
                 if (replaceExisting)
                 {
-                    if (!File.Exists(JournalPath))
+                    if (!File.Exists(journalPath))
                         throw new IOException("The operation journal disappeared before its atomic update.");
 
                     if (!string.IsNullOrWhiteSpace(expectedOperationId))
                     {
-                        if (!TryReadJournal(out GitOperationJournal existingJournal, out string readError) ||
+                        if (!TryReadJournal(
+                                journalPath,
+                                out GitOperationJournal existingJournal,
+                                out string readError) ||
                             !string.Equals(
                                 existingJournal.operationId,
                                 expectedOperationId,
@@ -1316,14 +1437,14 @@ namespace MartinCalander.GitPackageManager.Editor
                         }
                     }
 
-                    File.Replace(temporaryPath, JournalPath, null);
+                    File.Replace(temporaryPath, journalPath, null);
                 }
                 else
                 {
                     // File.Move is an atomic create within this directory and
                     // fails rather than overwriting a recovery marker that raced
                     // with reservation.
-                    File.Move(temporaryPath, JournalPath);
+                    File.Move(temporaryPath, journalPath);
                 }
             }
             finally
@@ -1343,7 +1464,28 @@ namespace MartinCalander.GitPackageManager.Editor
 
         private static void LoadRecoveryWarning()
         {
-            if (!GitUtility.TryValidateProjectOwnedPath(JournalPath, out string pathError))
+            if (HasConflictingJournalFiles)
+            {
+                lock (Gate)
+                    recoveryRequiresEditorRestart = false;
+                SetRecoveryWarning(
+                    "Both the current and legacy operation journals exist. Repository mutations are blocked " +
+                    "until both files have been preserved, inspected, and the obsolete marker is removed manually.");
+                return;
+            }
+
+            LoadRecoveryWarning(JournalPath, out _, out _);
+        }
+
+        private static void LoadRecoveryWarning(
+            string journalPath,
+            out bool journalExists,
+            out string operationId)
+        {
+            journalExists = File.Exists(journalPath);
+            operationId = string.Empty;
+
+            if (!GitUtility.TryValidateProjectOwnedPath(journalPath, out string pathError))
             {
                 lock (Gate)
                     recoveryRequiresEditorRestart = true;
@@ -1351,25 +1493,37 @@ namespace MartinCalander.GitPackageManager.Editor
                 return;
             }
 
-            if (!File.Exists(JournalPath))
+            if (!journalExists)
             {
-                bool ownsOrphanedSuppression = GetAutoRefreshSessionMarker();
-                if (ownsOrphanedSuppression)
+                bool markerWasRead = TryGetAutoRefreshSessionMarker(out bool ownsOrphanedSuppression);
+                lock (Gate)
                 {
-                    lock (Gate)
-                    {
-                        recoveryOwnsAutoRefresh = false;
-                        recoveryRequiresEditorRestart = true;
-                    }
+                    recoveryOwnsAutoRefresh = false;
+                    recoveryRequiresEditorRestart = !markerWasRead || ownsOrphanedSuppression;
+                }
+
+                if (!markerWasRead)
+                {
+                    SetRecoveryWarning(
+                        "The auto-refresh recovery marker could not be read. Restart the Unity Editor before " +
+                        "starting another repository mutation.");
+                }
+                else if (ownsOrphanedSuppression)
+                {
                     SetRecoveryWarning(
                         "AssetDatabase auto-refresh has an orphaned operation marker, but its recovery journal is " +
                         "missing. Restart the Unity Editor before starting another repository mutation.");
                 }
+                else
+                {
+                    SetRecoveryWarning(string.Empty);
+                }
                 return;
             }
 
-            if (TryReadJournal(out GitOperationJournal journal, out _))
+            if (TryReadJournal(journalPath, out GitOperationJournal journal, out _))
             {
+                operationId = journal?.operationId ?? string.Empty;
                 string label = string.IsNullOrWhiteSpace(journal?.label)
                     ? "a repository operation"
                     : NormalizeJournalField(journal.label, MaximumLabelLength);
@@ -1381,20 +1535,31 @@ namespace MartinCalander.GitPackageManager.Editor
                     : $" during phase '{NormalizeJournalField(journal.phase, MaximumPhaseLength)}'";
                 // SessionState survives a domain reload but not an Editor restart,
                 // so it proves this service still owns a native suppression count.
-                bool sessionMarker = GetAutoRefreshSessionMarker();
+                bool markerWasRead = TryGetAutoRefreshSessionMarker(out bool sessionMarker);
                 bool ownsSuppression;
                 bool requiresRestart;
                 lock (Gate)
                 {
-                    ownsSuppression = recoveryOwnsAutoRefresh ||
-                                      (journal != null &&
-                                       journal.autoRefreshSuppressed &&
-                                       sessionMarker);
-                    requiresRestart = sessionMarker && !ownsSuppression;
+                    if (markerWasRead)
+                    {
+                        ResolveRecoveryAutoRefreshState(
+                            recoveryOwnsAutoRefresh,
+                            journal != null && journal.autoRefreshSuppressed,
+                            sessionMarker,
+                            out ownsSuppression,
+                            out requiresRestart);
+                    }
+                    else
+                    {
+                        ownsSuppression = false;
+                        requiresRestart = true;
+                    }
                     recoveryOwnsAutoRefresh = ownsSuppression;
                     recoveryRequiresEditorRestart = requiresRestart;
                 }
-                string refreshWarning = ownsSuppression
+                string refreshWarning = !markerWasRead
+                    ? " Auto-refresh ownership could not be read; restart the Unity Editor before continuing."
+                    : ownsSuppression
                     ? " AssetDatabase auto-refresh remains paused until you acknowledge this warning."
                     : requiresRestart
                         ? " Auto-refresh ownership is inconsistent; restart the Unity Editor before continuing."
@@ -1406,14 +1571,17 @@ namespace MartinCalander.GitPackageManager.Editor
             }
             else
             {
-                bool sessionMarker = GetAutoRefreshSessionMarker();
+                bool markerWasRead = TryGetAutoRefreshSessionMarker(out bool sessionMarker);
                 lock (Gate)
                 {
                     recoveryOwnsAutoRefresh = false;
-                    recoveryRequiresEditorRestart = sessionMarker;
+                    recoveryRequiresEditorRestart = !markerWasRead || sessionMarker;
                 }
                 SetRecoveryWarning(
-                    sessionMarker
+                    !markerWasRead
+                        ? "Unity previously stopped during a repository operation, and the auto-refresh recovery " +
+                          "marker could not be read. Restart the Unity Editor before continuing."
+                        : sessionMarker
                         ? "Unity previously stopped during a repository operation, but auto-refresh ownership cannot " +
                           "be proven from the damaged journal. Restart the Unity Editor before continuing."
                         : "Unity previously stopped during a repository operation. Inspect the parent repository " +
@@ -1421,16 +1589,62 @@ namespace MartinCalander.GitPackageManager.Editor
             }
         }
 
-        private static bool GetAutoRefreshSessionMarker()
+        private static bool IsAcknowledgementJournalStable(
+            string journalPath,
+            bool expectedToExist,
+            out string error)
+        {
+            if (HasConflictingJournalFiles)
+            {
+                error =
+                    "Both the current and legacy operation journals exist. Preserve and inspect both files, " +
+                    "then remove only the obsolete marker before acknowledging recovery.";
+                return false;
+            }
+
+            if (!string.Equals(JournalPath, journalPath, StringComparison.Ordinal) ||
+                File.Exists(journalPath) != expectedToExist)
+            {
+                error =
+                    "The recovery journal changed while it was being acknowledged. Its files were preserved; " +
+                    "review the recovery warning again before retrying.";
+                return false;
+            }
+
+            error = string.Empty;
+            return true;
+        }
+
+        internal static void ResolveRecoveryAutoRefreshState(
+            bool alreadyOwnsSuppression,
+            bool journalRecordsSuppression,
+            bool sessionMarkerExists,
+            out bool ownsSuppression,
+            out bool requiresRestart)
+        {
+            ownsSuppression = alreadyOwnsSuppression ||
+                              (journalRecordsSuppression && sessionMarkerExists);
+            requiresRestart = sessionMarkerExists && !ownsSuppression;
+        }
+
+        internal static bool IsValidJournalOperationId(string operationId)
+        {
+            return Guid.TryParseExact(operationId, "N", out _);
+        }
+
+        private static bool TryGetAutoRefreshSessionMarker(out bool markerExists)
         {
             try
             {
-                return SessionState.GetBool(AutoRefreshSessionKey, false);
+                markerExists = SessionState.GetBool(AutoRefreshSessionKey, false) ||
+                               SessionState.GetBool(LegacyAutoRefreshSessionKey, false);
+                return true;
             }
             catch (Exception ex)
             {
                 Debug.LogWarning(
-                    $"[Git Package Manager] Failed to read the auto-refresh session marker: {ex.Message}");
+                    $"[Git Submodule Manager] Failed to read the auto-refresh session marker: {ex.Message}");
+                markerExists = false;
                 return false;
             }
         }
@@ -1439,36 +1653,56 @@ namespace MartinCalander.GitPackageManager.Editor
         {
             try
             {
-                SessionState.SetBool(AutoRefreshSessionKey, value);
+                SetAutoRefreshSessionMarker(value);
             }
             catch (Exception ex)
             {
                 Debug.LogWarning(
-                    $"[Git Package Manager] Failed to update the auto-refresh session marker: {ex.Message}");
+                    $"[Git Submodule Manager] Failed to update the auto-refresh session marker: {ex.Message}");
             }
+        }
+
+        private static void SetAutoRefreshSessionMarker(bool value)
+        {
+            SessionState.SetBool(AutoRefreshSessionKey, value);
+            if (!value)
+                SessionState.SetBool(LegacyAutoRefreshSessionKey, false);
         }
 
         private static bool TryReadJournal(out GitOperationJournal journal, out string error)
         {
+            return TryReadJournal(JournalPath, out journal, out error);
+        }
+
+        private static bool TryReadJournal(
+            string journalPath,
+            out GitOperationJournal journal,
+            out string error)
+        {
             journal = null;
             try
             {
-                if (!GitUtility.TryValidateProjectOwnedPath(JournalPath, out error))
+                if (!GitUtility.TryValidateProjectOwnedPath(journalPath, out error))
                     return false;
 
-                if (!File.Exists(JournalPath))
+                if (!File.Exists(journalPath))
                 {
                     error = "The operation journal does not exist.";
                     return false;
                 }
 
-                var journalFile = new FileInfo(JournalPath);
+                var journalFile = new FileInfo(journalPath);
                 if (journalFile.Length > MaximumJournalBytes)
                     throw new InvalidDataException("The operation journal exceeds the safety size limit.");
 
-                journal = JsonUtility.FromJson<GitOperationJournal>(File.ReadAllText(JournalPath));
+                journal = JsonUtility.FromJson<GitOperationJournal>(File.ReadAllText(journalPath));
                 if (journal == null)
                     throw new InvalidDataException("The operation journal is empty or invalid.");
+                if (!IsValidJournalOperationId(journal.operationId))
+                {
+                    throw new InvalidDataException(
+                        "The operation journal has no valid operation identity.");
+                }
 
                 error = string.Empty;
                 return true;
@@ -1483,13 +1717,41 @@ namespace MartinCalander.GitPackageManager.Editor
 
         private static bool TryDeleteJournal(out string error)
         {
+            return TryDeleteJournal(JournalPath, string.Empty, out error);
+        }
+
+        private static bool TryDeleteJournal(
+            string journalPath,
+            string expectedOperationId,
+            out string error)
+        {
             try
             {
-                if (!GitUtility.TryValidateProjectOwnedPath(JournalPath, out error))
+                if (!GitUtility.TryValidateProjectOwnedPath(journalPath, out error))
                     return false;
 
-                if (File.Exists(JournalPath))
-                    File.Delete(JournalPath);
+                if (File.Exists(journalPath))
+                {
+                    if (!string.IsNullOrWhiteSpace(expectedOperationId))
+                    {
+                        if (!TryReadJournal(
+                                journalPath,
+                                out GitOperationJournal journal,
+                                out string readError) ||
+                            !string.Equals(
+                                journal.operationId,
+                                expectedOperationId,
+                                StringComparison.Ordinal))
+                        {
+                            error =
+                                "The recovery journal changed ownership and was preserved for review. " +
+                                readError;
+                            return false;
+                        }
+                    }
+
+                    File.Delete(journalPath);
+                }
                 error = string.Empty;
                 return true;
             }
@@ -1514,7 +1776,11 @@ namespace MartinCalander.GitPackageManager.Editor
                 expectedJournal = CloneJournal(activeJournal);
             }
 
-            if (!TryReadJournal(out GitOperationJournal currentJournal, out string readError))
+            string journalPath = JournalPath;
+            if (!TryReadJournal(
+                    journalPath,
+                    out GitOperationJournal currentJournal,
+                    out string readError))
             {
                 error = "The active operation journal could not be verified before deletion: " + readError;
                 return false;
@@ -1529,7 +1795,7 @@ namespace MartinCalander.GitPackageManager.Editor
                 return false;
             }
 
-            return TryDeleteJournal(out error);
+            return TryDeleteJournal(journalPath, expectedJournal.operationId, out error);
         }
 
         private static void SetRecoveryWarning(string warning)
@@ -1545,7 +1811,7 @@ namespace MartinCalander.GitPackageManager.Editor
             // An unsafe operation can outlive or close its originating window.
             // Keep a persistent Console-visible signal in addition to the UI.
             if (changed && !string.IsNullOrWhiteSpace(normalized))
-                Debug.LogError("[Git Package Manager] " + normalized);
+                Debug.LogError("[Git Submodule Manager] " + normalized);
         }
 
         private static string NormalizeJournalField(string value, int maximumLength)

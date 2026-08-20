@@ -8,7 +8,7 @@ using System.Text.RegularExpressions;
 using System.Threading;
 using UnityEngine;
 
-namespace MartinCalander.GitPackageManager.Editor
+namespace MartinCalander.GitSubmoduleManager.Editor
 {
     [Serializable]
     internal sealed class PackageJsonMetadata
@@ -122,6 +122,19 @@ namespace MartinCalander.GitPackageManager.Editor
         }
 
         internal static string GitExecutable => gitExecutableOverride ?? "git";
+
+        internal static string ResolveRecoveryRoot(string projectRoot)
+        {
+            string currentRecoveryRoot =
+                Path.Combine(projectRoot, "Library", "GitSubmoduleManager", "Recovery");
+            string legacyRecoveryRoot =
+                Path.Combine(projectRoot, "Library", "GitPackageManager", "Recovery");
+            if (Directory.Exists(currentRecoveryRoot))
+                return currentRecoveryRoot;
+            return Directory.Exists(legacyRecoveryRoot)
+                ? legacyRecoveryRoot
+                : currentRecoveryRoot;
+        }
 
         internal static IDisposable OverrideProjectRootForTests(string projectRoot)
         {
@@ -2089,7 +2102,7 @@ namespace MartinCalander.GitPackageManager.Editor
                     return true;
 
                 cancellationToken.ThrowIfCancellationRequested();
-                string recoveryRoot = Path.Combine(ProjectRoot, "Library", "GitPackageManager", "Recovery");
+                string recoveryRoot = ResolveRecoveryRoot(ProjectRoot);
                 string projectRoot = Path.GetFullPath(ProjectRoot);
                 string fullRecoveryRoot = Path.GetFullPath(recoveryRoot);
                 if (HasReparsePointBetween(projectRoot, fullRecoveryRoot))
@@ -2232,7 +2245,8 @@ namespace MartinCalander.GitPackageManager.Editor
                 {
                     error =
                         "The recovery path contains a symbolic link, junction, or other reparse point. " +
-                        "Repository operations are blocked until Library/GitPackageManager is a normal project-local directory.";
+                        "Repository operations are blocked until the Git Submodule Manager recovery directory " +
+                        "under Library is a normal project-local directory.";
                     return false;
                 }
 
@@ -2311,7 +2325,7 @@ namespace MartinCalander.GitPackageManager.Editor
                     return false;
                 }
 
-                string recoveryRoot = Path.Combine(ProjectRoot, "Library", "GitPackageManager", "Recovery");
+                string recoveryRoot = ResolveRecoveryRoot(ProjectRoot);
                 string fullProjectRoot = Path.GetFullPath(ProjectRoot);
                 string fullRecoveryRoot = Path.GetFullPath(recoveryRoot);
                 if (HasReparsePointBetween(fullProjectRoot, fullRecoveryRoot))
@@ -4055,7 +4069,7 @@ namespace MartinCalander.GitPackageManager.Editor
             if (!string.IsNullOrWhiteSpace(prefixResult.StdOut))
             {
                 error =
-                    "Git Package Manager requires the Unity project root to be the Git repository root. " +
+                    "Git Submodule Manager requires the Unity project root to be the Git repository root. " +
                     $"Git resolved {RedactCredentials(rootResult.StdOut.Trim())} instead, so the operation was blocked to avoid changing an ancestor repository.";
                 return false;
             }

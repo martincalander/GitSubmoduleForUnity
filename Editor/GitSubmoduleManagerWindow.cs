@@ -3,8 +3,9 @@ using System.Collections.Generic;
 using System.Threading;
 using UnityEditor;
 using UnityEngine;
+using UnityEngine.Scripting.APIUpdating;
 
-namespace MartinCalander.GitPackageManager.Editor
+namespace MartinCalander.GitSubmoduleManager.Editor
 {
     internal sealed class DeferredRepositoryMutationQueue
     {
@@ -50,7 +51,12 @@ namespace MartinCalander.GitPackageManager.Editor
         }
     }
 
-    public partial class GitPackageManagerWindow : EditorWindow
+    [MovedFrom(
+        true,
+        sourceNamespace: "MartinCalander.GitPackageManager.Editor",
+        sourceAssembly: "MartinCalander.GitPackageManager.Editor",
+        sourceClassName: "GitPackageManagerWindow")]
+    public partial class GitSubmoduleManagerWindow : EditorWindow
     {
         internal enum Tab
         {
@@ -74,8 +80,10 @@ namespace MartinCalander.GitPackageManager.Editor
 
         private const string PackageNameRule =
             "Use a lowercase reverse-domain UPM name (for example com.company.package); hyphens and underscores are supported.";
-        internal const string CurrentPackageName = "com.martincalander.gitpackagemanager";
+        internal const string CurrentPackageName = "com.martincalander.gitsubmodulemanager";
         internal const string CurrentPackagePath = "Packages/" + CurrentPackageName;
+        internal const string LegacyPackageName = "com.martincalander.gitpackagemanager";
+        internal const string LegacyPackagePath = "Packages/" + LegacyPackageName;
         private const int BackgroundLoadDrainTimeoutMs = 2000;
         private const float ListPaneWidth = 320f;
 
@@ -219,12 +227,12 @@ namespace MartinCalander.GitPackageManager.Editor
 
         private void ApplyStartupPreferences()
         {
-            GitPackageManagerUserSettings settings = GitPackageManagerUserSettings.instance;
-            currentTab = settings.StartupTab == GitPackageManagerStartupTab.GitHub
+            GitSubmoduleManagerUserSettings settings = GitSubmoduleManagerUserSettings.Instance;
+            currentTab = settings.StartupTab == GitSubmoduleManagerStartupTab.GitHub
                 ? Tab.Discover
                 : Tab.Installed;
             currentFilter = settings.DefaultGitHubFilter ==
-                GitPackageManagerDefaultGitHubFilter.ValidUpmPackages
+                GitSubmoduleManagerDefaultGitHubFilter.ValidUpmPackages
                 ? FilterOption.ValidPackagesOnly
                 : FilterOption.All;
         }
@@ -239,9 +247,15 @@ namespace MartinCalander.GitPackageManager.Editor
             var iconFileName = EditorGUIUtility.isProSkin
                 ? "GitEditorWindowIcon.png"
                 : "GitEditorWindowIconLight.png";
+            UnityEditor.PackageManager.PackageInfo package =
+                UnityEditor.PackageManager.PackageInfo.FindForAssembly(
+                    typeof(GitSubmoduleManagerWindow).Assembly);
+            string packagePath = string.IsNullOrWhiteSpace(package?.assetPath)
+                ? CurrentPackagePath
+                : GitUtility.NormalizePath(package.assetPath);
             var icon = AssetDatabase.LoadAssetAtPath<Texture2D>(
-                $"{CurrentPackagePath}/Editor/{iconFileName}");
-            titleContent = new GUIContent("Git Package Manager", icon);
+                $"{packagePath}/Editor/{iconFileName}");
+            titleContent = new GUIContent("Git Submodule Manager", icon);
         }
 
         private void OnDisable()
@@ -436,7 +450,7 @@ namespace MartinCalander.GitPackageManager.Editor
             })
             {
                 IsBackground = true,
-                Name = "Git Package Manager initial load"
+                Name = "Git Submodule Manager initial load"
             };
 
             initialLoadCancellationSource = cancellationSource;

@@ -5,9 +5,9 @@ using System.Threading;
 using UnityEditor;
 using UnityEngine;
 
-namespace MartinCalander.GitPackageManager.Editor
+namespace MartinCalander.GitSubmoduleManager.Editor
 {
-    public partial class GitPackageManagerWindow
+    public partial class GitSubmoduleManagerWindow
     {
         internal enum InitialLoadStage
         {
@@ -539,7 +539,7 @@ namespace MartinCalander.GitPackageManager.Editor
                     "Package Directory Must Be Emptied",
                     "The package directory contains files but is not an initialized submodule worktree. " +
                     "Move those files to safety and leave the directory empty before removing the gitlink. " +
-                    "Git Package Manager will not discard unverified files.",
+                    "Git Submodule Manager will not discard unverified files.",
                     "OK");
                 return;
             }
@@ -552,7 +552,7 @@ namespace MartinCalander.GitPackageManager.Editor
             {
                 string warning =
                     assessment.BuildWarning() + "\n\n" +
-                    "Git Package Manager will preserve the submodule object database for recovery, but the package worktree and parent gitlink changes will be removed. " +
+                    "Git Submodule Manager will preserve the submodule object database for recovery, but the package worktree and parent gitlink changes will be removed. " +
                     "This cannot be undone from the Unity UI.";
                 if (!EditorUtility.DisplayDialog(
                         "Local Work Would Be Discarded",
@@ -1454,7 +1454,7 @@ namespace MartinCalander.GitPackageManager.Editor
             }
 
             string prompt =
-                $"Git Package Manager can run this command to install {displayName}:\n\n" +
+                $"Git Submodule Manager can run this command to install {displayName}:\n\n" +
                 $"{plan.DisplayCommand}\n\n" +
                 (string.IsNullOrWhiteSpace(plan.ExecutableLocationNotice)
                     ? string.Empty
@@ -1587,8 +1587,8 @@ namespace MartinCalander.GitPackageManager.Editor
             switch (currentTab)
             {
                 case Tab.Installed:
-                    GitPackageManagerUserSettings settings =
-                        GitPackageManagerUserSettings.instance;
+                    GitSubmoduleManagerUserSettings settings =
+                        GitSubmoduleManagerUserSettings.Instance;
                     bool installedNeedsRefresh = installedPackages.Count == 0 ||
                         ShouldRefreshInstalledPackagesOnReturn(
                             settings.RefreshInProjectWhenRevisited,
@@ -1683,7 +1683,7 @@ namespace MartinCalander.GitPackageManager.Editor
             })
             {
                 IsBackground = true,
-                Name = "Git Package Manager refresh"
+                Name = "Git Submodule Manager refresh"
             };
 
             installedLoadCancellationSource = cancellationSource;

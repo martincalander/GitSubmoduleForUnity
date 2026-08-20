@@ -1,9 +1,9 @@
 using UnityEditor;
 using UnityEngine;
 
-namespace MartinCalander.GitPackageManager.Editor
+namespace MartinCalander.GitSubmoduleManager.Editor
 {
-    public partial class GitPackageManagerWindow
+    public partial class GitSubmoduleManagerWindow
     {
         private string lastAutoDerivedPackageName = string.Empty;
 
@@ -93,10 +93,10 @@ namespace MartinCalander.GitPackageManager.Editor
 
         private sealed class AddFromUrlPopup : PopupWindowContent
         {
-            private readonly GitPackageManagerWindow owner;
+            private readonly GitSubmoduleManagerWindow owner;
             private Vector2 scrollPosition;
 
-            public AddFromUrlPopup(GitPackageManagerWindow owner)
+            public AddFromUrlPopup(GitSubmoduleManagerWindow owner)
             {
                 this.owner = owner;
             }

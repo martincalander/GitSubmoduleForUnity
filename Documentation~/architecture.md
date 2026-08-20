@@ -7,11 +7,11 @@ is emitted.
 
 ```text
 Editor/
-├── GitPackageManagerUserSettings.cs
+├── GitSubmoduleManagerUserSettings.cs
 │                               per-user, per-project preferences
-├── GitPackageManagerPreferencesProvider.cs
+├── GitSubmoduleManagerPreferencesProvider.cs
 │                               native Unity Preferences integration
-├── PackageManagerWindow.*      IMGUI rendering and user actions
+├── GitSubmoduleManagerWindow.* IMGUI rendering and user actions
 ├── DiscoveryCoordinator.cs    paged GitHub discovery state
 ├── RepositoryCoordinator.cs   lazy remote branch loading and cache
 ├── Models/                    package and repository data

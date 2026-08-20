@@ -1,3 +1,3 @@
 using System.Runtime.CompilerServices;
 
-[assembly: InternalsVisibleTo("MartinCalander.GitPackageManager.Editor.Tests")]
+[assembly: InternalsVisibleTo("MartinCalander.GitSubmoduleManager.Editor.Tests")]

@@ -1,4 +1,4 @@
-# Releasing Git Package Manager
+# Releasing Git Submodule Manager
 
 This guide is for maintainers publishing a GitHub and UPM release. Releases
 follow [Semantic Versioning](https://semver.org/) and are produced by the
@@ -52,7 +52,7 @@ The version in [`package.json`](../package.json) and the tag without its leading
    ```
 
 6. In a clean Unity project, install the package from the exact release commit,
-   run `MartinCalander.GitPackageManager.Editor.Tests` in EditMode, and exercise add, update,
+   run `MartinCalander.GitSubmoduleManager.Editor.Tests` in EditMode, and exercise add, update,
    and remove behavior.
 7. Record any platform or Unity version that could not be tested in the release
    pull request.
@@ -71,7 +71,7 @@ Create an annotated tag on the reviewed release commit:
 ```bash
 git switch main
 git pull --ff-only
-git tag -a v1.0.1 -m "Git Package Manager 1.0.1"
+git tag -a v1.0.1 -m "Git Submodule Manager 1.0.1"
 git push origin v1.0.1
 ```
 
@@ -99,7 +99,7 @@ does not create or move a tag.
 - Install the tag from a clean Unity project:
 
   ```text
-  https://github.com/martincalander/GitPackageManager.git#v1.0.1
+  https://github.com/martincalander/GitSubmoduleManager.git#v1.0.1
   ```
 
 - Confirm the package imports, the editor window opens, and the documented

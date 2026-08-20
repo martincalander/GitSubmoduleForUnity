@@ -3,7 +3,7 @@ using System.Collections.Generic;
 using System.Text;
 using UnityEngine;
 
-namespace MartinCalander.GitPackageManager.Editor
+namespace MartinCalander.GitSubmoduleManager.Editor
 {
     internal sealed class DiscoveryCoordinator : IDisposable
     {
@@ -1192,7 +1192,7 @@ namespace MartinCalander.GitPackageManager.Editor
 
         private static bool CanStartGitHubCommandNow =>
             CanStartGitHubCommand(
-                GitPackageManagerWindow.IsSharedGitHubAuthenticationBlocked,
+                GitSubmoduleManagerWindow.IsSharedGitHubAuthenticationBlocked,
                 AsyncCommandDrainRegistry.IsDraining ||
                 CliCommandRunner.GitHubCommandRequiresEditorRestart);
 

@@ -1,6 +1,6 @@
 # Third-Party Notices
 
-Git Package Manager does not bundle third-party source code, binaries, Git, or
+Git Submodule Manager does not bundle third-party source code, binaries, Git, or
 GitHub CLI. It integrates with software supplied separately by the user or Unity
 Editor. The package includes the Git logomark described below.
 
@@ -8,7 +8,7 @@ Editor. The package includes the Git logomark described below.
 
 ### Git Logomark
 
-- Files: `GPMIcon.png`, `Editor/GitEditorWindowIcon.png`, and
+- Files: `GitSubmoduleManagerIcon.png`, `Editor/GitEditorWindowIcon.png`, and
   `Editor/GitEditorWindowIconLight.png`
 - Creator: Jason Long
 - Source: [Git logo downloads](https://git-scm.com/community/logos)

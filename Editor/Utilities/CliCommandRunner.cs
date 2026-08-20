@@ -9,7 +9,7 @@ using System.Text;
 using System.Threading;
 using Microsoft.Win32.SafeHandles;
 
-namespace MartinCalander.GitPackageManager.Editor
+namespace MartinCalander.GitSubmoduleManager.Editor
 {
     internal enum CommandTerminationScope
     {
@@ -734,12 +734,12 @@ namespace MartinCalander.GitPackageManager.Editor
                     process.StandardOutput,
                     stdOut,
                     stdOutCompleted,
-                    "Git Package Manager stdout reader");
+                    "Git Submodule Manager stdout reader");
                 Thread stdErrReader = StartBoundedReader(
                     process.StandardError,
                     stdErr,
                     stdErrCompleted,
-                    "Git Package Manager stderr reader");
+                    "Git Submodule Manager stderr reader");
 
                 CommandEndReason endReason = WaitForCommand(process, spec.TimeoutMs, spec.CancellationToken);
                 if (endReason == CommandEndReason.Exited)

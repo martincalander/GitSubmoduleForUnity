@@ -3,9 +3,9 @@ using System.IO;
 using UnityEditor;
 using UnityEngine;
 
-namespace MartinCalander.GitPackageManager.Editor
+namespace MartinCalander.GitSubmoduleManager.Editor
 {
-    public partial class GitPackageManagerWindow
+    public partial class GitSubmoduleManagerWindow
     {
         private string installedDetailsIdentity = string.Empty;
         private string installedDetailsSourceBranch = string.Empty;
@@ -127,7 +127,7 @@ namespace MartinCalander.GitPackageManager.Editor
             {
                 EditorGUILayout.Space(6);
                 EditorGUILayout.HelpBox(
-                    "This is Git Package Manager itself. Removing it will unload this editor tool and close this window after Unity refreshes. You will need to reinstall it through UPM to use it again.",
+                    "This is Git Submodule Manager itself. Removing it will unload this editor tool and close this window after Unity refreshes. You will need to reinstall it through UPM to use it again.",
                     MessageType.Warning);
             }
 
@@ -166,8 +166,27 @@ namespace MartinCalander.GitPackageManager.Editor
             if (package == null)
                 return false;
 
-            return string.Equals(package.PackageName?.Trim(), CurrentPackageName, StringComparison.OrdinalIgnoreCase) ||
-                   string.Equals(GitUtility.NormalizePath(package.Path), CurrentPackagePath, StringComparison.OrdinalIgnoreCase);
+            string packageName = package.PackageName?.Trim();
+            string packagePath = GitUtility.NormalizePath(package.Path);
+            string installedPath = string.Empty;
+            try
+            {
+                installedPath = GitUtility.NormalizePath(
+                    UnityEditor.PackageManager.PackageInfo.FindForAssembly(
+                        typeof(GitSubmoduleManagerWindow).Assembly)?.assetPath);
+            }
+            catch
+            {
+                // The canonical and legacy identities below remain safe fallbacks
+                // if Package Manager cannot resolve the currently loaded assembly.
+            }
+
+            return string.Equals(packageName, CurrentPackageName, StringComparison.OrdinalIgnoreCase) ||
+                   string.Equals(packageName, LegacyPackageName, StringComparison.OrdinalIgnoreCase) ||
+                   string.Equals(packagePath, CurrentPackagePath, StringComparison.OrdinalIgnoreCase) ||
+                   string.Equals(packagePath, LegacyPackagePath, StringComparison.OrdinalIgnoreCase) ||
+                   (!string.IsNullOrWhiteSpace(installedPath) &&
+                    string.Equals(packagePath, installedPath, StringComparison.OrdinalIgnoreCase));
         }
 
         internal static string NormalizeInstalledBranch(string branch)
@@ -214,7 +233,7 @@ namespace MartinCalander.GitPackageManager.Editor
                 ? CurrentPackagePath
                 : GitUtility.NormalizePath(path);
             return
-                $"You are about to remove Git Package Manager itself at:\n{packagePath}\n\n" +
+                $"You are about to remove Git Submodule Manager itself at:\n{packagePath}\n\n" +
                 "This editor tool will be unloaded and this window will close when Unity refreshes. " +
                 "You will need to reinstall the package through UPM to manage submodules with it again.\n\n" +
                 "The parent repository changes will still need to be reviewed and committed.\n\n" +
@@ -233,7 +252,7 @@ namespace MartinCalander.GitPackageManager.Editor
             }
 
             return !IsCurrentPackage(package) || EditorUtility.DisplayDialog(
-                "Remove Git Package Manager Itself?",
+                "Remove Git Submodule Manager Itself?",
                 BuildSelfRemovalWarning(package.Path),
                 "Remove This Tool",
                 "Keep Installed");

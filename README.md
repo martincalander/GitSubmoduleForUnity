@@ -1,7 +1,7 @@
 <p align="center">
   <a href="https://git-scm.com/" title="Git">
     <picture>
-      <img src="GPMIcon.png" alt="Git" width="72" height="72">
+      <img src="GitSubmoduleManagerIcon.png" alt="Git" width="72" height="72">
     </picture>
   </a>
   &nbsp;&nbsp;&nbsp;&nbsp;
@@ -14,19 +14,19 @@
   </a>
 </p>
 
-# Git Package Manager
+# Git Submodule Manager
 
 Manage Unity packages as real Git submodules, directly from the Editor.
 
 <p align="center">
-  <a href="https://github.com/martincalander/GitPackageManager/actions/workflows/ci.yml"><img alt="Sanity Checks" src="https://github.com/martincalander/GitPackageManager/actions/workflows/ci.yml/badge.svg"></a>
-  <a href="https://github.com/martincalander/GitPackageManager/releases"><img alt="Package version" src="https://img.shields.io/github/package-json/v/martincalander/GitPackageManager?filename=package.json&label=package"></a>
+  <a href="https://github.com/martincalander/GitSubmoduleManager/actions/workflows/ci.yml"><img alt="Sanity Checks" src="https://github.com/martincalander/GitSubmoduleManager/actions/workflows/ci.yml/badge.svg"></a>
+  <a href="https://github.com/martincalander/GitSubmoduleManager/releases"><img alt="Package version" src="https://img.shields.io/github/package-json/v/martincalander/GitSubmoduleManager?filename=package.json&label=package"></a>
   <img alt="Unity 2021.3 or newer" src="https://img.shields.io/badge/Unity-2021.3%2B-222C37?logo=unity&logoColor=white">
   <img alt="Editor only" src="https://img.shields.io/badge/scope-Editor%20only-555">
   <a href="LICENSE.md"><img alt="MIT License" src="https://img.shields.io/badge/license-MIT-blue"></a>
 </p>
 
-Git Package Manager is an editor-only Unity package for installing and managing
+Git Submodule Manager is an editor-only Unity package for installing and managing
 UPM packages as Git submodules under `Packages/`. It provides a focused UI for
 the Git operations while keeping the resulting repository structure completely
 standard and visible to normal Git tooling.
@@ -56,7 +56,7 @@ tools, or manage packages outside `Packages/`.
 | [GitHub CLI](https://cli.github.com/) | Optional, recommended | Authenticated repository discovery |
 
 Git must be available to the Unity Editor process. GitHub CLI is needed only
-for GitHub repository discovery. If a tool is missing, Git Package Manager
+for GitHub repository discovery. If a tool is missing, Git Submodule Manager
 shows an official installation link and a platform-specific command. On
 supported macOS and Windows setups, it can run that native command only after
 showing it and receiving your explicit confirmation. Linux installation stays
@@ -73,15 +73,15 @@ Open **Window > Package Manager**, select **Add package from git URL…**, and
 enter:
 
 ```text
-https://github.com/martincalander/GitPackageManager.git
+https://github.com/martincalander/GitSubmoduleManager.git
 ```
 
-Git Package Manager itself is installed as a UPM Git dependency. Packages
+Git Submodule Manager itself is installed as a UPM Git dependency. Packages
 managed by the tool are still added to the project as Git submodules.
 
 ## Usage
 
-1. Open **Window > Package Management > Git Package Manager**.
+1. Open **Window > Package Management > Git Submodule Manager**.
 2. Complete the one-time setup page. Git is required; GitHub CLI is optional
    but recommended for repository discovery.
 3. If prompted, install Git or GitHub CLI with explicit approval, then choose
@@ -140,7 +140,7 @@ workflow; `gh` is required only for the **GitHub** discovery tab.
   shown in a confirmation dialog before it can run.
 
 See the [architecture and safety model](Documentation~/architecture.md) and
-[security policy](https://github.com/martincalander/GitPackageManager/blob/main/.github/SECURITY.md)
+[security policy](https://github.com/martincalander/GitSubmoduleManager/blob/main/.github/SECURITY.md)
 for implementation and reporting details.
 
 ## Documentation
@@ -149,11 +149,11 @@ for implementation and reporting details.
 - [User guide](Documentation~/user-guide.md)
 - [Troubleshooting](Documentation~/troubleshooting.md)
 - [Architecture and safety model](Documentation~/architecture.md)
-- [Contributing](https://github.com/martincalander/GitPackageManager/blob/main/.github/CONTRIBUTING.md)
-- [Support](https://github.com/martincalander/GitPackageManager/blob/main/.github/SUPPORT.md)
-- [Governance](https://github.com/martincalander/GitPackageManager/blob/main/.github/GOVERNANCE.md)
-- [Maintainers](https://github.com/martincalander/GitPackageManager/blob/main/.github/MAINTAINERS.md)
-- [Releasing](https://github.com/martincalander/GitPackageManager/blob/main/.github/RELEASING.md)
+- [Contributing](https://github.com/martincalander/GitSubmoduleManager/blob/main/.github/CONTRIBUTING.md)
+- [Support](https://github.com/martincalander/GitSubmoduleManager/blob/main/.github/SUPPORT.md)
+- [Governance](https://github.com/martincalander/GitSubmoduleManager/blob/main/.github/GOVERNANCE.md)
+- [Maintainers](https://github.com/martincalander/GitSubmoduleManager/blob/main/.github/MAINTAINERS.md)
+- [Releasing](https://github.com/martincalander/GitSubmoduleManager/blob/main/.github/RELEASING.md)
 - [Roadmap](Documentation~/roadmap.md)
 - [Changelog](CHANGELOG.md)
 
@@ -161,9 +161,9 @@ for implementation and reporting details.
 
 Bug reports, documentation corrections, focused improvements, and
 cross-platform test results are welcome. Read
-[CONTRIBUTING.md](https://github.com/martincalander/GitPackageManager/blob/main/.github/CONTRIBUTING.md)
+[CONTRIBUTING.md](https://github.com/martincalander/GitSubmoduleManager/blob/main/.github/CONTRIBUTING.md)
 before opening a pull request and follow the
-[Code of Conduct](https://github.com/martincalander/GitPackageManager/blob/main/.github/CODE_OF_CONDUCT.md).
+[Code of Conduct](https://github.com/martincalander/GitSubmoduleManager/blob/main/.github/CODE_OF_CONDUCT.md).
 
 ## License
 
@@ -179,7 +179,7 @@ Freedom Conservancy, Inc., corporate home of the Git Project. The Git logo was
 created by Jason Long and is licensed under
 [CC BY 3.0](https://creativecommons.org/licenses/by/3.0/).
 
-Git Package Manager is not sponsored by or affiliated with Unity Technologies
+Git Submodule Manager is not sponsored by or affiliated with Unity Technologies
 or its affiliates. Unity and the Unity logo are trademarks or registered
 trademarks of Unity Technologies or its affiliates in the U.S. and elsewhere.
 GitHub is a trademark of GitHub, Inc. This project is not endorsed by any of

@@ -255,7 +255,7 @@ jobs:
             dist/SHA256SUMS
             --verify-tag
             --generate-notes
-            --title "Git Package Manager $RELEASE_TAG"
+            --title "Git Submodule Manager $RELEASE_TAG"
           )
           if [[ "$IS_PRERELEASE" == "true" ]]; then
             args+=(--prerelease)

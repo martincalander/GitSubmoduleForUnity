@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""License-free sanity checks for the Git Package Manager UPM repository."""
+"""License-free sanity checks for the Git Submodule Manager UPM repository."""
 
 from __future__ import annotations
 
@@ -95,8 +95,10 @@ def check_package_json() -> None:
     if missing:
         fail(f"package.json missing fields: {', '.join(missing)}")
 
-    if package.get("name") != "com.martincalander.gitpackagemanager":
-        fail("package.json name must be com.martincalander.gitpackagemanager")
+    if package.get("name") != "com.martincalander.gitsubmodulemanager":
+        fail("package.json name must be com.martincalander.gitsubmodulemanager")
+    if package.get("displayName") != "Git Submodule Manager":
+        fail("package.json displayName must be Git Submodule Manager")
     if not parse_semver(str(package.get("version", ""))):
         fail("package.json version is not valid SemVer 2.0.0")
     if package.get("license") != "MIT":
@@ -135,11 +137,11 @@ def check_required_files() -> None:
         "Documentation~/troubleshooting.md",
         "Documentation~/architecture.md",
         "Documentation~/roadmap.md",
-        "GPMIcon.png",
-        "Editor/MartinCalander.GitPackageManager.Editor.asmdef",
+        "GitSubmoduleManagerIcon.png",
+        "Editor/MartinCalander.GitSubmoduleManager.Editor.asmdef",
         "Editor/GitEditorWindowIcon.png",
         "Editor/GitEditorWindowIconLight.png",
-        "Tests/Editor/MartinCalander.GitPackageManager.Editor.Tests.asmdef",
+        "Tests/Editor/MartinCalander.GitSubmoduleManager.Editor.Tests.asmdef",
         ".github/workflows/ci.yml",
         ".github/workflows/release.yml",
         ".github/ISSUE_TEMPLATE/support_request.yml",
@@ -207,6 +209,20 @@ def check_editor_only_layout() -> None:
             fail(f"C# source exists outside Editor/ or Tests/: {relative}")
 
 
+def check_assembly_identities() -> None:
+    editor_name = "MartinCalander.GitSubmoduleManager.Editor"
+    tests_name = f"{editor_name}.Tests"
+    editor = read_json(ROOT / "Editor" / f"{editor_name}.asmdef")
+    tests = read_json(ROOT / "Tests" / "Editor" / f"{tests_name}.asmdef")
+
+    if editor.get("name") != editor_name or editor.get("rootNamespace") != editor_name:
+        fail("Editor assembly name and rootNamespace must use the GitSubmoduleManager identity")
+    if tests.get("name") != tests_name or tests.get("rootNamespace") != tests_name:
+        fail("Test assembly name and rootNamespace must use the GitSubmoduleManager identity")
+    if editor_name not in (tests.get("references") or []):
+        fail("Test assembly must reference the renamed editor assembly")
+
+
 MARKDOWN_LINK = re.compile(r"!?\[[^\]]*\]\(([^)]+)\)")
 HTML_SOURCE = re.compile(r"\b(?:src|href)=[\"']([^\"']+)[\"']")
 
@@ -264,6 +280,7 @@ def main() -> int:
     check_required_files()
     check_unity_meta_files()
     check_editor_only_layout()
+    check_assembly_identities()
     check_markdown_links()
 
     if ERRORS:

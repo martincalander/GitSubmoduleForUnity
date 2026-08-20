@@ -47,14 +47,14 @@ leaves that choice interactive.
 
 ## First Open
 
-Open **Window > Package Management > Git Package Manager**. A one-time welcome
+Open **Window > Package Management > Git Submodule Manager**. A one-time welcome
 page checks Git, GitHub CLI, and GitHub authentication for the current user. Its
 shown flag is stored per user and project under Unity's ignored
 `UserSettings/` directory. The page can be opened again manually from
 **Welcome & Setup...** in the window menu.
 
-The same per-user file stores the Git Package Manager options shown under
-Unity's **Preferences > Git Package Manager** page. That page also provides an
+The same per-user file stores the Git Submodule Manager options shown under
+Unity's **Preferences > Git Submodule Manager** page. That page also provides an
 **Open Welcome & Setup** button.
 
 ## Add the Package with UPM
@@ -62,13 +62,13 @@ Unity's **Preferences > Git Package Manager** page. That page also provides an
 Use **Window > Package Manager > + > Add package from git URL…**:
 
 ```text
-https://github.com/martincalander/GitPackageManager.git
+https://github.com/martincalander/GitSubmoduleManager.git
 ```
 
 To install a specific released version, append a Git tag:
 
 ```text
-https://github.com/martincalander/GitPackageManager.git#v1.0.0
+https://github.com/martincalander/GitSubmoduleManager.git#<version-tag>
 ```
 
 ## Team Clone Setup
@@ -108,6 +108,43 @@ development.
 
 ## Upgrade or Remove
 
-Manage Git Package Manager itself from Unity's Package Manager. Review
-[CHANGELOG.md](../CHANGELOG.md) before changing versions. If the dependency is
-pinned to a Git tag in `Packages/manifest.json`, change that tag to upgrade.
+Manage Git Submodule Manager itself from Unity's Package Manager. Review
+[CHANGELOG.md](../CHANGELOG.md) before changing versions.
+
+### Migrating from Git Package Manager
+
+The rename changes the UPM package, assembly, namespace, and public window type
+identities. Existing Git URL installations must replace the dependency key in
+`Packages/manifest.json`; changing only the tag is not sufficient:
+
+```json
+{
+  "dependencies": {
+    "com.martincalander.gitsubmodulemanager": "https://github.com/martincalander/GitSubmoduleManager.git#<renamed-release-tag>"
+  }
+}
+```
+
+Remove the old `com.martincalander.gitpackagemanager` key and let Unity
+regenerate `Packages/packages-lock.json`. Replace `<renamed-release-tag>` with a
+published tag that includes the Git Submodule Manager identity; the older
+`v1.0.0` release predates this rename.
+
+For a submodule installation, also coordinate the parent repository's gitlink
+and `.gitmodules` path from
+`Packages/com.martincalander.gitpackagemanager` to
+`Packages/com.martincalander.gitsubmodulemanager`, then run
+`git submodule sync --recursive`. Update downstream assembly definition
+references from `MartinCalander.GitPackageManager.Editor` to
+`MartinCalander.GitSubmoduleManager.Editor`, source namespaces from
+`MartinCalander.GitPackageManager.Editor` to
+`MartinCalander.GitSubmoduleManager.Editor`, and window references from
+`GitPackageManagerWindow` to `GitSubmoduleManagerWindow`.
+
+Serialized editor types carry Unity migration metadata. Per-user preferences
+are copied non-destructively to `UserSettings/GitSubmoduleManagerSettings.asset`,
+and interrupted-operation state under the legacy Library and SessionState paths
+remains recoverable.
+
+After this one-time identity migration, a dependency pinned to a Git tag can be
+upgraded by changing its tag normally.

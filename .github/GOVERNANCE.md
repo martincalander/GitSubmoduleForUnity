@@ -1,6 +1,6 @@
 # Project Governance
 
-Git Package Manager is an open-source project led by Martin Calander. This
+Git Submodule Manager is an open-source project led by Martin Calander. This
 document explains how project decisions are made and how responsibility is
 shared. Participation is governed by the [Code of Conduct](CODE_OF_CONDUCT.md).
 

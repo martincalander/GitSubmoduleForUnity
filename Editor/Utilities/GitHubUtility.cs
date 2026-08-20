@@ -6,7 +6,7 @@ using System.Text.RegularExpressions;
 using System.Threading;
 using UnityEngine;
 
-namespace MartinCalander.GitPackageManager.Editor
+namespace MartinCalander.GitSubmoduleManager.Editor
 {
     internal static class GitHubUtility
     {
