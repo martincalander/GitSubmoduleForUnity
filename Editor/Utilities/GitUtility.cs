@@ -15,6 +15,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
     {
         public string name;
         public string version;
+        public string displayName;
     }
 
     internal sealed class SubmoduleRemovalAssessment
@@ -318,7 +319,23 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             out string error,
             CancellationToken cancellationToken = default(CancellationToken))
         {
+            return TryReadValidPackageManifest(
+                packageJsonPath,
+                out packageName,
+                out _,
+                out error,
+                cancellationToken);
+        }
+
+        internal static bool TryReadValidPackageManifest(
+            string packageJsonPath,
+            out string packageName,
+            out string displayName,
+            out string error,
+            CancellationToken cancellationToken = default(CancellationToken))
+        {
             packageName = string.Empty;
+            displayName = string.Empty;
             error = string.Empty;
             if (string.IsNullOrWhiteSpace(packageJsonPath))
             {
@@ -374,7 +391,11 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 }
 
                 cancellationToken.ThrowIfCancellationRequested();
-                return TryReadValidPackageManifestFromJson(content.ToString(), out packageName, out error);
+                return TryReadValidPackageManifestFromJson(
+                    content.ToString(),
+                    out packageName,
+                    out displayName,
+                    out error);
             }
             catch (OperationCanceledException)
             {
@@ -418,7 +439,21 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             out string packageName,
             out string error)
         {
+            return TryReadValidPackageManifestFromJson(
+                content,
+                out packageName,
+                out _,
+                out error);
+        }
+
+        internal static bool TryReadValidPackageManifestFromJson(
+            string content,
+            out string packageName,
+            out string displayName,
+            out string error)
+        {
             packageName = string.Empty;
+            displayName = string.Empty;
             error = string.Empty;
 
             if (content == null)
@@ -479,6 +514,9 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             }
 
             packageName = metadata.name;
+            displayName = string.IsNullOrWhiteSpace(metadata.displayName)
+                ? string.Empty
+                : metadata.displayName.Trim();
             return true;
         }
 
@@ -752,10 +790,12 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                     TryReadValidPackageManifest(
                         packageJsonPath,
                         out string packageName,
+                        out string packageDisplayName,
                         out _,
                         cancellationToken))
                 {
                     info.PackageName = packageName;
+                    info.DisplayName = packageDisplayName;
                 }
                 else if (path.Replace("\\", "/").StartsWith("Packages/", StringComparison.Ordinal))
                 {

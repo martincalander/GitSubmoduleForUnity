@@ -372,11 +372,72 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
             var success = GitUtility.TryReadValidPackageManifestFromJson(
                 "  { \"name\": \"com.example.valid-package\", \"version\": \"1.2.3-beta.1+build.001\", \"displayName\": \"Valid Package\" }  ",
                 out var packageName,
+                out var displayName,
                 out var error);
 
             Assert.That(success, Is.True, error);
             Assert.That(packageName, Is.EqualTo("com.example.valid-package"));
+            Assert.That(displayName, Is.EqualTo("Valid Package"));
             Assert.That(error, Is.Empty);
+        }
+
+        [TestCase(" Git Submodule Manager ", "com.example.package", "submodule-key", "Git Submodule Manager")]
+        [TestCase(null, "com.example.package", "submodule-key", "com.example.package")]
+        [TestCase(" \t ", "com.example.package", "submodule-key", "com.example.package")]
+        [TestCase(null, " ", " submodule-key ", "submodule-key")]
+        public void InstalledPackageDisplayName_UsesManifestNameWithStableFallbacks(
+            string manifestDisplayName,
+            string packageName,
+            string submoduleName,
+            string expected)
+        {
+            var package = new GitPackageInfo
+            {
+                DisplayName = manifestDisplayName,
+                PackageName = packageName,
+                Name = submoduleName
+            };
+
+            Assert.That(
+                GitSubmoduleManagerWindow.GetInstalledPackageDisplayName(package),
+                Is.EqualTo(expected));
+        }
+
+        [Test]
+        public void InstalledPackageIdentifier_IsSecondaryOnlyWhenDistinct()
+        {
+            var package = new GitPackageInfo
+            {
+                DisplayName = "Friendly Package",
+                PackageName = "com.example.package",
+                Name = "submodule-key"
+            };
+
+            Assert.That(
+                GitSubmoduleManagerWindow.GetInstalledPackageIdentifier(package),
+                Is.EqualTo("com.example.package"));
+            Assert.That(
+                GitSubmoduleManagerWindow.ShouldShowInstalledPackageIdentifier(package),
+                Is.True);
+
+            package.DisplayName = "com.example.package";
+            Assert.That(
+                GitSubmoduleManagerWindow.ShouldShowInstalledPackageIdentifier(package),
+                Is.False);
+        }
+
+        [Test]
+        public void InstalledPackageSearch_MatchesFriendlyNameAndTechnicalIdentifier()
+        {
+            var package = new GitPackageInfo
+            {
+                DisplayName = "Friendly Package",
+                PackageName = "com.example.technical"
+            };
+
+            Assert.That(GitSubmoduleManagerWindow.MatchesInstalledPackageSearch(package, "friendly"), Is.True);
+            Assert.That(GitSubmoduleManagerWindow.MatchesInstalledPackageSearch(package, "example.technical"), Is.True);
+            Assert.That(GitSubmoduleManagerWindow.MatchesInstalledPackageSearch(package, "unrelated"), Is.False);
         }
 
         [TestCase(0.0, 0)]

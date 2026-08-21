@@ -439,7 +439,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
             InitializeRepository(sourceRoot);
             File.WriteAllText(
                 Path.Combine(sourceRoot, "package.json"),
-                "{\"name\":\"com.example.integration-package\",\"version\":\"1.0.0\"}\n");
+                "{\"name\":\"com.example.integration-package\",\"version\":\"1.0.0\",\"displayName\":\"Integration Package\"}\n");
             ExpectGit(sourceRoot, "add -- package.json");
             ExpectGit(sourceRoot, "commit -m \"Initial package\"");
 
@@ -478,6 +478,18 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                 out string error);
 
             Assert.That(verified, Is.True, error);
+        }
+
+        [Test]
+        public void GetSubmodules_ReadsFriendlyDisplayNameFromManifest()
+        {
+            bool loaded = GitUtility.TryGetSubmodules(out List<GitPackageInfo> packages, out string error);
+            GitPackageInfo package = packages.Find(candidate => candidate.Path == PackagePath);
+
+            Assert.That(loaded, Is.True, error);
+            Assert.That(package, Is.Not.Null);
+            Assert.That(package.PackageName, Is.EqualTo("com.example.integration-package"));
+            Assert.That(package.DisplayName, Is.EqualTo("Integration Package"));
         }
 
         [Test]

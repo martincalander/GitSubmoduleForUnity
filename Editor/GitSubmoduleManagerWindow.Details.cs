@@ -79,10 +79,13 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             }
 
             EditorGUILayout.Space(8);
-            string displayName = package.PackageName ?? package.Name;
+            string displayName = GetInstalledPackageDisplayName(package);
+            string packageIdentifier = GetInstalledPackageIdentifier(package);
             const string typeLabel = "Git Submodule";
             string branchLabel = GetInstalledBranchLabel(package.Branch);
             GUILayout.Label(displayName, Styles.TitleLabel);
+            if (ShouldShowInstalledPackageIdentifier(package))
+                GUILayout.Label(packageIdentifier, Styles.SubtitleLabel);
             GUILayout.Label($"{branchLabel} · {typeLabel}", Styles.SubtitleLabel);
             EditorGUILayout.Space(4);
 

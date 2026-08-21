@@ -90,15 +90,13 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             for (int i = 0; i < installedPackages.Count; i++)
             {
                 GitPackageInfo package = installedPackages[i];
-                string displayName = string.IsNullOrWhiteSpace(package.PackageName) ? package.Name : package.PackageName;
-                if (!string.IsNullOrWhiteSpace(searchFilter) &&
-                    displayName.IndexOf(searchFilter, StringComparison.OrdinalIgnoreCase) < 0)
+                if (!MatchesInstalledPackageSearch(package, searchFilter))
                     continue;
 
                 visiblePackageIndices.Add(i);
             }
 
-            const float rowHeight = 24f;
+            const float rowHeight = 36f;
             GetVisibleRowRange(visiblePackageIndices.Count, rowHeight, out int firstRow, out int lastRow);
             if (firstRow > 0)
                 GUILayout.Space(firstRow * rowHeight);
@@ -107,12 +105,18 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             {
                 int i = visiblePackageIndices[row];
                 GitPackageInfo package = installedPackages[i];
-                string displayName = string.IsNullOrWhiteSpace(package.PackageName) ? package.Name : package.PackageName;
+                string displayName = GetInstalledPackageDisplayName(package);
+                string packageIdentifier = GetInstalledPackageIdentifier(package);
+                bool showPackageIdentifier = ShouldShowInstalledPackageIdentifier(package);
 
                 bool isSelected = i == selectedInstalledIndex;
                 string badge = package.IsInitialized ? "git" : "!";
                 string versionText = GetInstalledBranchLabel(package.Branch);
-                Rect itemRect = GUILayoutUtility.GetRect(GUIContent.none, EditorStyles.label, GUILayout.ExpandWidth(true), GUILayout.Height(24));
+                Rect itemRect = GUILayoutUtility.GetRect(
+                    GUIContent.none,
+                    EditorStyles.label,
+                    GUILayout.ExpandWidth(true),
+                    GUILayout.Height(rowHeight));
 
                 if (Event.current.type == EventType.Repaint && isSelected)
                     EditorGUI.DrawRect(itemRect, Styles.SelectionColor);
@@ -120,23 +124,37 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 GUIStyle secondaryStyle = isSelected
                     ? Styles.SelectedSubtitleLabel
                     : Styles.SubtitleLabel;
-                Rect badgeRect = new Rect(itemRect.x + 4, itemRect.y + 4, 28, itemRect.height - 8);
+                float primaryRowY = itemRect.y + (showPackageIdentifier ? 2f : 10f);
+                Rect badgeRect = new Rect(itemRect.x + 4, primaryRowY, 28, 16);
                 GUI.Label(badgeRect, badge, secondaryStyle);
 
                 const float branchLabelWidth = 112f;
                 Rect nameRect = new Rect(
                     itemRect.x + 34,
-                    itemRect.y + 4,
+                    primaryRowY,
                     itemRect.width - branchLabelWidth - 46,
-                    itemRect.height - 8);
+                    16);
                 GUIStyle nameStyle = isSelected ? Styles.SelectedListItemLabel : Styles.ListItemLabel;
-                GUI.Label(nameRect, displayName, nameStyle);
+                GUI.Label(nameRect, new GUIContent(displayName, displayName), nameStyle);
+
+                if (showPackageIdentifier)
+                {
+                    Rect identifierRect = new Rect(
+                        itemRect.x + 34,
+                        itemRect.y + 18,
+                        itemRect.width - 42,
+                        14);
+                    GUI.Label(
+                        identifierRect,
+                        new GUIContent(packageIdentifier, packageIdentifier),
+                        secondaryStyle);
+                }
 
                 Rect versionRect = new Rect(
                     itemRect.xMax - branchLabelWidth - 8,
-                    itemRect.y + 4,
+                    primaryRowY,
                     branchLabelWidth,
-                    itemRect.height - 8);
+                    16);
                 GUI.Label(versionRect, new GUIContent(versionText, versionText), secondaryStyle);
 
                 if (Event.current.type == EventType.MouseDown && itemRect.Contains(Event.current.mousePosition))
@@ -151,6 +169,51 @@ namespace MartinCalander.GitSubmoduleManager.Editor
 
             if (lastRow < visiblePackageIndices.Count)
                 GUILayout.Space((visiblePackageIndices.Count - lastRow) * rowHeight);
+        }
+
+        internal static string GetInstalledPackageDisplayName(GitPackageInfo package)
+        {
+            if (package == null)
+                return string.Empty;
+
+            if (!string.IsNullOrWhiteSpace(package.DisplayName))
+                return package.DisplayName.Trim();
+            if (!string.IsNullOrWhiteSpace(package.PackageName))
+                return package.PackageName.Trim();
+            return package.Name?.Trim() ?? string.Empty;
+        }
+
+        internal static string GetInstalledPackageIdentifier(GitPackageInfo package)
+        {
+            if (package == null)
+                return string.Empty;
+
+            return !string.IsNullOrWhiteSpace(package.PackageName)
+                ? package.PackageName.Trim()
+                : package.Name?.Trim() ?? string.Empty;
+        }
+
+        internal static bool ShouldShowInstalledPackageIdentifier(GitPackageInfo package)
+        {
+            string identifier = GetInstalledPackageIdentifier(package);
+            return !string.IsNullOrEmpty(identifier) &&
+                   !string.Equals(
+                       GetInstalledPackageDisplayName(package),
+                       identifier,
+                       StringComparison.Ordinal);
+        }
+
+        internal static bool MatchesInstalledPackageSearch(GitPackageInfo package, string filter)
+        {
+            if (string.IsNullOrWhiteSpace(filter))
+                return true;
+            if (package == null)
+                return false;
+
+            return GetInstalledPackageDisplayName(package)
+                       .IndexOf(filter, StringComparison.OrdinalIgnoreCase) >= 0 ||
+                   GetInstalledPackageIdentifier(package)
+                       .IndexOf(filter, StringComparison.OrdinalIgnoreCase) >= 0;
         }
 
         private void DrawDiscoverList()

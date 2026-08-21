@@ -10,5 +10,6 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         public bool IsInitialized;
         public bool HasPackageJson;
         public string PackageName;
+        public string DisplayName;
     }
 }
