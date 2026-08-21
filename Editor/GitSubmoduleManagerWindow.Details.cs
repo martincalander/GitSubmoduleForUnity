@@ -93,6 +93,12 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             if (GitUtility.TryGetRepositoryWebUrl(package.Url, out string repositoryWebUrl) &&
                 GUILayout.Button("Repository", Styles.LinkButton))
                 Application.OpenURL(repositoryWebUrl);
+            if (GUILayout.Button("Show in Project", Styles.LinkButton) &&
+                !TryShowPackageInProject(package.Path))
+            {
+                installedActionStatus = $"Unity could not find {package.Path} in the Project window.";
+                installedActionStatusType = MessageType.Warning;
+            }
             if (GUILayout.Button("Show in Explorer", Styles.LinkButton))
                 EditorUtility.RevealInFinder(Path.Combine(GitUtility.ProjectRoot, package.Path));
             GUILayout.FlexibleSpace();
@@ -162,6 +168,22 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                     PerformBranchChange(package, installedBranchInput.Trim());
             }
             EditorGUILayout.EndHorizontal();
+        }
+
+        internal static bool TryShowPackageInProject(string packagePath)
+        {
+            string normalizedPath = GitUtility.NormalizePath(packagePath);
+            if (string.IsNullOrWhiteSpace(normalizedPath))
+                return false;
+
+            UnityEngine.Object packageAsset = AssetDatabase.LoadAssetAtPath<UnityEngine.Object>(normalizedPath);
+            if (packageAsset == null)
+                return false;
+
+            EditorUtility.FocusProjectWindow();
+            Selection.activeObject = packageAsset;
+            EditorGUIUtility.PingObject(packageAsset);
+            return true;
         }
 
         internal static bool IsCurrentPackage(GitPackageInfo package)
