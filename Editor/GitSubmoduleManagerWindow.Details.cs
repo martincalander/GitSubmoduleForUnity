@@ -325,14 +325,19 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 EditorGUILayout.EndVertical();
 
                 string validationError = ValidatePackageInput(repo.Url, selectedRepoPackageName, selectedRepoBranch);
-                if (!string.IsNullOrWhiteSpace(validationError))
+                bool hasValidationError = !string.IsNullOrWhiteSpace(validationError);
+                if (hasValidationError)
                     EditorGUILayout.HelpBox(validationError, MessageType.Warning);
                 else
                     GUILayout.Label(PackageNameRule, Styles.FooterLabel);
 
                 EditorGUILayout.Space(8);
                 bool isOperationRunning = IsRepositoryOperationBusy;
-                using (new EditorGUI.DisabledScope(!string.IsNullOrWhiteSpace(validationError) || isOperationRunning))
+                using (new EditorGUI.DisabledScope(
+                           !CanStartDiscoveredPackageAdd(
+                               repo.ManifestState,
+                               hasValidationError,
+                               isOperationRunning)))
                 {
                     if (GUILayout.Button("Add Package", GUILayout.Height(28)))
                         TryAddSubmodule(repo.Url, selectedRepoBranch, selectedRepoPackageName);
@@ -341,6 +346,16 @@ namespace MartinCalander.GitSubmoduleManager.Editor
 
             if (!string.IsNullOrWhiteSpace(addStatus))
                 EditorGUILayout.HelpBox(addStatus, addStatusType);
+        }
+
+        internal static bool CanStartDiscoveredPackageAdd(
+            PackageManifestState manifestState,
+            bool hasValidationError,
+            bool repositoryOperationBusy)
+        {
+            return manifestState == PackageManifestState.Valid &&
+                   !hasValidationError &&
+                   !repositoryOperationBusy;
         }
 
         private void ApplyDeclaredPackageName(GitHubRepo repo)

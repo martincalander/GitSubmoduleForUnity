@@ -131,6 +131,38 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
         }
 
         [Test]
+        public void DiscoveredPackageAdd_RequiresAConfirmedValidManifest()
+        {
+            foreach (PackageManifestState state in Enum.GetValues(typeof(PackageManifestState)))
+            {
+                Assert.That(
+                    GitSubmoduleManagerWindow.CanStartDiscoveredPackageAdd(
+                        state,
+                        hasValidationError: false,
+                        repositoryOperationBusy: false),
+                    Is.EqualTo(state == PackageManifestState.Valid),
+                    state.ToString());
+            }
+        }
+
+        [TestCase(false, false, true)]
+        [TestCase(true, false, false)]
+        [TestCase(false, true, false)]
+        [TestCase(true, true, false)]
+        public void DiscoveredPackageAdd_RequiresValidInputAndAnIdleRepositoryWorker(
+            bool hasValidationError,
+            bool repositoryOperationBusy,
+            bool expected)
+        {
+            Assert.That(
+                GitSubmoduleManagerWindow.CanStartDiscoveredPackageAdd(
+                    PackageManifestState.Valid,
+                    hasValidationError,
+                    repositoryOperationBusy),
+                Is.EqualTo(expected));
+        }
+
+        [Test]
         public void PersonalRepositoryPage_OnlyRequestsRepositoriesOwnedByTheUser()
         {
             var runner = new RecordingRunner(_ => Success("[]"));
