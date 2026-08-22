@@ -219,8 +219,20 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                             .GetPackageToolbarRefreshPostfixMethod()),
                     "PackageToolbar hook lacks the postfix owned by " +
                     PackageManagerSubmoduleHarmonyPatch.HarmonyId + ": " +
-                    DescribeMethod(target) + ".");
+                        DescribeMethod(target) + ".");
             }
+
+            Type manageType = PackageManagerSubmoduleHarmonyPatch.FindLoadedType(
+                PackageManagerSubmoduleManageMenu.ManageDropdownTypeName);
+            report.Observe(
+                "Manage dropdown",
+                manageType == null ? "unresolved" : manageType.FullName);
+            report.Require(
+                !IsUnityVersionAtLeast(2023, 2) ||
+                PackageManagerSubmoduleManageMenu.IsSupportedContract(),
+                "The native Manage dropdown or its GenericDropdownMenu storage " +
+                "could not be resolved. Submodule uninstall and conversion " +
+                "actions would not be safely integrated.");
 
             Complete(report);
         }

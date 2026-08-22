@@ -42,6 +42,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
             {
                 ExitCode = 0,
                 StdOut = "completed",
+                CompletionWarning = "package resolve pending",
                 TerminationConfirmed = true
             };
 
@@ -52,6 +53,9 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
             Assert.That(effective, Is.Not.SameAs(original));
             Assert.That(effective.IsSuccess, Is.False);
             Assert.That(effective.TerminationConfirmed, Is.True);
+            Assert.That(
+                effective.CompletionWarning,
+                Is.EqualTo(original.CompletionWarning));
             Assert.That(effective.StdErr, Does.Contain("could not be finalized safely"));
             Assert.That(
                 effective.StdErr.Length,

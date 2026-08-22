@@ -40,6 +40,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         public bool StdOutTruncated;
         public bool StdErrTruncated;
         public bool BlockedByGitHubAuthentication;
+        public string CompletionWarning;
 
         public bool IsSuccess => ExitCode == 0;
     }

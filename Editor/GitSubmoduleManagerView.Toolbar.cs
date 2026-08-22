@@ -367,6 +367,13 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             if (GitOperationService.IsBusy)
                 EditorGUILayout.HelpBox(GitOperationService.ActiveLabel, MessageType.Info);
 
+            if (PackageManagerProjectResolutionService.IsBusy)
+            {
+                EditorGUILayout.HelpBox(
+                    PackageManagerProjectResolutionService.BuildUnavailableMessage(),
+                    MessageType.Info);
+            }
+
             string recoveryWarning = GitOperationService.RecoveryWarning;
             if (!string.IsNullOrWhiteSpace(recoveryWarning))
             {

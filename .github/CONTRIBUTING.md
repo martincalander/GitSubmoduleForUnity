@@ -21,7 +21,7 @@ scope.
 
 ## Development Prerequisites
 
-- Unity 2021.3 or newer;
+- Unity 6000.5.x final release;
 - Git CLI;
 - GitHub CLI for discovery testing;
 - Python 3 for repository sanity checks.
@@ -124,10 +124,10 @@ the `PackageManagerCompatibility` category. After it passes, run the complete
 state-transition coverage intentionally lives outside the compatibility subset.
 
 Maintainers can also dispatch **Sanity Checks** with a reviewed full commit SHA
-and an exact `unity_version` such as `2021.3.45f2`, `2023.2.22f1`, or
-`6000.5.9f1`. Manual dispatch stages the same package revision and runs the full
-EditMode assembly in that Editor; normal protected push runs remain pinned to
-the minimum `2021.3.0f1` baseline.
+and an exact `unity_version` such as `6000.5.0f1` or `6000.5.9f1`. Manual
+dispatch stages the same package revision and runs the full EditMode assembly
+in that Editor; normal protected push runs remain pinned to the minimum
+`6000.5.0f1` baseline.
 
 CI runs license-free structure, Markdown, archive, and portability checks on
 every pull request. Unity credentials are never exposed to pull-request code.

@@ -122,7 +122,7 @@ jobs:
           retention-days: 14
 
   unity:
-    name: Unity 2021.3 compile and EditMode tests
+    name: Unity 6000.5 compile and EditMode tests
     needs: validate
     runs-on: ubuntu-latest
     timeout-minutes: 45
@@ -168,7 +168,7 @@ jobs:
         with:
           packageMode: true
           projectPath: .ci/package
-          unityVersion: 2021.3.0f1
+          unityVersion: 6000.5.0f1
           testMode: EditMode
           artifactsPath: unity-release-test-results
 

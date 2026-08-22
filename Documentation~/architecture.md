@@ -38,8 +38,9 @@ Editor/
 
 ## Package Manager Integration
 
-On Editors that expose Unity's internal `ExtensionPage` contract, the host
-registers a native **GitHub** page and places its row under **Sources**. The page
+On supported Unity 6000.5 final releases, the host registers a native **GitHub**
+page through Unity's internal `ExtensionPage` contract and places its row under
+**Sources**. The page
 combines GitHub package submodules classified by the asynchronous installed
 snapshot with valid packages published by the authenticated discovery
 catalogue. Both participate in Package Manager's own list, search, sorting,
@@ -80,9 +81,9 @@ repository metadata on the exact GitHub extension page. It reports their
 
 The explicit **Window > Package Management > Git Submodule Manager** menu opens
 the host-neutral management workspace for discovery, add, initialize, update,
-retarget, and remove operations. Editors without the extension-page contract
-fall back to that workspace embedded in Package Manager, preserving the full
-discovery and management feature set.
+retarget, and remove operations. A guarded embedded fallback remains for
+contract drift and migration diagnostics, but Editors outside the Unity 6000.5
+final-release line are not currently supported.
 
 ## Process Execution
 
@@ -225,13 +226,14 @@ catalogue aggregation, immutable publication, organization deduplication, and
 the shared add transaction's rollback outcomes.
 
 The `PackageManagerCompatibility` EditMode category inventories the reflected
-Package Manager types and exact method signatures used by each supported
-Editor, then verifies Harmony ownership for every resolved hook. The category
-is intentionally quick to run across Unity versions and reports all drift found
-within a contract group together, including the Unity version and platform.
-Editors before the native extension-page generation verify the embedded
-fallback; Unity 2023.2 and newer additionally require the complete native
-Sources/GitHub page, projection, loading, toolbar, and sidebar contracts.
+Package Manager types and exact method signatures used by supported Unity
+6000.5 patch releases, then verifies Harmony ownership for every resolved hook.
+The category is intentionally quick to run across patch versions and reports
+all drift found within a contract group together, including the Unity version
+and platform. It can also be run on other Editor generations as a migration
+diagnostic, but those results do not constitute a support claim. Supported
+Editors require the complete native Sources/GitHub page, projection, loading,
+toolbar, and sidebar contracts.
 
 Repository CI adds package metadata, documentation-link, Unity-meta, workflow,
 and package-archive sanity checks that do not require a Unity license.

@@ -19,6 +19,9 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         internal string PackagePath = string.Empty;
         internal string Phase = string.Empty;
         internal string StartCommit = string.Empty;
+        internal string PackageName = string.Empty;
+        internal PackageManagerResolutionExpectation PackageResolutionExpectation =
+            PackageManagerResolutionExpectation.None;
     }
 
     [Serializable]
@@ -91,6 +94,9 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         private static bool reserved;
         private static bool finalizing;
         private static bool journalOwnedByReservation;
+        private static string packageResolutionPackageName = string.Empty;
+        private static PackageManagerResolutionExpectation packageResolutionExpectation =
+            PackageManagerResolutionExpectation.None;
         private static long repositoryGeneration;
 
         internal static long RepositoryGeneration => Interlocked.Read(ref repositoryGeneration);
@@ -641,6 +647,19 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             GitOperationMetadata metadata,
             out string error)
         {
+            if (PackageManagerProjectResolutionService.IsBusy)
+            {
+                error = PackageManagerProjectResolutionService.BuildUnavailableMessage();
+                return false;
+            }
+
+            if (PackageManagerReadOnlyGitInstallService.IsBusy)
+            {
+                error =
+                    "Wait for the current Unity Package Manager operation to finish.";
+                return false;
+            }
+
             if (ShouldBlockMutationForReaders(
                     GitSubmoduleManagerView.AreBackgroundLoadsDraining,
                     PackageManagerSubmoduleSnapshot.IsReaderActive,
@@ -677,6 +696,11 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 outcomeResolver = resolveOutcome;
                 completionNotification = notifyComplete;
                 activeJournal = CreateJournal(activeLabel, metadata);
+                packageResolutionPackageName = metadata?.PackageName?.Trim() ??
+                                               string.Empty;
+                packageResolutionExpectation =
+                    metadata?.PackageResolutionExpectation ??
+                    PackageManagerResolutionExpectation.None;
                 recoveryOwnsAutoRefresh = false;
                 recoveryRequiresEditorRestart = false;
                 journalOwnedByReservation = false;
@@ -835,7 +859,11 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             // Repository safety and journal ownership are finalized before any
             // EditorWindow callback runs. A destroyed window, domain-specific
             // GUI state, or notification exception cannot change this decision.
-            GitOperationCompletionOutcome effectiveOutcome = FinalizeReservation(resolvedOutcome);
+            GitOperationCompletionOutcome effectiveOutcome = FinalizeReservation(
+                resolvedOutcome,
+                out string completionWarning);
+            if (result != null && !string.IsNullOrWhiteSpace(completionWarning))
+                result.CompletionWarning = completionWarning;
             NotifyCompletion(result, effectiveOutcome, notification);
         }
 
@@ -959,18 +987,31 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 Cancelled = result?.Cancelled ?? false,
                 TerminationConfirmed = result?.TerminationConfirmed ?? false,
                 StdOutTruncated = result?.StdOutTruncated ?? false,
-                StdErrTruncated = result?.StdErrTruncated ?? false
+                StdErrTruncated = result?.StdErrTruncated ?? false,
+                CompletionWarning = result?.CompletionWarning ?? string.Empty
             };
         }
 
         private static GitOperationCompletionOutcome FinalizeReservation(
             GitOperationCompletionOutcome outcome)
         {
+            return FinalizeReservation(outcome, out _);
+        }
+
+        private static GitOperationCompletionOutcome FinalizeReservation(
+            GitOperationCompletionOutcome outcome,
+            out string completionWarning)
+        {
+            completionWarning = string.Empty;
             bool stateIsSafe =
                 outcome == GitOperationCompletionOutcome.Succeeded ||
                 outcome == GitOperationCompletionOutcome.FailedButRolledBack;
             bool shouldRefreshAssets;
             bool journalDeleted = false;
+            bool packageResolutionPrepared = false;
+            string packageResolutionOperationId;
+            string packageNameToResolve;
+            PackageManagerResolutionExpectation resolutionExpectation;
             CancellationTokenSource cancellationSourceToDispose;
 
             lock (Gate)
@@ -980,6 +1021,10 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 finalizing = true;
                 shouldRefreshAssets = controlsAutoRefresh && stateIsSafe;
                 cancellationSourceToDispose = taskCancellationSource;
+                packageResolutionOperationId = activeJournal?.operationId ??
+                                               string.Empty;
+                packageNameToResolve = packageResolutionPackageName;
+                resolutionExpectation = packageResolutionExpectation;
             }
 
             try
@@ -1091,6 +1136,41 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                     Debug.LogWarning($"[Git Submodule Manager] Failed to dispose task cancellation state: {ex.Message}");
                 }
 
+                if (stateIsSafe &&
+                    outcome == GitOperationCompletionOutcome.Succeeded &&
+                    resolutionExpectation !=
+                    PackageManagerResolutionExpectation.None)
+                {
+                    try
+                    {
+                        packageResolutionPrepared =
+                            PackageManagerProjectResolutionService.TryPrepare(
+                                packageResolutionOperationId,
+                                packageNameToResolve,
+                                resolutionExpectation,
+                                out string resolutionError);
+                        if (!packageResolutionPrepared)
+                        {
+                            completionWarning =
+                                "The Git submodule was changed successfully, but " +
+                                "Unity package resolution could not be prepared: " +
+                                resolutionError;
+                            Debug.LogWarning(
+                                "[Git Submodule Manager] " + completionWarning);
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        completionWarning =
+                            "The Git submodule was changed successfully, but " +
+                            "Unity package resolution could not be prepared: " +
+                            GitHubUtility.SanitizeUiDiagnostic(
+                                GitUtility.RedactCredentials(ex.Message));
+                        Debug.LogWarning(
+                            "[Git Submodule Manager] " + completionWarning);
+                    }
+                }
+
                 try
                 {
                     if (reloadLocked)
@@ -1129,6 +1209,22 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 }
                 finally
                 {
+                    if (!stateIsSafe && packageResolutionPrepared)
+                    {
+                        try
+                        {
+                            PackageManagerProjectResolutionService.CancelPrepared(
+                                packageResolutionOperationId);
+                        }
+                        catch (Exception ex)
+                        {
+                            Debug.LogWarning(
+                                "[Git Submodule Manager] Failed to cancel a " +
+                                "prepared package resolve after reload unlock " +
+                                "failed: " + ex.Message);
+                        }
+                    }
+
                     reloadLocked = false;
                     ClearOwnership();
                 }
@@ -1151,6 +1247,9 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 activeJournal = null;
                 activeLabel = string.Empty;
                 journalOwnedByReservation = false;
+                packageResolutionPackageName = string.Empty;
+                packageResolutionExpectation =
+                    PackageManagerResolutionExpectation.None;
                 controlsAutoRefresh = false;
                 reserved = false;
                 finalizing = false;

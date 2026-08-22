@@ -369,15 +369,42 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
         }
 
         [Test]
-        public void BranchChoices_PutDefaultFirstAndSortDistinctValidBranches()
+        public void BranchChoices_PreferMainAndSortDistinctValidBranches()
         {
             List<string> choices = GitSubmoduleInstallPopup.BuildBranchChoices(
-                "main",
+                "agents/verdaccio",
                 new[] { "z-release", "main", "Develop", "develop", "", "bad..branch" });
 
             Assert.That(
                 choices,
-                Is.EqualTo(new[] { "main", "Develop", "develop", "z-release" }));
+                Is.EqualTo(new[]
+                {
+                    "main",
+                    "agents/verdaccio",
+                    "Develop",
+                    "develop",
+                    "z-release"
+                }));
+        }
+
+        [Test]
+        public void PreferredAutomaticBranch_FallsBackWhenMainDoesNotExist()
+        {
+            Assert.That(
+                GitSubmoduleInstallPopup.GetPreferredAutomaticBranch(
+                    "trunk",
+                    new[] { "release", "trunk" }),
+                Is.EqualTo("trunk"));
+            Assert.That(
+                GitSubmoduleInstallPopup.GetPreferredAutomaticBranch(
+                    string.Empty,
+                    new[] { "release", "trunk" }),
+                Is.EqualTo("release"));
+            Assert.That(
+                GitSubmoduleInstallPopup.GetPreferredAutomaticBranch(
+                    "agents/verdaccio",
+                    new[] { "agents/verdaccio", "main" }),
+                Is.EqualTo("main"));
         }
 
         [TestCase("com.example.package", "Packages/com.example.package")]

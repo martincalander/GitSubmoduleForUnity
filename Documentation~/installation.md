@@ -4,7 +4,9 @@
 
 ### Unity
 
-Unity 2021.3 or newer is required. All package assemblies are editor-only.
+Unity 6000.5.x final releases (`6000.5.*f1`) are supported. The package manifest
+declares `6000.5.0f1` as its minimum Editor version. All package assemblies are
+editor-only.
 
 ### Git CLI
 
@@ -47,7 +49,7 @@ leaves that choice interactive.
 
 ## First Open
 
-On Unity versions with extension-page support, open **Window > Package Manager**
+On Unity 6000.5.x, open **Window > Package Manager**
 and select **GitHub** under **Sources**. The native package list incrementally
 adds valid UPM packages discovered from every repository page owned by the
 authenticated user and their visible organizations, alongside installed GitHub
@@ -62,8 +64,9 @@ installation and installed-package operations.
 
 Open **Window > Package Management > Git Submodule Manager** for the full
 management, discovery, add, initialize, update, retarget, and remove workspace.
-On older supported Unity versions, that menu opens the workspace embedded in
-Package Manager, including its authenticated discovery workflow.
+If a Unity 6000.5 patch changes an internal native-page contract, that menu uses
+the guarded workspace embedded in Package Manager, including its authenticated
+discovery workflow.
 
 The first management-workspace open shows a one-time welcome page that checks
 Git, GitHub CLI, and GitHub authentication for the current user. Its shown flag
@@ -107,6 +110,12 @@ Uninitialized packages are shown explicitly and can be initialized one at a
 time.
 
 ## Compatibility
+
+The supported Editor line is Unity `6000.5.*f1`. Unity package manifests express
+minimum versions rather than wildcard or maximum ranges, so `package.json` uses
+`unity: 6000.5` with `unityRelease: 0f1` to declare the minimum
+`6000.5.0f1`; this support statement limits the currently validated line to
+Unity 6000.5 final releases.
 
 | Platform | CLI discovery locations |
 | --- | --- |

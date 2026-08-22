@@ -42,6 +42,12 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         private static readonly Dictionary<string, string> ActiveInstallMessages =
             new(StringComparer.Ordinal);
 
+        static PackageManagerGitHubNativeActions()
+        {
+            PackageManagerReadOnlyGitInstallService.Completed +=
+                OnReadOnlyInstallServiceCompleted;
+        }
+
         internal static int InstalledRootCount => EntriesByRoot.Count;
 
         internal static bool InstallForRoot(object packageManagerRoot)
@@ -80,6 +86,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                     {
                         current.Details.EnsurePrimaryControlsMounted();
                         current.RemoveDetails.EnsureControlsMounted();
+                        current.ConversionDetails.EnsureControlsMounted();
                         RefreshForToolbar(toolbar, GetFieldValue(toolbar, "m_Package"));
                         return true;
                     }
@@ -99,18 +106,23 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 if (!PackageManagerGitHubDetails.TryCreate(
                         primaryActions,
                         detailsLinks,
-                        (repository, branch) =>
+                        (repository, branch, installMode) =>
                             OnInstallRequested(
                                 toolbar,
                                 details,
                                 repository,
-                                branch),
+                                branch,
+                                installMode),
                         Application.OpenURL,
                         true,
                         out details))
                 {
                     return false;
                 }
+                details.InstallSelectionChanged += () =>
+                    RefreshForToolbar(
+                        toolbar,
+                        GetFieldValue(toolbar, "m_Package"));
 
                 PackageManagerSubmoduleRemoveDetails removeDetails = null;
                 if (!PackageManagerSubmoduleRemoveDetails.TryCreate(
@@ -126,6 +138,21 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                     return false;
                 }
 
+                PackageManagerPackageConversionDetails conversionDetails = null;
+                if (!PackageManagerPackageConversionDetails.TryCreate(
+                        primaryActions,
+                        detailsLinks,
+                        target => OnConversionRequested(
+                            toolbar,
+                            conversionDetails,
+                            target),
+                        out conversionDetails))
+                {
+                    removeDetails.Dispose();
+                    details.Dispose();
+                    return false;
+                }
+
                 EventCallback<DetachFromPanelEvent> detached = _ =>
                     ReleaseForRoot(root);
                 var entry = new NativeActionEntry(
@@ -135,10 +162,16 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                     detailsLinks,
                     details,
                     removeDetails,
+                    conversionDetails,
                     detached);
                 EntriesByRoot[root] = entry;
                 EntriesByToolbar[toolbar] = entry;
                 root.RegisterCallback(detached);
+                if (PackageManagerReadOnlyGitInstallService.TryConsumeLastCompletion(
+                        out ReadOnlyGitPackageInstallCompletion recoveredCompletion))
+                {
+                    OnReadOnlyInstallServiceCompleted(recoveredCompletion);
+                }
                 RefreshForToolbar(toolbar, GetFieldValue(toolbar, "m_Package"));
                 return true;
             }
@@ -179,6 +212,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
 
             entry.Details.Dispose();
             entry.RemoveDetails.Dispose();
+            entry.ConversionDetails.Dispose();
         }
 
         internal static void RefreshForToolbar(object toolbar, object package)
@@ -221,6 +255,10 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                     PackageManagerSubmodulePresentation.TryGetPresentation(
                         primaryVersion,
                         out PackageManagerSubmoduleInfo submoduleInfo);
+                bool isInstalledReadOnlyGit =
+                    PackageManagerReadOnlyGitPackage.TryGetInfo(
+                        package,
+                        out PackageManagerReadOnlyGitInfo readOnlyInfo);
 
                 if (isInstalledSubmodule)
                 {
@@ -233,7 +271,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                         string.IsNullOrWhiteSpace(removeValidationError) &&
                         GitSubmoduleRemoveService.CanStart;
                     string removeTooltip = removeEnabled
-                        ? "Remove this installed package through Git so its " +
+                        ? "Uninstall this package through Git so its " +
                           "submodule registration and worktree stay consistent."
                         : string.IsNullOrWhiteSpace(removeValidationError)
                             ? GitSubmoduleRemoveService.BuildUnavailableMessage()
@@ -241,16 +279,102 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                     entry.RemoveDetails.SetRemoveState(
                         removeEnabled,
                         removeTooltip);
+                    PackageManagerPackageConversionTarget conversionTarget =
+                        BuildConversionTarget(submoduleInfo);
+                    entry.ConversionDetails.Refresh(conversionTarget);
+                    string conversionError =
+                        GitPackageConversionService.ValidateToReadOnly(
+                            submoduleInfo);
+                    bool conversionEnabled =
+                        string.IsNullOrWhiteSpace(conversionError) &&
+                        GitPackageConversionService.CanStart;
+                    entry.ConversionDetails.SetActionState(
+                        conversionTarget,
+                        conversionEnabled,
+                        conversionEnabled
+                            ? "Convert this editable submodule to a normal " +
+                              "read-only UPM Git dependency pinned to its current commit."
+                            : BuildConversionDisabledTooltip(conversionError));
+                    PackageManagerSubmoduleManageMenu.Apply(
+                        entry.Toolbar,
+                        true,
+                        conversionEnabled,
+                        conversionEnabled
+                            ? "Convert this editable submodule to a normal " +
+                              "read-only UPM Git dependency pinned to its current commit."
+                            : BuildConversionDisabledTooltip(conversionError),
+                        () => BeginConversionAssessment(
+                            entry.Toolbar,
+                            entry.ConversionDetails,
+                            conversionTarget,
+                            submoduleInfo),
+                        removeEnabled,
+                        removeTooltip,
+                        () => BeginRemoveAssessment(
+                            entry.Toolbar,
+                            entry.RemoveDetails,
+                            submoduleInfo));
                     if (entry.RemoveDetails.IsRemoving && GitOperationService.IsBusy)
                     {
                         entry.RemoveDetails.ShowRemoving(
                             "Removing the Git submodule and refreshing Unity...");
                     }
+                    if (entry.ConversionDetails.IsConverting &&
+                        GitOperationService.IsBusy)
+                    {
+                        entry.ConversionDetails.ShowProgress(
+                            conversionTarget,
+                            "Converting the submodule to a read-only Git package...");
+                    }
                     return;
                 }
 
+                PackageManagerSubmoduleManageMenu.Apply(
+                    entry.Toolbar,
+                    false,
+                    false,
+                    string.Empty,
+                    null,
+                    false,
+                    string.Empty,
+                    null);
+
                 entry.RemoveDetails.Refresh(null);
                 entry.RemoveDetails.SetRemoveState(false, string.Empty);
+
+                if (isInstalledReadOnlyGit)
+                {
+                    entry.Details.Refresh(null);
+                    entry.Details.SetInstallState(false, false, string.Empty);
+                    PackageManagerPackageConversionTarget conversionTarget =
+                        BuildConversionTarget(readOnlyInfo);
+                    entry.ConversionDetails.Refresh(conversionTarget);
+                    string conversionError =
+                        GitPackageConversionService.ValidateToSubmodule(
+                            readOnlyInfo);
+                    bool conversionEnabled =
+                        string.IsNullOrWhiteSpace(conversionError) &&
+                        GitPackageConversionService.CanStart;
+                    entry.ConversionDetails.SetActionState(
+                        conversionTarget,
+                        conversionEnabled,
+                        conversionEnabled
+                            ? "Convert this normal read-only UPM Git dependency " +
+                              "to an editable submodule at " +
+                              conversionTarget.PackagePath + "."
+                            : BuildConversionDisabledTooltip(conversionError));
+                    if (entry.ConversionDetails.IsConverting &&
+                        GitOperationService.IsBusy)
+                    {
+                        entry.ConversionDetails.ShowProgress(
+                            conversionTarget,
+                            "Converting the read-only Git package to a submodule...");
+                    }
+                    return;
+                }
+
+                entry.ConversionDetails.Refresh(null);
+                entry.ConversionDetails.SetActionState(false, string.Empty);
 
                 if (!isProjectedRepository)
                 {
@@ -260,9 +384,22 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 }
 
                 entry.Details.Refresh(repository);
+                if (PackageManagerReadOnlyGitInstallService.IsBusy &&
+                    string.Equals(
+                        PackageManagerReadOnlyGitInstallService.ActivePackageName,
+                        repository.PackageName,
+                        StringComparison.Ordinal) &&
+                    GitUtility.AreRepositoryUrlsEquivalent(
+                        PackageManagerReadOnlyGitInstallService.ActiveRepositoryUrl,
+                        repository.Url))
+                {
+                    entry.Details.RestoreInstallMode(
+                        PackageManagerGitInstallMode.ReadOnlyPackage);
+                }
+                PackageManagerGitInstallMode selectedInstallMode =
+                    entry.Details.SelectedInstallMode;
                 string installRepositoryIdentity =
-                    PackageManagerGitHubDetails.GetInstallRepositoryIdentity(
-                        repository);
+                    BuildActiveInstallIdentity(repository, selectedInstallMode);
                 if (ActiveInstallMessages.TryGetValue(
                         installRepositoryIdentity,
                         out string activeInstallMessage))
@@ -275,9 +412,28 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                     return;
                 }
 
+                if (selectedInstallMode ==
+                        PackageManagerGitInstallMode.ReadOnlyPackage &&
+                    PackageManagerReadOnlyGitInstallService.IsBusy &&
+                    string.Equals(
+                        PackageManagerReadOnlyGitInstallService.ActivePackageName,
+                        repository.PackageName,
+                        StringComparison.Ordinal) &&
+                    GitUtility.AreRepositoryUrlsEquivalent(
+                        PackageManagerReadOnlyGitInstallService.ActiveRepositoryUrl,
+                        repository.Url))
+                {
+                    string activeMessage =
+                        "Unity Package Manager is installing this read-only Git package...";
+                    entry.Details.ShowInstalling(activeMessage);
+                    entry.Details.SetInstallState(true, false, activeMessage);
+                    return;
+                }
+
                 if (entry.Details.IsInstalling)
                 {
-                    if (GitOperationService.IsBusy)
+                    if (GitOperationService.IsBusy ||
+                        PackageManagerReadOnlyGitInstallService.IsBusy)
                     {
                         const string activeOperationMessage =
                             "A repository operation is still running. " +
@@ -296,15 +452,26 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 }
 
                 string selectedBranch = entry.Details.SelectedBranch;
-                string validationError = GitSubmoduleAddService.ValidateInput(
-                    repository.Url,
-                    repository.PackageName,
-                    selectedBranch);
-                bool enabled =
-                    string.IsNullOrWhiteSpace(validationError) &&
-                    GitSubmoduleAddService.CanStart;
+                string validationError = selectedInstallMode ==
+                                         PackageManagerGitInstallMode.ReadOnlyPackage
+                    ? PackageManagerReadOnlyGitInstallService.ValidateInput(
+                        repository.Url,
+                        selectedBranch,
+                        repository.PackageName)
+                    : GitSubmoduleAddService.ValidateInput(
+                        repository.Url,
+                        repository.PackageName,
+                        selectedBranch);
+                bool enabled = string.IsNullOrWhiteSpace(validationError) &&
+                               (selectedInstallMode ==
+                                PackageManagerGitInstallMode.ReadOnlyPackage
+                                   ? !PackageManagerReadOnlyGitInstallService.IsBusy
+                                   : GitSubmoduleAddService.CanStart);
                 string tooltip = enabled
-                    ? BuildEnabledTooltip(repository, selectedBranch)
+                    ? BuildEnabledTooltip(
+                        repository,
+                        selectedBranch,
+                        selectedInstallMode)
                     : BuildDisabledTooltip(validationError);
                 entry.Details.SetInstallState(true, enabled, tooltip);
             }
@@ -314,6 +481,8 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 entry.Details.SetInstallState(false, false, string.Empty);
                 entry.RemoveDetails.Refresh(null);
                 entry.RemoveDetails.SetRemoveState(false, string.Empty);
+                entry.ConversionDetails.Refresh(null);
+                entry.ConversionDetails.SetActionState(false, string.Empty);
             }
         }
 
@@ -332,7 +501,8 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                     out PackageManagerSubmoduleInfo info))
             {
                 bool matchedEntry = false;
-                bool confirmationAvailable = false;
+                VisualElement assessmentToolbar = null;
+                PackageManagerSubmoduleRemoveDetails assessmentDetails = null;
                 foreach (NativeActionEntry entry in EntriesByToolbar.Values)
                 {
                     if (entry?.Toolbar == null || entry.RemoveDetails == null)
@@ -358,7 +528,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                     entry.RemoveDetails.SetRemoveState(
                         enabled,
                         enabled
-                            ? "Remove this installed package through Git."
+                            ? "Uninstall this installed package through Git."
                             : disabledMessage);
                     if (!enabled)
                     {
@@ -366,19 +536,20 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                         continue;
                     }
 
-                    // PackageAction does not expose the toolbar/window that
-                    // originated the request, and IPackageVersion instances can
-                    // be shared by multiple Package Manager windows. Mirror the
-                    // confirmation to every matching native host so the clicked
-                    // window can never appear inert because dictionary order
-                    // selected another window.
-                    entry.RemoveDetails.ShowConfirmation();
-                    confirmationAvailable = true;
+                    assessmentToolbar ??= entry.Toolbar;
+                    assessmentDetails ??= entry.RemoveDetails;
                 }
 
                 if (matchedEntry)
                 {
-                    actionResult = confirmationAvailable;
+                    // IPackageVersion instances can be shared by Package Manager
+                    // windows. Start one read-only assessment, then mirror its
+                    // exact confirmation state to every matching details host.
+                    actionResult = assessmentToolbar != null &&
+                                   BeginRemoveAssessment(
+                                       assessmentToolbar,
+                                       assessmentDetails,
+                                       info);
                     return true;
                 }
 
@@ -469,7 +640,8 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                            primaryActionsField.FieldType) &&
                        detailsLinksProperty != null &&
                        detailsLinksProperty.GetIndexParameters().Length == 0 &&
-                       detailsLinksProperty.PropertyType == linksType;
+                       detailsLinksProperty.PropertyType == linksType &&
+                       PackageManagerSubmoduleManageMenu.IsSupportedContract();
             }
             catch
             {
@@ -591,6 +763,104 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             return null;
         }
 
+        private static bool BeginRemoveAssessment(
+            VisualElement toolbar,
+            PackageManagerSubmoduleRemoveDetails preferredDetails,
+            PackageManagerSubmoduleInfo requestedInfo)
+        {
+            object livePackage = toolbar == null
+                ? null
+                : GetFieldValue(toolbar, "m_Package");
+            object liveVersion =
+                PackageManagerSubmoduleNativePage.GetPrimaryVersion(livePackage);
+            if (toolbar == null ||
+                requestedInfo == null ||
+                !PackageManagerSubmodulePresentation.TryGetPresentation(
+                    liveVersion,
+                    out PackageManagerSubmoduleInfo liveInfo) ||
+                !SameSubmodule(liveInfo, requestedInfo) ||
+                !EntriesByToolbar.TryGetValue(
+                    toolbar,
+                    out NativeActionEntry entry) ||
+                !SameSubmodule(entry.RemoveDetails.CurrentInfo, requestedInfo))
+            {
+                ReportRemoveError(
+                    preferredDetails,
+                    "The selected package changed before it could be inspected. " +
+                    "Select the installed submodule and retry.");
+                return false;
+            }
+
+            string validationError =
+                GitSubmoduleRemoveService.ValidateInput(requestedInfo);
+            if (!string.IsNullOrWhiteSpace(validationError) ||
+                !GitSubmoduleRemoveService.CanStart)
+            {
+                ReportRemoveErrorForSubmodule(
+                    preferredDetails,
+                    requestedInfo,
+                    string.IsNullOrWhiteSpace(validationError)
+                        ? GitSubmoduleRemoveService.BuildUnavailableMessage()
+                        : validationError);
+                return false;
+            }
+
+            ApplyRemoveStateForSubmodule(
+                preferredDetails,
+                requestedInfo,
+                details => details.ShowInspecting(
+                    $"Inspecting {requestedInfo.PackageName} for local work..."));
+            if (GitSubmoduleRemoveService.TryStartAssessment(
+                    requestedInfo,
+                    completion => OnRemoveAssessmentCompleted(
+                        preferredDetails,
+                        requestedInfo,
+                        completion),
+                    out string startError))
+            {
+                return true;
+            }
+
+            ReportRemoveErrorForSubmodule(
+                preferredDetails,
+                requestedInfo,
+                string.IsNullOrWhiteSpace(startError)
+                    ? "The Git submodule could not be inspected safely."
+                    : startError);
+            RefreshAllEntries();
+            return false;
+        }
+
+        private static void OnRemoveAssessmentCompleted(
+            PackageManagerSubmoduleRemoveDetails preferredDetails,
+            PackageManagerSubmoduleInfo info,
+            GitSubmoduleRemovalAssessmentCompletion completion)
+        {
+            if (completion == null ||
+                !completion.Success ||
+                completion.Assessment == null)
+            {
+                ReportRemoveErrorForSubmodule(
+                    preferredDetails,
+                    info,
+                    string.IsNullOrWhiteSpace(completion?.Message)
+                        ? "The Git submodule could not be inspected safely."
+                        : completion.Message);
+                RefreshAllEntries();
+                return;
+            }
+
+            SubmoduleRemovalAssessment assessment = completion.Assessment;
+            EditorApplication.delayCall += () =>
+            {
+                RefreshAllEntries();
+                ApplyRemoveStateForSubmodule(
+                    preferredDetails,
+                    info,
+                    details => details.ShowConfirmation(assessment));
+            };
+        }
+
         private static void OnRemoveRequested(
             VisualElement toolbar,
             PackageManagerSubmoduleRemoveDetails sourceDetails,
@@ -632,6 +902,8 @@ namespace MartinCalander.GitSubmoduleManager.Editor
 
                 if (!GitSubmoduleRemoveService.TryStart(
                         selectedInfo,
+                        feedbackTarget.ConfirmedAssessment,
+                        feedbackTarget.DiscardLocalWork,
                         completion => OnRemoveCompleted(
                             feedbackTarget,
                             selectedInfo,
@@ -803,11 +1075,353 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             Debug.LogWarning("[Git Submodule Manager] " + safeMessage);
         }
 
+        private static bool BeginConversionAssessment(
+            VisualElement toolbar,
+            PackageManagerPackageConversionDetails preferredDetails,
+            PackageManagerPackageConversionTarget requestedTarget,
+            PackageManagerSubmoduleInfo requestedInfo)
+        {
+            object livePackage = toolbar == null
+                ? null
+                : GetFieldValue(toolbar, "m_Package");
+            object liveVersion =
+                PackageManagerSubmoduleNativePage.GetPrimaryVersion(livePackage);
+            if (toolbar == null ||
+                requestedTarget == null ||
+                requestedInfo == null ||
+                requestedTarget.Direction !=
+                GitPackageConversionDirection.SubmoduleToReadOnly ||
+                !PackageManagerSubmodulePresentation.TryGetPresentation(
+                    liveVersion,
+                    out PackageManagerSubmoduleInfo liveInfo) ||
+                !SameSubmodule(liveInfo, requestedInfo) ||
+                !SameConversionTarget(
+                    BuildConversionTarget(liveInfo),
+                    requestedTarget) ||
+                !EntriesByToolbar.TryGetValue(
+                    toolbar,
+                    out NativeActionEntry entry) ||
+                !SameConversionTarget(
+                    entry.ConversionDetails.CurrentTarget,
+                    requestedTarget) ||
+                !SameSubmodule(entry.RemoveDetails.CurrentInfo, requestedInfo))
+            {
+                ReportConversionError(
+                    preferredDetails,
+                    requestedTarget,
+                    "The selected package changed before it could be inspected. " +
+                    "Select the installed submodule and retry.");
+                return false;
+            }
+
+            string validationError =
+                GitPackageConversionService.ValidateToReadOnly(requestedInfo);
+            if (!string.IsNullOrWhiteSpace(validationError) ||
+                !GitPackageConversionService.CanStart)
+            {
+                ReportConversionError(
+                    preferredDetails,
+                    requestedTarget,
+                    string.IsNullOrWhiteSpace(validationError)
+                        ? GitPackageConversionService.BuildUnavailableMessage()
+                        : validationError);
+                return false;
+            }
+
+            ApplyConversionState(
+                requestedTarget,
+                details => details.ShowInspecting(
+                    requestedTarget,
+                    $"Inspecting {requestedTarget.PackageName} for local work..."));
+            if (GitSubmoduleRemoveService.TryStartAssessment(
+                    requestedInfo,
+                    completion => OnConversionAssessmentCompleted(
+                        preferredDetails,
+                        requestedTarget,
+                        completion),
+                    out string startError))
+            {
+                return true;
+            }
+
+            ReportConversionError(
+                preferredDetails,
+                requestedTarget,
+                string.IsNullOrWhiteSpace(startError)
+                    ? "The submodule could not be inspected safely before conversion."
+                    : startError);
+            RefreshAllEntries();
+            return false;
+        }
+
+        private static void OnConversionAssessmentCompleted(
+            PackageManagerPackageConversionDetails preferredDetails,
+            PackageManagerPackageConversionTarget target,
+            GitSubmoduleRemovalAssessmentCompletion completion)
+        {
+            if (completion == null ||
+                !completion.Success ||
+                completion.Assessment == null)
+            {
+                ReportConversionError(
+                    preferredDetails,
+                    target,
+                    string.IsNullOrWhiteSpace(completion?.Message)
+                        ? "The submodule could not be inspected safely before conversion."
+                        : completion.Message);
+                RefreshAllEntries();
+                return;
+            }
+
+            SubmoduleRemovalAssessment assessment = completion.Assessment;
+            EditorApplication.delayCall += () =>
+            {
+                RefreshAllEntries();
+                ApplyConversionState(
+                    target,
+                    details => details.ShowConfirmation(assessment));
+            };
+        }
+
+        private static void OnConversionRequested(
+            VisualElement toolbar,
+            PackageManagerPackageConversionDetails sourceDetails,
+            PackageManagerPackageConversionTarget requestedTarget)
+        {
+            PackageManagerPackageConversionDetails feedbackTarget = sourceDetails;
+            try
+            {
+                if (toolbar == null || requestedTarget == null ||
+                    !EntriesByToolbar.TryGetValue(
+                        toolbar,
+                        out NativeActionEntry entry))
+                {
+                    ReportConversionError(
+                        feedbackTarget,
+                        requestedTarget,
+                        "Package Manager refreshed before conversion could start. " +
+                        "Select the package and retry.");
+                    return;
+                }
+
+                feedbackTarget = entry.ConversionDetails;
+                if (!SameConversionTarget(
+                        requestedTarget,
+                        feedbackTarget.CurrentTarget))
+                {
+                    ReportConversionError(
+                        feedbackTarget,
+                        requestedTarget,
+                        "The selected package changed before conversion could start. " +
+                        "Select it again and retry.");
+                    RefreshAllEntries();
+                    return;
+                }
+
+                object selectedPackage = GetFieldValue(toolbar, "m_Package");
+                bool started;
+                string startError;
+                if (requestedTarget.Direction ==
+                    GitPackageConversionDirection.ReadOnlyToSubmodule)
+                {
+                    if (!PackageManagerReadOnlyGitPackage.TryGetInfo(
+                            selectedPackage,
+                            out PackageManagerReadOnlyGitInfo readOnlyInfo) ||
+                        !SameConversionTarget(
+                            requestedTarget,
+                            BuildConversionTarget(readOnlyInfo)))
+                    {
+                        ReportConversionError(
+                            feedbackTarget,
+                            requestedTarget,
+                            "The selected read-only Git dependency no longer " +
+                            "matches the confirmed package. Refresh and retry.");
+                        RefreshAllEntries();
+                        return;
+                    }
+
+                    started = GitPackageConversionService.TryStartToSubmodule(
+                        readOnlyInfo,
+                        completion => OnConversionCompleted(
+                            requestedTarget,
+                            completion),
+                        out startError);
+                }
+                else
+                {
+                    object selectedVersion =
+                        PackageManagerSubmoduleNativePage.GetPrimaryVersion(
+                            selectedPackage);
+                    if (!PackageManagerSubmodulePresentation.TryGetPresentation(
+                            selectedVersion,
+                            out PackageManagerSubmoduleInfo submoduleInfo) ||
+                        !SameConversionTarget(
+                            requestedTarget,
+                            BuildConversionTarget(submoduleInfo)))
+                    {
+                        ReportConversionError(
+                            feedbackTarget,
+                            requestedTarget,
+                            "The selected submodule no longer matches the " +
+                            "confirmed package. Refresh and retry.");
+                        RefreshAllEntries();
+                        return;
+                    }
+
+                    started = GitPackageConversionService.TryStartToReadOnly(
+                        submoduleInfo,
+                        feedbackTarget.ConfirmedAssessment,
+                        feedbackTarget.DiscardLocalWork,
+                        completion => OnConversionCompleted(
+                            requestedTarget,
+                            completion),
+                        out startError);
+                }
+
+                if (!started)
+                {
+                    ReportConversionError(
+                        feedbackTarget,
+                        requestedTarget,
+                        string.IsNullOrWhiteSpace(startError)
+                            ? "The package conversion could not be started safely."
+                            : startError);
+                    RefreshAllEntries();
+                    return;
+                }
+
+                ApplyConversionState(
+                    requestedTarget,
+                    details => details.ShowProgress(
+                        requestedTarget,
+                        requestedTarget.Direction ==
+                        GitPackageConversionDirection.ReadOnlyToSubmodule
+                            ? "Creating and verifying the target submodule before " +
+                              "removing the manifest dependency..."
+                            : "Recording the read-only dependency before safely " +
+                              "removing the submodule..."));
+            }
+            catch (Exception exception)
+            {
+                ReportConversionError(
+                    feedbackTarget,
+                    requestedTarget,
+                    "The package conversion could not be started: " +
+                    exception.Message);
+                RefreshAllEntries();
+            }
+        }
+
+        private static void OnConversionCompleted(
+            PackageManagerPackageConversionTarget target,
+            GitPackageConversionCompletion completion)
+        {
+            if (completion == null || !completion.Success)
+            {
+                ReportConversionError(
+                    null,
+                    target,
+                    string.IsNullOrWhiteSpace(completion?.Message)
+                        ? "The conversion did not complete safely; the original " +
+                          "package form was preserved where recovery was verified."
+                        : completion.Message);
+                RefreshAllEntries();
+                return;
+            }
+
+            ApplyConversionState(
+                target,
+                details => details.ShowCompleted(
+                    target,
+                    completion.Message +
+                    " Unity is refreshing Package Manager; review and commit " +
+                    "the parent repository changes."));
+            PackageManagerSubmoduleSnapshot.Refresh();
+            RefreshAllEntries();
+        }
+
+        private static void ApplyConversionState(
+            PackageManagerPackageConversionTarget target,
+            Action<PackageManagerPackageConversionDetails> apply)
+        {
+            if (target == null || apply == null)
+                return;
+
+            foreach (NativeActionEntry entry in EntriesByToolbar.Values)
+            {
+                PackageManagerPackageConversionDetails details =
+                    entry?.ConversionDetails;
+                if (details == null ||
+                    !SameConversionTarget(details.CurrentTarget, target))
+                {
+                    continue;
+                }
+
+                try
+                {
+                    apply(details);
+                }
+                catch
+                {
+                    // Continue updating other Package Manager windows if one
+                    // details hierarchy was recycled during completion.
+                }
+            }
+        }
+
+        private static void ReportConversionError(
+            PackageManagerPackageConversionDetails preferredDetails,
+            PackageManagerPackageConversionTarget target,
+            string message)
+        {
+            string safeMessage = GitHubUtility.SanitizeUiDiagnostic(message);
+            if (string.IsNullOrWhiteSpace(safeMessage))
+                safeMessage = "The package could not be converted safely.";
+
+            bool handledPreferred = false;
+            foreach (NativeActionEntry entry in EntriesByToolbar.Values)
+            {
+                PackageManagerPackageConversionDetails details =
+                    entry?.ConversionDetails;
+                if (details == null ||
+                    !SameConversionTarget(details.CurrentTarget, target))
+                {
+                    continue;
+                }
+
+                try
+                {
+                    details.ShowError(target, safeMessage);
+                    handledPreferred |= ReferenceEquals(details, preferredDetails);
+                }
+                catch
+                {
+                    // The sanitized console diagnostic remains available.
+                }
+            }
+
+            if (!handledPreferred && preferredDetails != null &&
+                SameConversionTarget(preferredDetails.CurrentTarget, target))
+            {
+                try
+                {
+                    preferredDetails.ShowError(target, safeMessage);
+                }
+                catch
+                {
+                    // The visual tree may already have been recycled.
+                }
+            }
+
+            Debug.LogWarning("[Git Submodule Manager] " + safeMessage);
+        }
+
         private static void OnInstallRequested(
             VisualElement toolbar,
             PackageManagerGitHubDetails sourceDetails,
             PackageManagerGitHubRepository repository,
-            string selectedBranch)
+            string selectedBranch,
+            PackageManagerGitInstallMode installMode)
         {
             PackageManagerGitHubDetails feedbackTarget = sourceDetails;
             string activeInstallIdentity = string.Empty;
@@ -873,11 +1487,13 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 string requestedSelectionIdentity =
                     PackageManagerGitHubDetails.GetInstallSelectionIdentity(
                         repository,
-                        selectedBranch);
+                        selectedBranch,
+                        installMode);
                 string projectedSelectionIdentity =
                     PackageManagerGitHubDetails.GetInstallSelectionIdentity(
                         projectedRepository,
-                        selectedBranch);
+                        entry.Details.SelectedBranch,
+                        entry.Details.SelectedInstallMode);
                 if (!resolvedProjectedRepository ||
                     string.IsNullOrEmpty(requestedSelectionIdentity) ||
                     !string.Equals(
@@ -896,10 +1512,16 @@ namespace MartinCalander.GitSubmoduleManager.Editor
 
                 repository = projectedRepository;
                 string branch = selectedBranch?.Trim() ?? string.Empty;
-                string validationError = GitSubmoduleAddService.ValidateInput(
-                    repository.Url,
-                    repository.PackageName,
-                    branch);
+                string validationError = installMode ==
+                                         PackageManagerGitInstallMode.ReadOnlyPackage
+                    ? PackageManagerReadOnlyGitInstallService.ValidateInput(
+                        repository.Url,
+                        branch,
+                        repository.PackageName)
+                    : GitSubmoduleAddService.ValidateInput(
+                        repository.Url,
+                        repository.PackageName,
+                        branch);
                 if (!string.IsNullOrWhiteSpace(validationError))
                 {
                     ReportInstallError(
@@ -910,7 +1532,12 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                     return;
                 }
 
-                if (!GitSubmoduleAddService.CanStart)
+                bool canStart = installMode ==
+                                PackageManagerGitInstallMode.ReadOnlyPackage
+                    ? !PackageManagerReadOnlyGitInstallService.IsBusy &&
+                      !GitOperationService.IsBusy
+                    : GitSubmoduleAddService.CanStart;
+                if (!canStart)
                 {
                     ReportInstallError(
                         feedbackTarget,
@@ -923,8 +1550,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 string installIdentity =
                     PackageManagerGitHubDetails.GetRepositoryIdentity(repository);
                 activeInstallIdentity =
-                    PackageManagerGitHubDetails.GetInstallRepositoryIdentity(
-                        repository);
+                    BuildActiveInstallIdentity(repository, installMode);
                 if (string.IsNullOrEmpty(installIdentity) ||
                     string.IsNullOrEmpty(activeInstallIdentity))
                 {
@@ -942,20 +1568,37 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 if (string.IsNullOrWhiteSpace(installMessage))
                 {
                     installMessage = "Installing " + repository.PackageName +
-                                     " as a Git submodule...";
+                                     (installMode ==
+                                      PackageManagerGitInstallMode.ReadOnlyPackage
+                                         ? " as a read-only Git package..."
+                                         : " as a Git submodule...");
                 }
 
                 ActiveInstallMessages[activeInstallIdentity] = installMessage;
-                bool started = GitSubmoduleAddService.TryStart(
-                    repository.Url,
-                    branch,
-                    repository.PackageName,
-                    completion => OnAddCompleted(
-                        completionTarget,
-                        installIdentity,
-                        activeInstallIdentity,
-                        completion),
-                    out string startError);
+                bool started;
+                string startError;
+                if (installMode == PackageManagerGitInstallMode.ReadOnlyPackage)
+                {
+                    started = PackageManagerReadOnlyGitInstallService.TryStart(
+                        repository.Url,
+                        branch,
+                        repository.PackageName,
+                        null,
+                        out startError);
+                }
+                else
+                {
+                    started = GitSubmoduleAddService.TryStart(
+                        repository.Url,
+                        branch,
+                        repository.PackageName,
+                        completion => OnAddCompleted(
+                            completionTarget,
+                            installIdentity,
+                            activeInstallIdentity,
+                            completion),
+                        out startError);
+                }
                 operationStarted = started;
                 if (!started)
                 {
@@ -1003,7 +1646,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
 
             if (completion == null || !completion.Success)
             {
-                string completionMessage =
+                string failureMessage =
                     string.IsNullOrWhiteSpace(completion?.Message)
                         ? "The Git package operation did not complete successfully."
                         : completion.Message;
@@ -1016,7 +1659,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                     repositoryIdentity,
                     activeInstallIdentity,
                     "Could Not Install Git Package",
-                    completionMessage);
+                    failureMessage);
                 return;
             }
 
@@ -1040,15 +1683,95 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             }
 
             RefreshAllEntries();
+            string completionMessage =
+                completion.CommandResult?.CompletionWarning;
+            if (string.IsNullOrWhiteSpace(completionMessage))
+            {
+                completionMessage =
+                    "Git submodule installed. Unity is resolving, importing, and " +
+                    "compiling the package; Package Manager will update automatically.";
+            }
             foreach (PackageManagerGitHubDetails details in
                      FindDetailsForInstall(
                          preferredDetails,
                          repositoryIdentity,
                          activeInstallIdentity))
             {
-                details.ShowInstallCompleted(
-                    "Git submodule installed. Unity is importing and compiling " +
-                    "the package; Package Manager will update automatically.");
+                details.ShowInstallCompleted(completionMessage);
+            }
+        }
+
+        private static void OnReadOnlyInstallServiceCompleted(
+            ReadOnlyGitPackageInstallCompletion completion)
+        {
+            if (completion == null)
+                return;
+
+            RemoveActiveReadOnlyInstallMessages(completion.PackageName);
+
+            // Clear the reload-safe terminal record after the live event has
+            // been observed. If no Package Manager window exists, the record is
+            // consumed when a window is mounted later.
+            PackageManagerReadOnlyGitInstallService.TryConsumeLastCompletion(out _);
+
+            var matchingDetails = new List<PackageManagerGitHubDetails>();
+            foreach (NativeActionEntry entry in EntriesByToolbar.Values)
+            {
+                PackageManagerGitHubDetails details = entry?.Details;
+                PackageManagerGitHubRepository repository =
+                    details?.CurrentRepository;
+                if (details == null || details.IsDisposed || repository == null ||
+                    !string.Equals(
+                        repository.PackageName,
+                        completion.PackageName,
+                        StringComparison.Ordinal))
+                {
+                    continue;
+                }
+
+                matchingDetails.Add(details);
+                ActiveInstallMessages.Remove(
+                    BuildActiveInstallIdentity(
+                        repository,
+                        PackageManagerGitInstallMode.ReadOnlyPackage));
+            }
+
+            if (completion.Success)
+            {
+                foreach (PackageManagerGitHubDetails details in matchingDetails)
+                {
+                    details.ShowInstallCompleted(
+                        "Read-only Git package installed through Unity Package " +
+                        "Manager. Unity will update the package list automatically.");
+                }
+            }
+            else
+            {
+                string message = string.IsNullOrWhiteSpace(completion.Message)
+                    ? "Unity Package Manager could not install the read-only Git package."
+                    : completion.Message;
+                foreach (PackageManagerGitHubDetails details in matchingDetails)
+                    details.ShowInstallError(message);
+                Debug.LogWarning(
+                    "[Git Submodule Manager] " +
+                    GitHubUtility.SanitizeUiDiagnostic(message));
+            }
+
+            RefreshAllEntries();
+        }
+
+        private static void RemoveActiveReadOnlyInstallMessages(
+            string packageName)
+        {
+            if (!GitUtility.IsValidUpmPackageName(packageName))
+                return;
+
+            string suffix = "\n" + packageName.Trim() + "\nmode:" +
+                            PackageManagerGitInstallMode.ReadOnlyPackage;
+            foreach (string key in new List<string>(ActiveInstallMessages.Keys))
+            {
+                if (key.EndsWith(suffix, StringComparison.Ordinal))
+                    ActiveInstallMessages.Remove(key);
             }
         }
 
@@ -1068,22 +1791,44 @@ namespace MartinCalander.GitSubmoduleManager.Editor
 
         private static string BuildEnabledTooltip(
             PackageManagerGitHubRepository repository,
-            string selectedBranch)
+            string selectedBranch,
+            PackageManagerGitInstallMode installMode)
         {
-            string destination = GitSubmoduleAddService.GetPackagePath(
-                repository?.PackageName ?? string.Empty);
             string branch = string.IsNullOrWhiteSpace(selectedBranch)
                 ? "the repository default branch"
                 : $"branch {selectedBranch.Trim()}";
+            if (installMode == PackageManagerGitInstallMode.ReadOnlyPackage)
+            {
+                return "Install this GitHub package as a normal read-only UPM " +
+                       $"Git dependency from {branch}.";
+            }
+
+            string destination = GitSubmoduleAddService.GetPackagePath(
+                repository?.PackageName ?? string.Empty);
             return string.IsNullOrWhiteSpace(destination)
                 ? $"Install this GitHub package as a Git submodule from {branch}."
                 : $"Install this GitHub package as a Git submodule from {branch} at {destination}.";
+        }
+
+        private static string BuildActiveInstallIdentity(
+            PackageManagerGitHubRepository repository,
+            PackageManagerGitInstallMode installMode)
+        {
+            string repositoryIdentity =
+                PackageManagerGitHubDetails.GetInstallRepositoryIdentity(
+                    repository);
+            return string.IsNullOrWhiteSpace(repositoryIdentity)
+                ? string.Empty
+                : repositoryIdentity + "\nmode:" + installMode;
         }
 
         private static string BuildDisabledTooltip(string validationError)
         {
             if (!string.IsNullOrWhiteSpace(validationError))
                 return validationError.Trim();
+
+            if (PackageManagerProjectResolutionService.IsBusy)
+                return PackageManagerProjectResolutionService.BuildUnavailableMessage();
 
             string recoveryWarning = GitOperationService.RecoveryWarning;
             if (!string.IsNullOrWhiteSpace(recoveryWarning))
@@ -1149,7 +1894,54 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                    string.Equals(
                        GitUtility.NormalizePath(left.PackagePath),
                        GitUtility.NormalizePath(right.PackagePath),
+                   StringComparison.Ordinal);
+        }
+
+        private static PackageManagerPackageConversionTarget BuildConversionTarget(
+            PackageManagerSubmoduleInfo info)
+        {
+            return info == null
+                ? null
+                : new PackageManagerPackageConversionTarget(
+                    GitPackageConversionDirection.SubmoduleToReadOnly,
+                    info.PackageName,
+                    info.PackagePath,
+                    info.RepositoryUrl,
+                    string.Empty);
+        }
+
+        private static PackageManagerPackageConversionTarget BuildConversionTarget(
+            PackageManagerReadOnlyGitInfo info)
+        {
+            return info == null
+                ? null
+                : new PackageManagerPackageConversionTarget(
+                    GitPackageConversionDirection.ReadOnlyToSubmodule,
+                    info.PackageName,
+                    GitSubmoduleAddService.GetPackagePath(info.PackageName),
+                    info.RepositoryUrl,
+                    (info.Revision ?? string.Empty) + "@" +
+                    (info.ResolvedHash ?? string.Empty) + "|package-path:" +
+                    (info.PackageSubfolder ?? string.Empty));
+        }
+
+        private static bool SameConversionTarget(
+            PackageManagerPackageConversionTarget left,
+            PackageManagerPackageConversionTarget right)
+        {
+            return left != null &&
+                   right != null &&
+                   string.Equals(
+                       left.SelectionIdentity,
+                       right.SelectionIdentity,
                        StringComparison.Ordinal);
+        }
+
+        private static string BuildConversionDisabledTooltip(string error)
+        {
+            return !string.IsNullOrWhiteSpace(error)
+                ? error.Trim()
+                : GitPackageConversionService.BuildUnavailableMessage();
         }
 
         private static bool IsDirectInstalledPackagePath(object packageVersion)
@@ -1224,8 +2016,9 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             bool matchesIdentity = !string.IsNullOrWhiteSpace(installIdentity)
                 ? string.Equals(
                     installIdentity,
-                    PackageManagerGitHubDetails.GetInstallRepositoryIdentity(
-                        details.CurrentRepository),
+                    BuildActiveInstallIdentity(
+                        details.CurrentRepository,
+                        details.SelectedInstallMode),
                     StringComparison.Ordinal)
                 : IsDetailsShowingRepository(
                     details,
@@ -1319,6 +2112,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 VisualElement detailsLinksContainer,
                 PackageManagerGitHubDetails details,
                 PackageManagerSubmoduleRemoveDetails removeDetails,
+                PackageManagerPackageConversionDetails conversionDetails,
                 EventCallback<DetachFromPanelEvent> detachedCallback)
             {
                 Root = root;
@@ -1327,6 +2121,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 DetailsLinksContainer = detailsLinksContainer;
                 Details = details;
                 RemoveDetails = removeDetails;
+                ConversionDetails = conversionDetails;
                 DetachedCallback = detachedCallback;
             }
 
@@ -1336,6 +2131,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             internal VisualElement DetailsLinksContainer { get; }
             internal PackageManagerGitHubDetails Details { get; }
             internal PackageManagerSubmoduleRemoveDetails RemoveDetails { get; }
+            internal PackageManagerPackageConversionDetails ConversionDetails { get; }
             internal EventCallback<DetachFromPanelEvent> DetachedCallback { get; }
         }
 

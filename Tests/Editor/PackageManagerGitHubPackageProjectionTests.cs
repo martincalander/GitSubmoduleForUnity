@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Reflection;
 using NUnit.Framework;
+using UnityEditor.PackageManager;
 
 namespace MartinCalander.GitSubmoduleManager.Editor.Tests
 {
@@ -115,6 +116,21 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                 DeclaredPackageName = "com.example.projectionmetadata",
                 DeclaredDisplayName = "Projection Metadata",
                 DeclaredVersion = "2.3.4",
+                DeclaredDescription = "Manifest package description",
+                DeclaredMinimumUnityVersion = "2021.3.0f1",
+                DeclaredAuthorName = "Manifest Author",
+                DeclaredDocumentationUrl = "https://example.com/docs",
+                DeclaredChangelogUrl = "https://example.com/changelog",
+                DeclaredLicensesUrl = "https://example.com/license",
+                DeclaredDependencies = new[]
+                {
+                    new PackageManifestDependency(
+                        "com.example.alpha",
+                        "1.0.0"),
+                    new PackageManifestDependency(
+                        "com.example.beta",
+                        "2.0.0")
+                },
                 PackageManifestBlobOid = "BLOB-METADATA",
                 ManifestState = PackageManifestState.Valid
             };
@@ -123,6 +139,10 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
             source.Description = "mutated-after-copy";
             source.DeclaredDisplayName = "Mutated After Copy";
             source.DeclaredVersion = "99.0.0";
+            source.DeclaredDescription = "Mutated manifest description";
+            source.DeclaredMinimumUnityVersion = "6000.0.0f1";
+            source.DeclaredAuthorName = "Mutated Author";
+            source.DeclaredDependencies = Array.Empty<PackageManifestDependency>();
 
             Assert.That(
                 PackageManagerGitHubPackageProjection.Reconcile(
@@ -166,7 +186,21 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                 Is.EqualTo("Projection Metadata"));
             Assert.That(
                 ReadProjectedField<string>("VersionDescriptionField", primaryVersion),
-                Is.EqualTo("Projected package description"));
+                Is.EqualTo("Manifest package description"));
+            PropertyInfo minimumUnityVersionProperty = reflectionContract
+                ?.GetType()
+                .GetProperty(
+                    "VersionMinimumUnityVersionField",
+                    InstanceMembers);
+            Assert.That(minimumUnityVersionProperty, Is.Not.Null);
+            if (minimumUnityVersionProperty.GetValue(
+                    reflectionContract,
+                    null) is FieldInfo minimumUnityVersionField)
+            {
+                Assert.That(
+                    minimumUnityVersionField.GetValue(primaryVersion),
+                    Is.EqualTo("2021.3.0f1"));
+            }
             Assert.That(
                 ReadProjectedField<string>("VersionStringField", primaryVersion),
                 Is.EqualTo("2.3.4"));
@@ -178,12 +212,114 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                         .Ticks));
 
             Assert.That(
+                PackageManagerGitHubNativePresentationPatch.TryPatch(),
+                Is.True);
+            MethodInfo dependenciesGetter =
+                PackageManagerGitHubNativePresentationPatch
+                    .GetDependenciesGetterTarget();
+            Assert.That(dependenciesGetter, Is.Not.Null);
+            var projectedDependencies =
+                (DependencyInfo[])dependenciesGetter.Invoke(primaryVersion, null);
+            Assert.That(projectedDependencies, Has.Length.EqualTo(2));
+            Assert.That(projectedDependencies[0].name, Is.EqualTo("com.example.alpha"));
+            Assert.That(projectedDependencies[0].version, Is.EqualTo("1.0.0"));
+            Assert.That(projectedDependencies[1].name, Is.EqualTo("com.example.beta"));
+            Assert.That(projectedDependencies[1].version, Is.EqualTo("2.0.0"));
+
+            object[] dependencyTabArguments = { primaryVersion, false };
+            PackageManagerGitHubNativePresentationPatch
+                .GetDependenciesTabValidityPostfix()
+                .Invoke(null, dependencyTabArguments);
+            Assert.That(dependencyTabArguments[1], Is.True,
+                "Only the owned placeholder needs a scoped exception to Unity's native Placeholder exclusion.");
+
+            AssertNativePresentationPostfixScoping(primaryVersion);
+
+            Assert.That(
                 PackageManagerGitHubPackageProjection.Reconcile(
                     packageDatabase,
                     CreateSnapshot(immutableRepository)),
                 Is.True);
             Assert.That(CountPackages(packageId), Is.EqualTo(1),
                 "Replaying the same immutable record must not duplicate the owned package.");
+        }
+
+        private static void AssertNativePresentationPostfixScoping(
+            object projectedVersion)
+        {
+            var sentinelDependencies = new DependencyInfo[1];
+            object[] ordinaryDependencyArguments =
+            {
+                new object(),
+                sentinelDependencies
+            };
+            PackageManagerGitHubNativePresentationPatch
+                .GetDependenciesGetterPostfix()
+                .Invoke(null, ordinaryDependencyArguments);
+            Assert.That(
+                ordinaryDependencyArguments[1],
+                Is.SameAs(sentinelDependencies),
+                "An ordinary package must retain Unity's native dependency result.");
+
+            object[] ordinaryTabArguments = { new object(), false };
+            PackageManagerGitHubNativePresentationPatch
+                .GetDependenciesTabValidityPostfix()
+                .Invoke(null, ordinaryTabArguments);
+            Assert.That(
+                ordinaryTabArguments[1],
+                Is.False,
+                "An ordinary package must retain Unity's native tab validity.");
+
+            var expectedUrls = new Dictionary<string, string>(
+                StringComparer.Ordinal)
+            {
+                {
+                    "CreateUpmDocumentationLink",
+                    "https://example.com/docs"
+                },
+                {
+                    "CreateUpmChangelogLink",
+                    "https://example.com/changelog"
+                },
+                {
+                    "CreateUpmLicenseLink",
+                    "https://example.com/license"
+                }
+            };
+            IReadOnlyList<MethodInfo> linkTargets =
+                PackageManagerGitHubNativePresentationPatch
+                    .GetPackageLinkTargets();
+            Assert.That(linkTargets, Has.Count.EqualTo(expectedUrls.Count));
+            MethodInfo linkPostfix =
+                PackageManagerGitHubNativePresentationPatch
+                    .GetPackageLinkPostfix();
+            foreach (MethodInfo target in linkTargets)
+            {
+                Assert.That(expectedUrls, Does.ContainKey(target.Name));
+
+                var projectedLink = new MutablePackageLink
+                {
+                    url = "native://unavailable"
+                };
+                linkPostfix.Invoke(
+                    null,
+                    new object[] { target, projectedVersion, projectedLink });
+                Assert.That(
+                    projectedLink.url,
+                    Is.EqualTo(expectedUrls[target.Name]));
+
+                var ordinaryLink = new MutablePackageLink
+                {
+                    url = "https://native.example/link"
+                };
+                linkPostfix.Invoke(
+                    null,
+                    new object[] { target, new object(), ordinaryLink });
+                Assert.That(
+                    ordinaryLink.url,
+                    Is.EqualTo("https://native.example/link"),
+                    "An ordinary package must retain Unity's native link URL.");
+            }
         }
 
         [Test]
@@ -582,7 +718,25 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                 Is.EqualTo("com.example.projectionmetadata"));
             Assert.That(repository.DisplayName, Is.EqualTo("Projection Metadata"));
             Assert.That(repository.Version, Is.EqualTo("2.3.4"));
+            Assert.That(
+                repository.PackageDescription,
+                Is.EqualTo("Manifest package description"));
+            Assert.That(
+                repository.MinimumUnityVersion,
+                Is.EqualTo("2021.3.0f1"));
+            Assert.That(repository.AuthorName, Is.EqualTo("Manifest Author"));
+            Assert.That(repository.DocumentationUrl, Is.EqualTo("https://example.com/docs"));
+            Assert.That(repository.ChangelogUrl, Is.EqualTo("https://example.com/changelog"));
+            Assert.That(repository.LicensesUrl, Is.EqualTo("https://example.com/license"));
+            Assert.That(repository.Dependencies, Has.Count.EqualTo(2));
+            Assert.That(repository.Dependencies[0].Name, Is.EqualTo("com.example.alpha"));
+            Assert.That(repository.Dependencies[1].Name, Is.EqualTo("com.example.beta"));
             Assert.That(repository.PackageManifestBlobOid, Is.EqualTo("BLOB-METADATA"));
+        }
+
+        private sealed class MutablePackageLink
+        {
+            public string url { get; set; }
         }
     }
 }

@@ -590,11 +590,15 @@ namespace MartinCalander.GitSubmoduleManager.Editor
 
             content.text = info.SourceLabel;
             content.tooltip = info.SourceTooltip;
+            content.style.display = DisplayStyle.Flex;
+            content.style.visibility = Visibility.Visible;
             // Placeholder discovery versions have no UpmCache PackageInfo, so
             // Unity hides the Source card before our postfix runs. Make only a
             // recognized GitHub/submodule card visible again; the next native
             // Refresh remains authoritative for every other selection.
             card.style.display = DisplayStyle.Flex;
+            card.style.visibility = Visibility.Visible;
+            card.MarkDirtyRepaint();
 
             VisualElement iconElement = card.Q<VisualElement>(
                 className: InformationCardIconClassName);
@@ -605,6 +609,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 {
                     iconElement.style.backgroundImage = new StyleBackground(gitIcon);
                     iconElement.style.display = DisplayStyle.Flex;
+                    iconElement.style.visibility = Visibility.Visible;
                     iconElement.tooltip = GitHubSourceLabelTooltip;
                     iconElement.AddToClassList(CustomSourceIconClassName);
                 }

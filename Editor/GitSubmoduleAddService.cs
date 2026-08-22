@@ -33,6 +33,8 @@ namespace MartinCalander.GitSubmoduleManager.Editor
 
         internal static bool CanStart =>
             !GitOperationService.IsBusy &&
+            !PackageManagerProjectResolutionService.IsBusy &&
+            !PackageManagerReadOnlyGitInstallService.IsBusy &&
             !PackageManagerSubmoduleSnapshot.IsReaderActive &&
             !GitSubmoduleInstallProbe.IsReaderActive &&
             !AsyncCommandDrainRegistry.IsDraining &&
@@ -61,7 +63,16 @@ namespace MartinCalander.GitSubmoduleManager.Editor
 
             string path = GetPackagePath(packageName);
             string fullPath = Path.Combine(GitUtility.ProjectRoot, path);
-            if (Directory.Exists(fullPath) || File.Exists(fullPath))
+            if (!GitUtility.TryInspectFileSystemEntryPresence(
+                    fullPath,
+                    out bool entryExists,
+                    out string inspectionError,
+                    CancellationToken.None))
+            {
+                return inspectionError;
+            }
+
+            if (entryExists)
                 return $"Package path already exists: {path}";
 
             return string.Empty;
@@ -102,6 +113,14 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                     string message = success
                         ? state.Message
                         : BuildCompletionError(state.Message, result, effectiveOutcome);
+                    if (success &&
+                        !string.IsNullOrWhiteSpace(result?.CompletionWarning))
+                    {
+                        message = string.IsNullOrWhiteSpace(message)
+                            ? result.CompletionWarning
+                            : message.TrimEnd() + " " +
+                              result.CompletionWarning.Trim();
+                    }
 
                     if (result != null &&
                         result.TerminationConfirmed &&
@@ -122,7 +141,10 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 new GitOperationMetadata
                 {
                     PackagePath = path,
-                    Phase = "add-validate-or-rollback"
+                    Phase = "add-validate-or-rollback",
+                    PackageName = packageName,
+                    PackageResolutionExpectation =
+                        PackageManagerResolutionExpectation.Embedded
                 });
         }
 

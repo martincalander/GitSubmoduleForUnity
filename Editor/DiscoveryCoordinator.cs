@@ -78,6 +78,13 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             public string PackageName;
             public string DisplayName;
             public string Version;
+            public string Description;
+            public string MinimumUnityVersion;
+            public string AuthorName;
+            public string DocumentationUrl;
+            public string ChangelogUrl;
+            public string LicensesUrl;
+            public PackageManifestDependency[] Dependencies;
             public string Message;
         }
 
@@ -879,7 +886,14 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                     cached.PackageName,
                     blob.oid,
                     cached.DisplayName,
-                    cached.Version);
+                    cached.Version,
+                    cached.Description,
+                    cached.MinimumUnityVersion,
+                    cached.AuthorName,
+                    cached.DocumentationUrl,
+                    cached.ChangelogUrl,
+                    cached.LicensesUrl,
+                    cached.Dependencies);
                 return;
             }
 
@@ -892,21 +906,26 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 return;
             }
 
-            if (GitUtility.TryReadValidPackageManifestFromJson(
+            if (GitUtility.TryReadPackageManifestMetadataFromJson(
                     blob.text,
-                    out string packageName,
-                    out string displayName,
-                    out string version,
+                    out PackageManifestMetadata metadata,
                     out string validationError))
             {
                 SetManifestState(
                     repo,
                     PackageManifestState.Valid,
                     string.Empty,
-                    packageName,
+                    metadata.PackageName,
                     blob.oid,
-                    displayName,
-                    version);
+                    metadata.DisplayName,
+                    metadata.Version,
+                    metadata.Description,
+                    metadata.MinimumUnityVersion,
+                    metadata.AuthorName,
+                    metadata.DocumentationUrl,
+                    metadata.ChangelogUrl,
+                    metadata.LicensesUrl,
+                    metadata.Dependencies);
                 CacheManifestResult(blob.oid, repo);
                 return;
             }
@@ -930,21 +949,26 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 }
 
                 string content = new UTF8Encoding(false, true).GetString(bytes);
-                if (GitUtility.TryReadValidPackageManifestFromJson(
+                if (GitUtility.TryReadPackageManifestMetadataFromJson(
                         content,
-                        out string packageName,
-                        out string displayName,
-                        out string version,
+                        out PackageManifestMetadata metadata,
                         out string validationError))
                 {
                     SetManifestState(
                         repo,
                         PackageManifestState.Valid,
                         string.Empty,
-                        packageName,
+                        metadata.PackageName,
                         string.Empty,
-                        displayName,
-                        version);
+                        metadata.DisplayName,
+                        metadata.Version,
+                        metadata.Description,
+                        metadata.MinimumUnityVersion,
+                        metadata.AuthorName,
+                        metadata.DocumentationUrl,
+                        metadata.ChangelogUrl,
+                        metadata.LicensesUrl,
+                        metadata.Dependencies);
                 }
                 else
                 {
@@ -978,6 +1002,13 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 PackageName = repo.DeclaredPackageName,
                 DisplayName = repo.DeclaredDisplayName,
                 Version = repo.DeclaredVersion,
+                Description = repo.DeclaredDescription,
+                MinimumUnityVersion = repo.DeclaredMinimumUnityVersion,
+                AuthorName = repo.DeclaredAuthorName,
+                DocumentationUrl = repo.DeclaredDocumentationUrl,
+                ChangelogUrl = repo.DeclaredChangelogUrl,
+                LicensesUrl = repo.DeclaredLicensesUrl,
+                Dependencies = CloneDependencies(repo.DeclaredDependencies),
                 Message = repo.PackageManifestMessage
             };
         }
@@ -989,7 +1020,14 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             string packageName = "",
             string blobOid = "",
             string displayName = "",
-            string version = "")
+            string version = "",
+            string description = "",
+            string minimumUnityVersion = "",
+            string authorName = "",
+            string documentationUrl = "",
+            string changelogUrl = "",
+            string licensesUrl = "",
+            IEnumerable<PackageManifestDependency> dependencies = null)
         {
             if (repo == null)
                 return;
@@ -999,8 +1037,35 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             repo.DeclaredPackageName = packageName ?? string.Empty;
             repo.DeclaredDisplayName = displayName ?? string.Empty;
             repo.DeclaredVersion = version ?? string.Empty;
+            repo.DeclaredDescription = description ?? string.Empty;
+            repo.DeclaredMinimumUnityVersion = minimumUnityVersion ?? string.Empty;
+            repo.DeclaredAuthorName = authorName ?? string.Empty;
+            repo.DeclaredDocumentationUrl = documentationUrl ?? string.Empty;
+            repo.DeclaredChangelogUrl = changelogUrl ?? string.Empty;
+            repo.DeclaredLicensesUrl = licensesUrl ?? string.Empty;
+            repo.DeclaredDependencies = CloneDependencies(dependencies);
             if (!string.IsNullOrEmpty(blobOid))
                 repo.PackageManifestBlobOid = blobOid;
+        }
+
+        private static PackageManifestDependency[] CloneDependencies(
+            IEnumerable<PackageManifestDependency> dependencies)
+        {
+            if (dependencies == null)
+                return Array.Empty<PackageManifestDependency>();
+
+            var copies = new List<PackageManifestDependency>();
+            foreach (PackageManifestDependency dependency in dependencies)
+            {
+                if (dependency != null)
+                {
+                    copies.Add(new PackageManifestDependency(
+                        dependency.Name,
+                        dependency.Version));
+                }
+            }
+
+            return copies.ToArray();
         }
 
         private static bool IsValidGitHubNodeId(string nodeId)

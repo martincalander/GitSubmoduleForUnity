@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "displayName": "Git Submodule Manager",
   "description": "Reliable, cross-platform Unity Editor tooling for discovering and managing Git submodule packages under Packages/.",
-  "unity": "2021.3",
+  "unity": "6000.5",
   "unityRelease": "0f1",
   "documentationUrl": "https://github.com/martincalander/GitSubmoduleManager/blob/main/Documentation~/index.md",
   "changelogUrl": "https://github.com/martincalander/GitSubmoduleManager/blob/main/CHANGELOG.md",
@@ -30,6 +30,7 @@
   },
   "dependencies": {
     "com.unity.modules.imgui": "1.0.0",
-    "com.unity.modules.jsonserialize": "1.0.0"
+    "com.unity.modules.jsonserialize": "1.0.0",
+    "com.unity.nuget.newtonsoft-json": "3.2.2"
   }
 }

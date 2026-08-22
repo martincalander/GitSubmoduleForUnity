@@ -42,6 +42,18 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                 DeclaredPackageName = "com.example.repository",
                 DeclaredDisplayName = "Repository Package",
                 DeclaredVersion = "1.2.3",
+                DeclaredDescription = "Package description",
+                DeclaredMinimumUnityVersion = "2021.3.0f1",
+                DeclaredAuthorName = "Package Author",
+                DeclaredDocumentationUrl = "https://example.com/docs",
+                DeclaredChangelogUrl = "https://example.com/changelog",
+                DeclaredLicensesUrl = "https://example.com/license",
+                DeclaredDependencies = new[]
+                {
+                    new PackageManifestDependency(
+                        "com.example.dependency",
+                        "4.5.6")
+                },
                 ManifestState = PackageManifestState.Valid
             };
 
@@ -51,12 +63,28 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
             source.DeclaredPackageName = "com.example.changed";
             source.DeclaredDisplayName = "Changed Package";
             source.DeclaredVersion = "9.9.9";
+            source.DeclaredDescription = "Changed description";
+            source.DeclaredMinimumUnityVersion = "6000.0.0f1";
+            source.DeclaredAuthorName = "Changed Author";
+            source.DeclaredDocumentationUrl = "https://changed.example.com/docs";
+            source.DeclaredChangelogUrl = "https://changed.example.com/changelog";
+            source.DeclaredLicensesUrl = "https://changed.example.com/license";
+            source.DeclaredDependencies = Array.Empty<PackageManifestDependency>();
 
             Assert.That(copy.Name, Is.EqualTo("repository"));
             Assert.That(copy.Description, Is.EqualTo("Original"));
             Assert.That(copy.PackageName, Is.EqualTo("com.example.repository"));
             Assert.That(copy.DisplayName, Is.EqualTo("Repository Package"));
             Assert.That(copy.Version, Is.EqualTo("1.2.3"));
+            Assert.That(copy.PackageDescription, Is.EqualTo("Package description"));
+            Assert.That(copy.MinimumUnityVersion, Is.EqualTo("2021.3.0f1"));
+            Assert.That(copy.AuthorName, Is.EqualTo("Package Author"));
+            Assert.That(copy.DocumentationUrl, Is.EqualTo("https://example.com/docs"));
+            Assert.That(copy.ChangelogUrl, Is.EqualTo("https://example.com/changelog"));
+            Assert.That(copy.LicensesUrl, Is.EqualTo("https://example.com/license"));
+            Assert.That(copy.Dependencies, Has.Count.EqualTo(1));
+            Assert.That(copy.Dependencies[0].Name, Is.EqualTo("com.example.dependency"));
+            Assert.That(copy.Dependencies[0].Version, Is.EqualTo("4.5.6"));
         }
 
         [Test]
@@ -123,6 +151,30 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                     }));
                 Assert.That(
                     snapshot.Repositories.All(repository => repository.Version == "1.0.0"),
+                    Is.True);
+                Assert.That(
+                    snapshot.Repositories.Select(
+                        repository => repository.PackageDescription),
+                    Is.EqualTo(new[]
+                    {
+                        "Manifest NODE-ORGANIZATION",
+                        "Manifest NODE-PERSONAL"
+                    }));
+                Assert.That(
+                    snapshot.Repositories.All(
+                        repository =>
+                            repository.MinimumUnityVersion == "2021.3.0f1"),
+                    Is.True);
+                Assert.That(
+                    snapshot.Repositories.All(
+                        repository => repository.AuthorName == "Package Author"),
+                    Is.True);
+                Assert.That(
+                    snapshot.Repositories.All(
+                        repository => repository.Dependencies.Count == 1 &&
+                                      repository.Dependencies[0].Name ==
+                                      "com.example.shared" &&
+                                      repository.Dependencies[0].Version == "3.2.1"),
                     Is.True);
                 Assert.That(changeCount, Is.GreaterThan(2),
                     "Each settled page should publish incremental progress.");
@@ -241,7 +293,15 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                     string manifest =
                         "{\"name\":\"" + packageName +
                         "\",\"displayName\":\"Package " + nodeId +
-                        "\",\"version\":\"1.0.0\"}";
+                        "\",\"version\":\"1.0.0\"," +
+                        "\"description\":\"Manifest " + nodeId + "\"," +
+                        "\"unity\":\"2021.3\"," +
+                        "\"unityRelease\":\"0f1\"," +
+                        "\"author\":{\"name\":\"Package Author\"}," +
+                        "\"documentationUrl\":\"https://example.com/docs\"," +
+                        "\"changelogUrl\":\"https://example.com/changelog\"," +
+                        "\"licensesUrl\":\"https://example.com/license\"," +
+                        "\"dependencies\":{\"com.example.shared\":\"3.2.1\"}}";
                     nodes.Add(
                         "{\"id\":\"" + nodeId +
                         "\",\"packageManifest\":{" +

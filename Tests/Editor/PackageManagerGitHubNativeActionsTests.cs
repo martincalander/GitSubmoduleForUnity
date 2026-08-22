@@ -119,6 +119,53 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
         }
 
         [Test]
+        public void LegacyTryCreate_RemainsSubmoduleOnlyAndInvokesOldCallback()
+        {
+            var primaryActions = new VisualElement();
+            var detailsLinks = new VisualElement
+            {
+                name = PackageManagerGitHubDetails.NativeDetailsLinksContainerName
+            };
+            PackageManagerGitHubRepository installedRepository = null;
+            string installedBranch = string.Empty;
+
+            Assert.That(
+                PackageManagerGitHubDetails.TryCreate(
+                    primaryActions,
+                    detailsLinks,
+                    (repository, branch) =>
+                    {
+                        installedRepository = repository;
+                        installedBranch = branch;
+                    },
+                    _ => { },
+                    false,
+                    out PackageManagerGitHubDetails details),
+                Is.True);
+            using (details)
+            {
+                PackageManagerGitHubRepository repository = CreateRepository(
+                    "repository",
+                    "main");
+                details.Refresh(repository);
+                details.SetInstallState(true, true, "Ready");
+
+                Assert.That(
+                    details.SelectedInstallMode,
+                    Is.EqualTo(PackageManagerGitInstallMode.GitSubmodule));
+                Assert.That(
+                    details.InstallModeField.style.display.value,
+                    Is.EqualTo(DisplayStyle.None));
+
+                details.TriggerInstall();
+                details.TriggerInstall();
+
+                Assert.That(installedRepository, Is.SameAs(repository));
+                Assert.That(installedBranch, Is.EqualTo("main"));
+            }
+        }
+
+        [Test]
         public void PrimaryActionsResolver_RejectsWrongToolbarType()
         {
             Assert.That(
@@ -168,7 +215,26 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                 details.Controls.Children());
             Assert.That(
                 controlsInOrder.IndexOf(details.BranchField),
+                Is.LessThan(controlsInOrder.IndexOf(details.InstallModeField)));
+            Assert.That(
+                controlsInOrder.IndexOf(details.InstallModeField),
                 Is.LessThan(controlsInOrder.IndexOf(details.InstallButton)));
+            Assert.That(
+                details.InstallModeField.choices,
+                Is.EqualTo(new[]
+                {
+                    L10n.Tr(
+                        PackageManagerGitHubDetails.GitSubmoduleInstallModeText),
+                    L10n.Tr(
+                        PackageManagerGitHubDetails.ReadOnlyPackageInstallModeText)
+                }));
+            Assert.That(
+                details.SelectedInstallMode,
+                Is.EqualTo(PackageManagerGitInstallMode.GitSubmodule));
+            Assert.That(
+                details.InstallModeField.value,
+                Is.EqualTo(L10n.Tr(
+                    PackageManagerGitHubDetails.GitSubmoduleInstallModeText)));
             Assert.That(
                 primaryActions.Q<Button>(
                     PackageManagerGitHubDetails.InstallActionElementName),
@@ -288,10 +354,10 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
         }
 
         [Test]
-        public void BranchChoices_PutDefaultFirstAndRejectInvalidOrDuplicateRefs()
+        public void BranchChoices_PutMainBeforeRepositoryDefaultAndRejectInvalidOrDuplicateRefs()
         {
             List<string> choices = PackageManagerGitHubDetails.BuildBranchChoices(
-                "main",
+                "agents/verdaccio",
                 new[]
                 {
                     "release",
@@ -304,11 +370,17 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
 
             Assert.That(
                 choices,
-                Is.EqualTo(new[] { "main", "release", "feature/new-ui" }));
+                Is.EqualTo(new[]
+                {
+                    "main",
+                    "agents/verdaccio",
+                    "release",
+                    "feature/new-ui"
+                }));
         }
 
         [Test]
-        public void BranchSelector_DefaultsToRepositoryDefaultBeforeDiscoveryCompletes()
+        public void BranchSelector_DefaultsToMainBeforeDiscoveryCompletes()
         {
             using PackageManagerGitHubDetails details = CreateDetails(
                 out _,
@@ -317,11 +389,36 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                 (_, _) => { },
                 _ => { });
 
-            details.Refresh(CreateRepository("repository", "main"));
+            details.Refresh(CreateRepository("repository", "agents/verdaccio"));
 
             Assert.That(details.SelectedBranch, Is.EqualTo("main"));
             Assert.That(details.BranchField.value, Is.EqualTo("main"));
-            Assert.That(details.BranchField.choices, Is.EqualTo(new[] { "main" }));
+            Assert.That(
+                details.BranchField.choices,
+                Is.EqualTo(new[] { "main", "agents/verdaccio" }));
+        }
+
+        [Test]
+        public void BranchSelector_FallsBackWhenAuthoritativeBranchesDoNotContainMain()
+        {
+            using PackageManagerGitHubDetails details = CreateDetails(
+                out _,
+                out _,
+                out _,
+                (_, _) => { },
+                _ => { });
+
+            details.Refresh(CreateRepository("repository", "trunk"));
+            Assert.That(details.SelectedBranch, Is.EqualTo("main"));
+
+            details.ApplyAvailableBranchesForTests(
+                new[] { "trunk", "release" });
+
+            Assert.That(details.SelectedBranch, Is.EqualTo("trunk"));
+            Assert.That(details.BranchField.value, Is.EqualTo("trunk"));
+            Assert.That(
+                details.BranchField.choices,
+                Is.EqualTo(new[] { "trunk", "release" }));
         }
 
         [UnityTest]
@@ -405,6 +502,96 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
             }
         }
 
+        [Test]
+        public void InstallAction_PassesReadOnlyModeAndUsesModeBoundCopy()
+        {
+            PackageManagerGitHubRepository installedRepository = null;
+            string installedBranch = string.Empty;
+            PackageManagerGitInstallMode installedMode =
+                PackageManagerGitInstallMode.GitSubmodule;
+            using PackageManagerGitHubDetails details = CreateDetails(
+                out _,
+                out _,
+                out _,
+                (repository, branch, installMode) =>
+                {
+                    installedRepository = repository;
+                    installedBranch = branch;
+                    installedMode = installMode;
+                },
+                _ => { });
+            PackageManagerGitHubRepository repository = CreateRepository(
+                "repository",
+                "main");
+            details.Refresh(repository);
+            details.SetInstallState(true, true, "Ready");
+
+            details.SelectInstallModeForTests(
+                PackageManagerGitInstallMode.ReadOnlyPackage);
+
+            Assert.That(
+                details.SelectedInstallMode,
+                Is.EqualTo(PackageManagerGitInstallMode.ReadOnlyPackage));
+            details.TriggerInstall();
+
+            Assert.That(details.IsInstallConfirmationPending, Is.True);
+            Assert.That(details.InstallModeField.enabledSelf, Is.False);
+            Assert.That(
+                details.InstallFeedback.text,
+                Does.Contain("read-only Package Manager Git dependency"));
+            Assert.That(
+                details.InstallFeedback.text,
+                Does.Not.Contain("Packages/com.example.repository"));
+            Assert.That(installedRepository, Is.Null);
+
+            details.TriggerInstall();
+
+            Assert.That(installedRepository, Is.SameAs(repository));
+            Assert.That(installedBranch, Is.EqualTo("main"));
+            Assert.That(
+                installedMode,
+                Is.EqualTo(PackageManagerGitInstallMode.ReadOnlyPackage));
+            Assert.That(details.IsInstalling, Is.True);
+            Assert.That(
+                details.InstallFeedback.text,
+                Does.Contain("as a read-only Package Manager package"));
+            Assert.That(details.InstallModeField.enabledSelf, Is.False);
+
+            details.ShowInstallCompleted(string.Empty);
+
+            Assert.That(
+                details.InstallFeedback.text,
+                Does.Contain("Read-only package installed"));
+        }
+
+        [Test]
+        public void InstallMode_DefaultsToSubmoduleForEachRepositorySelection()
+        {
+            using PackageManagerGitHubDetails details = CreateDetails(
+                out _,
+                out _,
+                out _,
+                (_, _, _) => { },
+                _ => { });
+            details.Refresh(CreateRepository("first", "main"));
+            details.SetInstallState(true, true, "Ready");
+            details.SelectInstallModeForTests(
+                PackageManagerGitInstallMode.ReadOnlyPackage);
+            Assert.That(
+                details.SelectedInstallMode,
+                Is.EqualTo(PackageManagerGitInstallMode.ReadOnlyPackage));
+
+            details.Refresh(CreateRepository("second", "main"));
+
+            Assert.That(
+                details.SelectedInstallMode,
+                Is.EqualTo(PackageManagerGitInstallMode.GitSubmodule));
+            Assert.That(
+                details.InstallModeField.value,
+                Is.EqualTo(L10n.Tr(
+                    PackageManagerGitHubDetails.GitSubmoduleInstallModeText)));
+        }
+
         [UnityTest]
         public IEnumerator InstallConfirmation_CancelRestoresIdleWithoutInstalling()
         {
@@ -456,7 +643,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
         }
 
         [Test]
-        public void RecycledSelection_ResetsToTheNewRepositoryDefaultBranch()
+        public void RecycledSelection_ResetsToMainInsteadOfTheRepositoryDefault()
         {
             var installRequests = new List<string>();
             using PackageManagerGitHubDetails details = CreateDetails(
@@ -479,7 +666,8 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                 "second",
                 "trunk");
             details.Refresh(second);
-            details.ApplyAvailableBranchesForTests(new[] { "trunk", "develop" });
+            details.ApplyAvailableBranchesForTests(
+                new[] { "trunk", "develop", "main" });
             details.SetInstallState(true, true, "Ready");
 
             Assert.That(details.IsInstallConfirmationPending, Is.False);
@@ -492,8 +680,8 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
             details.TriggerInstall();
 
             Assert.That(details.CurrentRepository, Is.SameAs(second));
-            Assert.That(details.SelectedBranch, Is.EqualTo("trunk"));
-            Assert.That(installRequests, Is.EqualTo(new[] { "second:trunk" }));
+            Assert.That(details.SelectedBranch, Is.EqualTo("main"));
+            Assert.That(installRequests, Is.EqualTo(new[] { "second:main" }));
         }
 
         [Test]
@@ -643,9 +831,15 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                 .GetInstallSelectionIdentity(repository, "main");
             string releaseSelection = PackageManagerGitHubDetails
                 .GetInstallSelectionIdentity(repository, "release");
+            string readOnlySelection = PackageManagerGitHubDetails
+                .GetInstallSelectionIdentity(
+                    repository,
+                    "main",
+                    PackageManagerGitInstallMode.ReadOnlyPackage);
 
             Assert.That(mainSelection, Does.StartWith(repositoryIdentity));
             Assert.That(mainSelection, Is.Not.EqualTo(releaseSelection));
+            Assert.That(mainSelection, Is.Not.EqualTo(readOnlySelection));
             Assert.That(
                 repositoryIdentity,
                 Is.Not.EqualTo(PackageManagerGitHubDetails
@@ -684,6 +878,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                 Is.EqualTo(HelpBoxMessageType.Info));
             Assert.That(details.InstallButton.enabledSelf, Is.False);
             Assert.That(details.BranchField.enabledSelf, Is.False);
+            Assert.That(details.InstallModeField.enabledSelf, Is.False);
             Assert.That(
                 details.CancelInstallButton.style.display.value,
                 Is.EqualTo(DisplayStyle.None));
@@ -697,6 +892,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                 Is.EqualTo(L10n.Tr(PackageManagerGitHubDetails.InstalledText)));
             Assert.That(details.InstallButton.enabledSelf, Is.False);
             Assert.That(details.BranchField.enabledSelf, Is.False);
+            Assert.That(details.InstallModeField.enabledSelf, Is.False);
             Assert.That(
                 details.InstallFeedback.messageType,
                 Is.EqualTo(HelpBoxMessageType.Info));
@@ -715,6 +911,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                 Is.EqualTo(L10n.Tr(PackageManagerGitHubDetails.RetryInstallText)));
             Assert.That(details.InstallButton.enabledSelf, Is.True);
             Assert.That(details.BranchField.enabledSelf, Is.True);
+            Assert.That(details.InstallModeField.enabledSelf, Is.True);
             Assert.That(
                 details.InstallFeedback.messageType,
                 Is.EqualTo(HelpBoxMessageType.Error));
@@ -879,6 +1076,10 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                     true);
                 details.Refresh(info);
                 details.SetRemoveState(true, "Ready");
+                Assert.That(
+                    details.RemoveButton.parent.style.display.value,
+                    Is.EqualTo(DisplayStyle.None),
+                    "Uninstall must start from Unity's Manage menu.");
 
                 // Native PackageAction requests can be broadcast to more than
                 // one Package Manager host. Mirroring confirmation must remain
@@ -895,13 +1096,189 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                 Assert.That(
                     details.Feedback.messageType,
                     Is.EqualTo(HelpBoxMessageType.Warning));
-                Assert.That(details.Feedback.text, Does.Contain("local-only work"));
+                Assert.That(details.Feedback.text,
+                    Does.Contain("state has not changed"));
+                Assert.That(
+                    details.RemoveButton.parent.style.display.value,
+                    Is.EqualTo(DisplayStyle.Flex));
 
                 details.TriggerRemove();
 
                 Assert.That(removeCount, Is.EqualTo(1));
                 Assert.That(details.IsRemoving, Is.True);
                 Assert.That(details.RemoveButton.enabledSelf, Is.False);
+            }
+        }
+
+        [Test]
+        public void RemoveDetails_DirtyAssessmentRequiresExplicitDiscard()
+        {
+            var primaryActions = new VisualElement();
+            var detailsHeader = new VisualElement();
+            var detailsLinks = new VisualElement
+            {
+                name = PackageManagerGitHubDetails.NativeDetailsLinksContainerName
+            };
+            detailsHeader.Add(detailsLinks);
+            detailsHeader.Add(new VisualElement
+            {
+                name = PackageManagerGitHubDetails.NativeHelpBoxContainerName
+            });
+            PackageManagerSubmoduleInfo requestedInfo = null;
+            Assert.That(
+                PackageManagerSubmoduleRemoveDetails.TryCreate(
+                    primaryActions,
+                    detailsLinks,
+                    info => requestedInfo = info,
+                    out PackageManagerSubmoduleRemoveDetails details),
+                Is.True);
+            using (details)
+            {
+                var info = new PackageManagerSubmoduleInfo(
+                    "com.example.package",
+                    "Packages/com.example.package",
+                    "/project/Packages/com.example.package",
+                    "https://github.com/example/package.git",
+                    true);
+                var assessment = new SubmoduleRemovalAssessment
+                {
+                    Path = info.PackagePath,
+                    IsInitialized = true,
+                    HasWorkingTreeChanges = true,
+                    HeadCommit = new string('a', 40),
+                    WorktreeStatus = "? local.txt\n"
+                };
+                details.Refresh(info);
+                details.SetRemoveState(true, "Ready");
+
+                Assert.That(details.ShowConfirmation(assessment), Is.True);
+
+                Assert.That(details.ConfirmedAssessment, Is.Not.SameAs(assessment));
+                Assert.That(
+                    GitUtility.RemovalAssessmentMatches(
+                        assessment,
+                        details.ConfirmedAssessment),
+                    Is.True);
+                Assert.That(details.DiscardLocalWork, Is.True);
+                Assert.That(
+                    details.RemoveButton.text,
+                    Is.EqualTo(L10n.Tr(
+                        PackageManagerSubmoduleRemoveDetails.ConfirmDiscardText)));
+                Assert.That(details.Feedback.text, Does.Contain("would discard"));
+                Assert.That(requestedInfo, Is.Null);
+
+                details.TriggerRemove();
+
+                Assert.That(requestedInfo, Is.SameAs(info));
+            }
+        }
+
+        [Test]
+        public void RemoveDetails_DifferentSelectionClearsConfirmedAssessment()
+        {
+            var primaryActions = new VisualElement();
+            var detailsHeader = new VisualElement();
+            var detailsLinks = new VisualElement
+            {
+                name = PackageManagerGitHubDetails.NativeDetailsLinksContainerName
+            };
+            detailsHeader.Add(detailsLinks);
+            detailsHeader.Add(new VisualElement
+            {
+                name = PackageManagerGitHubDetails.NativeHelpBoxContainerName
+            });
+            Assert.That(
+                PackageManagerSubmoduleRemoveDetails.TryCreate(
+                    primaryActions,
+                    detailsLinks,
+                    _ => { },
+                    out PackageManagerSubmoduleRemoveDetails details),
+                Is.True);
+            using (details)
+            {
+                var first = new PackageManagerSubmoduleInfo(
+                    "com.example.first",
+                    "Packages/com.example.first",
+                    "/project/Packages/com.example.first",
+                    "https://github.com/example/first.git",
+                    true);
+                var second = new PackageManagerSubmoduleInfo(
+                    "com.example.second",
+                    "Packages/com.example.second",
+                    "/project/Packages/com.example.second",
+                    "https://github.com/example/second.git",
+                    true);
+                var assessment = new SubmoduleRemovalAssessment
+                {
+                    Path = first.PackagePath,
+                    IsInitialized = true,
+                    HasWorkingTreeChanges = true,
+                    HeadCommit = new string('d', 40),
+                    WorktreeStatus = "? local.txt\n"
+                };
+                details.Refresh(first);
+                details.SetRemoveState(true, "Ready");
+                Assert.That(details.ShowConfirmation(assessment), Is.True);
+                Assert.That(details.ConfirmedAssessment, Is.Not.Null);
+                Assert.That(details.DiscardLocalWork, Is.True);
+
+                details.Refresh(second);
+
+                Assert.That(details.CurrentInfo, Is.SameAs(second));
+                Assert.That(details.IsConfirmationPending, Is.False);
+                Assert.That(details.ConfirmedAssessment, Is.Null);
+                Assert.That(details.DiscardLocalWork, Is.False);
+            }
+        }
+
+        [Test]
+        public void RemoveDetails_UnverifiedResidualContentsCannotBeConfirmed()
+        {
+            var primaryActions = new VisualElement();
+            var detailsHeader = new VisualElement();
+            var detailsLinks = new VisualElement
+            {
+                name = PackageManagerGitHubDetails.NativeDetailsLinksContainerName
+            };
+            detailsHeader.Add(detailsLinks);
+            detailsHeader.Add(new VisualElement
+            {
+                name = PackageManagerGitHubDetails.NativeHelpBoxContainerName
+            });
+            Assert.That(
+                PackageManagerSubmoduleRemoveDetails.TryCreate(
+                    primaryActions,
+                    detailsLinks,
+                    _ => Assert.Fail("Unverified files must never be discarded."),
+                    out PackageManagerSubmoduleRemoveDetails details),
+                Is.True);
+            using (details)
+            {
+                var info = new PackageManagerSubmoduleInfo(
+                    "com.example.package",
+                    "Packages/com.example.package",
+                    "/project/Packages/com.example.package",
+                    "https://github.com/example/package.git",
+                    true);
+                var assessment = new SubmoduleRemovalAssessment
+                {
+                    Path = info.PackagePath,
+                    HasWorkingTreeChanges = true,
+                    HasUnverifiedWorktreeContents = true,
+                    WorktreeStatus = "orphaned.txt\n"
+                };
+                details.Refresh(info);
+                details.SetRemoveState(true, "Ready");
+
+                Assert.That(details.ShowConfirmation(assessment), Is.False);
+
+                Assert.That(details.IsConfirmationPending, Is.False);
+                Assert.That(details.ConfirmedAssessment, Is.Null);
+                Assert.That(details.DiscardLocalWork, Is.False);
+                Assert.That(
+                    details.Feedback.messageType,
+                    Is.EqualTo(HelpBoxMessageType.Error));
+                Assert.That(details.Feedback.text, Does.Contain("unverified"));
             }
         }
 
@@ -1008,7 +1385,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                 PackageManagerGitHubDetails.TryCreate(
                     primaryActions,
                     detailsLinks,
-                    (_, _) => { },
+                    (_, _, _) => { },
                     _ => { },
                     false,
                     out PackageManagerGitHubDetails details),
@@ -1021,6 +1398,22 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
             out VisualElement extensionItems,
             out VisualElement detailsLinks,
             Action<PackageManagerGitHubRepository, string> install,
+            Action<string> openUrl)
+        {
+            return CreateDetails(
+                out primaryActions,
+                out extensionItems,
+                out detailsLinks,
+                (repository, branch, _) => install(repository, branch),
+                openUrl);
+        }
+
+        private static PackageManagerGitHubDetails CreateDetails(
+            out VisualElement primaryActions,
+            out VisualElement extensionItems,
+            out VisualElement detailsLinks,
+            Action<PackageManagerGitHubRepository, string,
+                PackageManagerGitInstallMode> install,
             Action<string> openUrl)
         {
             var root = new VisualElement();

@@ -1,7 +1,7 @@
 # User Guide
 
-On Unity versions with Package Manager extension-page support, open **Window >
-Package Manager** and select **GitHub** under **Sources**. This is a fully native
+On Unity 6000.5.x, open **Window > Package Manager** and select **GitHub** under
+**Sources**. This is a fully native
 Package Manager page that combines installed GitHub submodules with valid UPM
 packages discovered incrementally from every authenticated personal and
 organization repository page. It uses Unity's package list, search, sorting,
@@ -18,9 +18,9 @@ Open **Window > Package Management > Git Submodule Manager** for the complete
 management workspace. It contains **In Project**, authenticated GitHub
 discovery, direct add, initialize, update, retarget, and remove workflows.
 
-On older supported Unity versions without the extension-page contract, the menu
-opens the management workspace embedded in Package Manager. Use **Back to
-Package Manager** to return to Unity's package list.
+If a supported Unity 6000.5 patch changes the extension-page contract, the menu
+uses the guarded management workspace embedded in Package Manager. Use **Back
+to Package Manager** to return to Unity's package list.
 
 Installed package submodules are labelled **Submodule** instead of **Custom** on
 normal Package Manager pages. Inside **Sources > GitHub**, installed and
@@ -130,7 +130,7 @@ committing; a committed submodule removal is expected to leave staged changes.
 
 ## GitHub Discovery
 
-On Unity versions with extension-page support, **Sources > GitHub** starts one
+On Unity 6000.5.x, **Sources > GitHub** starts one
 authenticated catalogue scan. It walks all 50-item repository pages for the
 current GitHub user and every organization returned for that account. Root
 `package.json` files are validated in bounded GitHub GraphQL batches, and valid
@@ -161,9 +161,8 @@ It validates the cloned manifest and Git registration, then safely rolls back a
 failed clone, package-name mismatch, or failed postcondition whenever process
 termination and repository ownership can be proven.
 
-The management workspace retains its interactive **GitHub** discovery tab. On
-older Unity versions this embedded workflow provides discovery inside Package
-Manager:
+The management workspace retains its interactive **GitHub** discovery tab for
+detailed browsing and as a guarded embedded fallback inside Package Manager:
 
 1. Choose the current user or a visible organization.
 2. Search by repository name or description.

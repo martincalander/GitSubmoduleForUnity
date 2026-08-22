@@ -21,21 +21,21 @@ Manage Unity packages as real Git submodules, directly from the Editor.
 <p align="center">
   <a href="https://github.com/martincalander/GitSubmoduleManager/actions/workflows/ci.yml"><img alt="Sanity Checks" src="https://github.com/martincalander/GitSubmoduleManager/actions/workflows/ci.yml/badge.svg"></a>
   <a href="https://github.com/martincalander/GitSubmoduleManager/releases"><img alt="Package version" src="https://img.shields.io/github/package-json/v/martincalander/GitSubmoduleManager?filename=package.json&label=package"></a>
-  <img alt="Unity 2021.3 or newer" src="https://img.shields.io/badge/Unity-2021.3%2B-222C37?logo=unity&logoColor=white">
+  <img alt="Unity 6000.5.x final releases" src="https://img.shields.io/badge/Unity-6000.5.x-222C37?logo=unity&logoColor=white">
   <img alt="Editor only" src="https://img.shields.io/badge/scope-Editor%20only-555">
   <a href="LICENSE.md"><img alt="MIT License" src="https://img.shields.io/badge/license-MIT-blue"></a>
 </p>
 
 Git Submodule Manager is an editor-only Unity package for installing and managing
-UPM packages as Git submodules under `Packages/`. Supported Unity versions add a
+UPM packages as Git submodules under `Packages/`. Unity 6000.5 final releases add a
 native GitHub source to Package Manager, while a focused management workspace
 handles Git operations. The resulting repository structure remains completely
 standard and visible to normal Git tooling.
 
 ## What It Does
 
-- Adds a native **Sources > GitHub** page on Unity versions that support Package
-  Manager extension pages. It incrementally discovers valid UPM packages across
+- Adds a native **Sources > GitHub** page on supported Unity 6000.5 final
+  releases. It incrementally discovers valid UPM packages across
   the authenticated user's repositories and organizations, combines them with
   installed GitHub submodules, and uses Unity's package list, search, sort,
   selection, and details UI.
@@ -59,8 +59,8 @@ standard and visible to normal Git tooling.
 - Keeps the full installed-package management, GitHub discovery, add, update,
   retarget, and remove workspace at **Window > Package Management > Git
   Submodule Manager**.
-- Falls back to that workspace embedded in Package Manager on older supported
-  Unity versions.
+- Keeps that workspace embedded in Package Manager as a guarded fallback if a
+  Unity 6000.5 patch changes an internal native-page contract.
 - Adds a package from a secure HTTPS or SSH repository URL, or from an explicit
   local repository path.
 - Discovers repositories from GitHub users and organizations when `gh` is
@@ -78,7 +78,7 @@ tools, or manage packages outside `Packages/`.
 
 | Dependency | Requirement | Used for |
 | --- | --- | --- |
-| Unity | 2021.3 or newer | Editor host and UPM support |
+| Unity | 6000.5.x final releases (`6000.5.*f1`) | Native Package Manager integration |
 | [Git CLI](https://git-scm.com/downloads) | Required | All submodule operations |
 | [GitHub CLI](https://cli.github.com/) | Optional, recommended | Authenticated repository discovery |
 
@@ -109,7 +109,7 @@ managed by the tool are still added to the project as Git submodules.
 
 ## Usage
 
-1. On supported Unity versions, open **Window > Package Manager** and select
+1. On Unity 6000.5.x, open **Window > Package Manager** and select
    **GitHub** under **Sources**. Valid packages discovered from your personal
    repositories and organizations appear incrementally beside installed GitHub
    submodules in Unity's native package list and details UI. Organization
@@ -119,8 +119,9 @@ managed by the tool are still added to the project as Git submodules.
    branch (the repository default is preselected), and choose **Install**. Use
    **Refresh** to rescan GitHub and the project.
 3. Open **Window > Package Management > Git Submodule Manager** for the full
-   management, discovery, add, update, retarget, and remove workspace. On older
-   Unity versions, this menu opens the embedded Package Manager fallback.
+   management, discovery, add, update, retarget, and remove workspace. If a
+   supported patch changes a native-page contract, this menu opens the guarded
+   embedded Package Manager fallback.
 4. Complete the one-time setup page. Git is required; GitHub CLI is optional
    but recommended for repository discovery.
 5. If prompted, install Git or GitHub CLI with explicit approval, then choose
@@ -144,7 +145,7 @@ packages as results become available. **Refresh** starts a new project and
 GitHub scan.
 
 The embedded management workspace retains its interactive discovery controls
-for older Unity versions and detailed repository browsing:
+for detailed repository browsing and guarded compatibility fallback:
 
 - results are requested 50 repositories at a time;
 - searches execute through the GitHub API rather than filtering a full local

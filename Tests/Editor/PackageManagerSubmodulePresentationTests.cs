@@ -911,13 +911,18 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
         public void SourceMutation_GitHubUsesGitHubLabelAndThemeIconMarker()
         {
             var card = new VisualElement();
+            card.style.display = DisplayStyle.None;
+            card.style.visibility = Visibility.Hidden;
             var icon = new VisualElement();
             icon.AddToClassList(
                 PackageManagerSubmodulePresentation.InformationCardIconClassName);
             icon.style.display = DisplayStyle.None;
+            icon.style.visibility = Visibility.Hidden;
             var content = new Label("Custom");
             content.AddToClassList(
                 PackageManagerSubmodulePresentation.InformationCardTextClassName);
+            content.style.display = DisplayStyle.None;
+            content.style.visibility = Visibility.Hidden;
             card.Add(icon);
             card.Add(content);
             var texture = new Texture2D(1, 1) { hideFlags = HideFlags.HideAndDontSave };
@@ -931,10 +936,14 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
 
                 Assert.That(applied, Is.True);
                 Assert.That(content.text, Is.EqualTo("GitHub"));
+                Assert.That(content.style.display.value, Is.EqualTo(DisplayStyle.Flex));
+                Assert.That(content.style.visibility.value, Is.EqualTo(Visibility.Visible));
                 Assert.That(icon.ClassListContains(
                     PackageManagerSubmodulePresentation.CustomSourceIconClassName), Is.True);
                 Assert.That(icon.style.display.value, Is.EqualTo(DisplayStyle.Flex));
+                Assert.That(icon.style.visibility.value, Is.EqualTo(Visibility.Visible));
                 Assert.That(card.style.display.value, Is.EqualTo(DisplayStyle.Flex));
+                Assert.That(card.style.visibility.value, Is.EqualTo(Visibility.Visible));
             }
             finally
             {
@@ -1134,6 +1143,15 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                 PackageManagerGitHubNativePresentationPatch.GetTechnicalNameTargets();
             IReadOnlyList<MethodInfo> authorTargets =
                 PackageManagerGitHubNativePresentationPatch.GetAuthorTargets();
+            MethodInfo dependenciesGetter =
+                PackageManagerGitHubNativePresentationPatch
+                    .GetDependenciesGetterTarget();
+            IReadOnlyList<MethodInfo> dependenciesTabTargets =
+                PackageManagerGitHubNativePresentationPatch
+                    .GetDependenciesTabValidityTargets();
+            IReadOnlyList<MethodInfo> packageLinkTargets =
+                PackageManagerGitHubNativePresentationPatch
+                    .GetPackageLinkTargets();
             IReadOnlyList<MethodInfo> refreshTargets =
                 PackageManagerGitHubNativePresentationPatch.GetPageRefreshTargets();
             IReadOnlyList<MethodInfo> activationTargets =
@@ -1143,6 +1161,9 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
 
             Assert.That(technicalTargets, Is.Not.Empty);
             Assert.That(authorTargets, Is.Not.Empty);
+            Assert.That(dependenciesGetter, Is.Not.Null);
+            Assert.That(dependenciesTabTargets, Is.Not.Empty);
+            Assert.That(packageLinkTargets, Has.Count.EqualTo(3));
             Assert.That(refreshTargets, Is.Not.Empty);
             Assert.That(activationTargets, Is.Not.Empty);
             Assert.That(loadingTargets, Is.Not.Empty);
@@ -1173,6 +1194,33 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                         target,
                         PackageManagerGitHubNativePresentationPatch
                             .GetAuthorPostfix()),
+                    Is.True);
+            }
+
+            Assert.That(
+                PackageManagerGitHubNativePresentationPatch.IsPatchApplied(
+                    dependenciesGetter,
+                    PackageManagerGitHubNativePresentationPatch
+                        .GetDependenciesGetterPostfix()),
+                Is.True);
+
+            foreach (MethodInfo target in dependenciesTabTargets)
+            {
+                Assert.That(
+                    PackageManagerGitHubNativePresentationPatch.IsPatchApplied(
+                        target,
+                        PackageManagerGitHubNativePresentationPatch
+                            .GetDependenciesTabValidityPostfix()),
+                    Is.True);
+            }
+
+            foreach (MethodInfo target in packageLinkTargets)
+            {
+                Assert.That(
+                    PackageManagerGitHubNativePresentationPatch.IsPatchApplied(
+                        target,
+                        PackageManagerGitHubNativePresentationPatch
+                            .GetPackageLinkPostfix()),
                     Is.True);
             }
 

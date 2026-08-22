@@ -528,9 +528,64 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                        StringComparison.Ordinal) &&
                    string.Equals(left.Version, right.Version, StringComparison.Ordinal) &&
                    string.Equals(
+                       left.PackageDescription,
+                       right.PackageDescription,
+                       StringComparison.Ordinal) &&
+                   string.Equals(
+                       left.MinimumUnityVersion,
+                       right.MinimumUnityVersion,
+                       StringComparison.Ordinal) &&
+                   string.Equals(
+                       left.AuthorName,
+                       right.AuthorName,
+                       StringComparison.Ordinal) &&
+                   string.Equals(
+                       left.DocumentationUrl,
+                       right.DocumentationUrl,
+                       StringComparison.Ordinal) &&
+                   string.Equals(
+                       left.ChangelogUrl,
+                       right.ChangelogUrl,
+                       StringComparison.Ordinal) &&
+                   string.Equals(
+                       left.LicensesUrl,
+                       right.LicensesUrl,
+                       StringComparison.Ordinal) &&
+                   DependenciesEqual(left.Dependencies, right.Dependencies) &&
+                   string.Equals(
                        left.PackageManifestBlobOid,
                        right.PackageManifestBlobOid,
                        StringComparison.Ordinal);
+        }
+
+        private static bool DependenciesEqual(
+            IReadOnlyList<PackageManifestDependency> left,
+            IReadOnlyList<PackageManifestDependency> right)
+        {
+            if (ReferenceEquals(left, right))
+                return true;
+            if (left == null || right == null || left.Count != right.Count)
+                return false;
+
+            for (int index = 0; index < left.Count; index++)
+            {
+                PackageManifestDependency leftDependency = left[index];
+                PackageManifestDependency rightDependency = right[index];
+                if (leftDependency == null || rightDependency == null ||
+                    !string.Equals(
+                        leftDependency.Name,
+                        rightDependency.Name,
+                        StringComparison.Ordinal) ||
+                    !string.Equals(
+                        leftDependency.Version,
+                        rightDependency.Version,
+                        StringComparison.Ordinal))
+                {
+                    return false;
+                }
+            }
+
+            return true;
         }
 
         private static void OnDiscoverySnapshotChanged()
@@ -703,6 +758,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 FieldInfo versionNameField,
                 FieldInfo versionDisplayNameField,
                 FieldInfo versionDescriptionField,
+                FieldInfo versionMinimumUnityVersionField,
                 FieldInfo versionStringField,
                 FieldInfo publishedDateTicksField)
             {
@@ -737,6 +793,8 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 VersionNameField = versionNameField;
                 VersionDisplayNameField = versionDisplayNameField;
                 VersionDescriptionField = versionDescriptionField;
+                VersionMinimumUnityVersionField =
+                    versionMinimumUnityVersionField;
                 VersionStringField = versionStringField;
                 PublishedDateTicksField = publishedDateTicksField;
             }
@@ -772,6 +830,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             private FieldInfo VersionNameField { get; }
             private FieldInfo VersionDisplayNameField { get; }
             private FieldInfo VersionDescriptionField { get; }
+            private FieldInfo VersionMinimumUnityVersionField { get; }
             private FieldInfo VersionStringField { get; }
             private FieldInfo PublishedDateTicksField { get; }
 
@@ -891,6 +950,10 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                     FieldInfo versionDescriptionField = FindFieldInHierarchy(
                         placeholderPackageVersionType,
                         "m_Description");
+                    FieldInfo versionMinimumUnityVersionField =
+                        FindFieldInHierarchy(
+                            placeholderPackageVersionType,
+                            "m_MinimumUnityVersion");
                     FieldInfo versionStringField = FindFieldInHierarchy(
                         placeholderPackageVersionType,
                         "m_VersionString");
@@ -923,6 +986,8 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                         versionDisplayNameField.FieldType != typeof(string) ||
                         versionDescriptionField == null ||
                         versionDescriptionField.FieldType != typeof(string) ||
+                        (versionMinimumUnityVersionField != null &&
+                         versionMinimumUnityVersionField.FieldType != typeof(string)) ||
                         versionStringField == null ||
                         versionStringField.FieldType != typeof(string) ||
                         publishedDateTicksField == null ||
@@ -963,6 +1028,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                         versionNameField,
                         versionDisplayNameField,
                         versionDescriptionField,
+                        versionMinimumUnityVersionField,
                         versionStringField,
                         publishedDateTicksField);
                 }
@@ -1030,7 +1096,12 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                             : repository.PackageName.Trim();
                     string packageName = repository.PackageName.Trim();
                     string version = repository.Version.Trim();
-                    string description = repository.Description ?? string.Empty;
+                    string description = !string.IsNullOrWhiteSpace(
+                            repository.PackageDescription)
+                        ? repository.PackageDescription.Trim()
+                        : repository.Description ?? string.Empty;
+                    string minimumUnityVersion =
+                        repository.MinimumUnityVersion ?? string.Empty;
                     long publishedDateTicks = ParsePublishedDateTicks(
                         repository.UpdatedAt);
 
@@ -1046,6 +1117,9 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                     VersionNameField.SetValue(placeholder, packageName);
                     VersionDisplayNameField.SetValue(placeholder, displayName);
                     VersionDescriptionField.SetValue(placeholder, description);
+                    VersionMinimumUnityVersionField?.SetValue(
+                        placeholder,
+                        minimumUnityVersion);
                     VersionStringField.SetValue(placeholder, version);
                     PublishedDateTicksField.SetValue(placeholder, publishedDateTicks);
 

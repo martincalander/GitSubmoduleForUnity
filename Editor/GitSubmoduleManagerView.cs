@@ -172,7 +172,10 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         }
 
         private bool IsRepositoryOperationExecutionBusy =>
-            GitOperationService.IsBusy || cliInstallInProgress;
+            GitOperationService.IsBusy ||
+            PackageManagerProjectResolutionService.IsBusy ||
+            PackageManagerReadOnlyGitInstallService.IsBusy ||
+            cliInstallInProgress;
 
         private bool IsRepositoryOperationBusy =>
             IsRepositoryOperationBusyState(

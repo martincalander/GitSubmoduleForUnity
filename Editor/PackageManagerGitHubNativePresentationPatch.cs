@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Reflection;
 using HarmonyLib;
 using UnityEditor;
+using UnityEditor.PackageManager;
 using UnityEngine;
 
 namespace MartinCalander.GitSubmoduleManager.Editor
@@ -21,6 +22,14 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             "UnityEditor.PackageManager.UI.Internal.TechnicalNameInfoCard";
         internal const string PackageAuthorLabelTypeName =
             "UnityEditor.PackageManager.UI.Internal.PackageAuthorLabel";
+        internal const string BasePackageVersionTypeName =
+            "UnityEditor.PackageManager.UI.Internal.BasePackageVersion";
+        internal const string PackageDetailsDependenciesTabTypeName =
+            "UnityEditor.PackageManager.UI.Internal.PackageDetailsDependenciesTab";
+        internal const string PackageLinkFactoryTypeName =
+            "UnityEditor.PackageManager.UI.Internal.PackageLinkFactory";
+        internal const string PackageLinkTypeName =
+            "UnityEditor.PackageManager.UI.Internal.PackageLink";
         internal const string PageRefreshHandlerTypeName =
             "UnityEditor.PackageManager.UI.Internal.PageRefreshHandler";
         internal const string PackageStatusBarTypeName =
@@ -76,6 +85,29 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                     PatchPostfixIfNeeded(target, GetAuthorPostfix());
                 }
 
+                MethodInfo dependenciesGetter = GetDependenciesGetterTarget();
+                if (dependenciesGetter != null)
+                {
+                    foundTarget = true;
+                    PatchPostfixIfNeeded(
+                        dependenciesGetter,
+                        GetDependenciesGetterPostfix());
+                }
+
+                foreach (MethodInfo target in GetDependenciesTabValidityTargets())
+                {
+                    foundTarget = true;
+                    PatchPostfixIfNeeded(
+                        target,
+                        GetDependenciesTabValidityPostfix());
+                }
+
+                foreach (MethodInfo target in GetPackageLinkTargets())
+                {
+                    foundTarget = true;
+                    PatchPostfixIfNeeded(target, GetPackageLinkPostfix());
+                }
+
                 foreach (MethodInfo target in GetPageRefreshTargets())
                 {
                     foundTarget = true;
@@ -118,6 +150,65 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 PackageVersionInterfaceTypeName);
         }
 
+        internal static MethodInfo GetDependenciesGetterTarget()
+        {
+            Type type = PackageManagerSubmoduleHarmonyPatch.FindLoadedType(
+                BasePackageVersionTypeName);
+            PropertyInfo property = type?.GetProperty("dependencies", AnyInstance);
+            MethodInfo getter = property?.GetGetMethod(true);
+            return getter != null &&
+                   !getter.IsStatic &&
+                   getter.GetParameters().Length == 0 &&
+                   getter.ReturnType == typeof(DependencyInfo[])
+                ? getter
+                : null;
+        }
+
+        internal static IReadOnlyList<MethodInfo> GetDependenciesTabValidityTargets()
+        {
+            return FindSingleArgumentTargets(
+                PackageDetailsDependenciesTabTypeName,
+                "IsValid",
+                typeof(bool),
+                PackageVersionInterfaceTypeName);
+        }
+
+        internal static IReadOnlyList<MethodInfo> GetPackageLinkTargets()
+        {
+            var matches = new List<MethodInfo>();
+            Type type = PackageManagerSubmoduleHarmonyPatch.FindLoadedType(
+                PackageLinkFactoryTypeName);
+            if (type == null)
+                return matches;
+
+            var methodNames = new HashSet<string>(StringComparer.Ordinal)
+            {
+                "CreateUpmDocumentationLink",
+                "CreateUpmChangelogLink",
+                "CreateUpmLicenseLink"
+            };
+            foreach (MethodInfo method in type.GetMethods(AnyInstance))
+            {
+                ParameterInfo[] parameters = method.GetParameters();
+                if (methodNames.Contains(method.Name) &&
+                    !method.IsStatic &&
+                    string.Equals(
+                        method.ReturnType.FullName,
+                        PackageLinkTypeName,
+                        StringComparison.Ordinal) &&
+                    parameters.Length == 1 &&
+                    string.Equals(
+                        parameters[0].ParameterType.FullName,
+                        PackageVersionInterfaceTypeName,
+                        StringComparison.Ordinal))
+                {
+                    matches.Add(method);
+                }
+            }
+
+            return matches;
+        }
+
         internal static IReadOnlyList<MethodInfo> GetPageRefreshTargets()
         {
             return FindSingleArgumentTargets(
@@ -156,6 +247,27 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         {
             return typeof(PackageManagerGitHubNativePresentationPatch).GetMethod(
                 nameof(AuthorRefreshPostfix),
+                AnyStatic);
+        }
+
+        internal static MethodInfo GetDependenciesGetterPostfix()
+        {
+            return typeof(PackageManagerGitHubNativePresentationPatch).GetMethod(
+                nameof(DependenciesGetterPostfix),
+                AnyStatic);
+        }
+
+        internal static MethodInfo GetDependenciesTabValidityPostfix()
+        {
+            return typeof(PackageManagerGitHubNativePresentationPatch).GetMethod(
+                nameof(DependenciesTabValidityPostfix),
+                AnyStatic);
+        }
+
+        internal static MethodInfo GetPackageLinkPostfix()
+        {
+            return typeof(PackageManagerGitHubNativePresentationPatch).GetMethod(
+                nameof(PackageLinkPostfix),
                 AnyStatic);
         }
 
@@ -294,6 +406,59 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                    GetPackageStatusBarProperty() != null;
         }
 
+        internal static bool TryCreateDependencyInfos(
+            PackageManagerGitHubRepository repository,
+            out DependencyInfo[] dependencyInfos)
+        {
+            dependencyInfos = null;
+            if (repository == null)
+                return false;
+
+            IReadOnlyList<PackageManifestDependency> dependencies =
+                repository.Dependencies ?? Array.Empty<PackageManifestDependency>();
+            FieldInfo nameField = typeof(DependencyInfo).GetField(
+                "m_Name",
+                AnyInstance);
+            FieldInfo versionField = typeof(DependencyInfo).GetField(
+                "m_Version",
+                AnyInstance);
+            if (nameField == null || versionField == null ||
+                nameField.IsStatic || versionField.IsStatic ||
+                nameField.FieldType != typeof(string) ||
+                versionField.FieldType != typeof(string))
+            {
+                return false;
+            }
+
+            try
+            {
+                var result = new DependencyInfo[dependencies.Count];
+                for (int index = 0; index < dependencies.Count; index++)
+                {
+                    PackageManifestDependency dependency = dependencies[index];
+                    if (dependency == null ||
+                        !GitUtility.IsValidUpmPackageName(dependency.Name) ||
+                        string.IsNullOrWhiteSpace(dependency.Version))
+                    {
+                        return false;
+                    }
+
+                    object boxed = default(DependencyInfo);
+                    nameField.SetValue(boxed, dependency.Name);
+                    versionField.SetValue(boxed, dependency.Version);
+                    result[index] = (DependencyInfo)boxed;
+                }
+
+                dependencyInfos = result;
+                return true;
+            }
+            catch
+            {
+                dependencyInfos = null;
+                return false;
+            }
+        }
+
         private static IReadOnlyList<MethodInfo> FindSingleArgumentRefreshTargets(
             string typeName,
             string parameterTypeName)
@@ -386,12 +551,105 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 {
                     PackageManagerSubmodulePresentation.ApplyAuthorLabel(
                         __instance,
-                        repository.Owner);
+                        string.IsNullOrWhiteSpace(repository.AuthorName)
+                            ? repository.Owner
+                            : repository.AuthorName);
                 }
             }
             catch
             {
                 // Preserve Unity's native author presentation on contract drift.
+            }
+        }
+
+        private static void DependenciesGetterPostfix(
+            object __instance,
+            ref DependencyInfo[] __result)
+        {
+            try
+            {
+                if (PackageManagerGitHubPackageProjection.TryGetRepository(
+                        __instance,
+                        out PackageManagerGitHubRepository repository) &&
+                    TryCreateDependencyInfos(repository, out DependencyInfo[] dependencies))
+                {
+                    __result = dependencies;
+                }
+            }
+            catch
+            {
+                // Preserve Unity's own dependency graph on contract drift.
+            }
+        }
+
+        private static void DependenciesTabValidityPostfix(
+            object __0,
+            ref bool __result)
+        {
+            try
+            {
+                if (!__result &&
+                    PackageManagerGitHubPackageProjection.TryGetRepository(
+                        __0,
+                        out _))
+                {
+                    __result = true;
+                }
+            }
+            catch
+            {
+                // Preserve Unity's native tab visibility on contract drift.
+            }
+        }
+
+        private static void PackageLinkPostfix(
+            MethodBase __originalMethod,
+            object __0,
+            object __result)
+        {
+            try
+            {
+                if (__originalMethod == null || __result == null ||
+                    !PackageManagerGitHubPackageProjection.TryGetRepository(
+                        __0,
+                        out PackageManagerGitHubRepository repository))
+                {
+                    return;
+                }
+
+                string url;
+                switch (__originalMethod.Name)
+                {
+                    case "CreateUpmDocumentationLink":
+                        url = repository.DocumentationUrl;
+                        break;
+                    case "CreateUpmChangelogLink":
+                        url = repository.ChangelogUrl;
+                        break;
+                    case "CreateUpmLicenseLink":
+                        url = repository.LicensesUrl;
+                        break;
+                    default:
+                        return;
+                }
+
+                if (string.IsNullOrEmpty(url))
+                    return;
+
+                PropertyInfo urlProperty = __result.GetType().GetProperty(
+                    "url",
+                    AnyInstance);
+                if (urlProperty != null &&
+                    urlProperty.CanWrite &&
+                    urlProperty.PropertyType == typeof(string) &&
+                    urlProperty.GetIndexParameters().Length == 0)
+                {
+                    urlProperty.SetValue(__result, url, null);
+                }
+            }
+            catch
+            {
+                // Preserve Unity's native package links on contract drift.
             }
         }
 

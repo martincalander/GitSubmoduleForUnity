@@ -1,3 +1,5 @@
+using System;
+
 namespace MartinCalander.GitSubmoduleManager.Editor
 {
     internal enum PackageManifestState
@@ -26,6 +28,14 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         public string DeclaredPackageName;
         public string DeclaredDisplayName;
         public string DeclaredVersion;
+        public string DeclaredDescription;
+        public string DeclaredMinimumUnityVersion;
+        public string DeclaredAuthorName;
+        public string DeclaredDocumentationUrl;
+        public string DeclaredChangelogUrl;
+        public string DeclaredLicensesUrl;
+        public PackageManifestDependency[] DeclaredDependencies =
+            Array.Empty<PackageManifestDependency>();
         public string PackageManifestBlobOid;
 
         public bool HasPackageJson => ManifestState == PackageManifestState.Valid;

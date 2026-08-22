@@ -309,10 +309,21 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             }
 
             object primaryVersion = GetPrimaryVersion(package);
-            return PackageManagerSubmodulePresentation.TryGetPresentation(
-                       primaryVersion,
-                       out PackageManagerSubmoduleInfo info) &&
-                   info.IsGitHub;
+            if (PackageManagerSubmodulePresentation.TryGetPresentation(
+                    primaryVersion,
+                    out PackageManagerSubmoduleInfo info) &&
+                info.IsGitHub)
+            {
+                return true;
+            }
+
+            return PackageManagerReadOnlyGitPackage.TryGetInfo(
+                       package,
+                       out PackageManagerReadOnlyGitInfo readOnlyInfo) &&
+                   GitHubUtility.TryParseGitHubRepo(
+                       readOnlyInfo.RepositoryUrl,
+                       out _,
+                       out _);
         }
 
         internal static string GetGroupName(object package)
@@ -340,6 +351,21 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                         L10n.Tr("Organization - {0}"),
                         repositoryOwner);
                 }
+            }
+
+            if (PackageManagerReadOnlyGitPackage.TryGetInfo(
+                    package,
+                    out PackageManagerReadOnlyGitInfo readOnlyInfo) &&
+                GitHubUtility.TryParseGitHubRepo(
+                    readOnlyInfo.RepositoryUrl,
+                    out string readOnlyOwner,
+                    out _))
+            {
+                return string.IsNullOrWhiteSpace(readOnlyOwner)
+                    ? L10n.Tr("Organization")
+                    : string.Format(
+                        L10n.Tr("Organization - {0}"),
+                        readOnlyOwner.Trim());
             }
 
             object author = GetPropertyValue(primaryVersion, "author");

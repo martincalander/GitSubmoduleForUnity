@@ -444,14 +444,17 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 packageNameField?.SetValueWithoutNotify(resolved);
             }
 
-            if (!string.IsNullOrWhiteSpace(snapshot.DefaultBranch))
+            string automaticBranch = GetPreferredAutomaticBranch(
+                snapshot.DefaultBranch,
+                snapshot.Branches);
+            if (!string.IsNullOrWhiteSpace(automaticBranch))
             {
                 string resolved = ResolveProbedValue(
                     branchField?.value,
                     branchEditedByUser,
                     previousAutomaticBranch,
-                    snapshot.DefaultBranch);
-                previousAutomaticBranch = snapshot.DefaultBranch;
+                    automaticBranch);
+                previousAutomaticBranch = automaticBranch;
                 branchField?.SetValueWithoutNotify(resolved);
             }
 
@@ -928,6 +931,15 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                     GitHubUtility.SanitizeUiDiagnostic(exception.Message));
             }
 
+            if (!string.IsNullOrWhiteSpace(
+                    completion.CommandResult?.CompletionWarning))
+            {
+                EditorUtility.DisplayDialog(
+                    "Git Submodule Added, Package Resolve Pending",
+                    completion.CommandResult.CompletionWarning,
+                    "OK");
+            }
+
             if (this != null)
                 Close();
         }
@@ -1008,6 +1020,15 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         {
             var result = new List<string>();
             var seen = new HashSet<string>(StringComparer.Ordinal);
+            string preferredBranch = GetPreferredAutomaticBranch(
+                defaultBranch,
+                branches);
+            if (!string.IsNullOrWhiteSpace(preferredBranch) &&
+                seen.Add(preferredBranch))
+            {
+                result.Add(preferredBranch);
+            }
+
             string normalizedDefault = defaultBranch?.Trim() ?? string.Empty;
             if (!string.IsNullOrWhiteSpace(normalizedDefault) &&
                 GitUtility.IsValidBranchName(normalizedDefault) &&
@@ -1040,6 +1061,49 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             });
             result.AddRange(remaining);
             return result;
+        }
+
+        internal static string GetPreferredAutomaticBranch(
+            string defaultBranch,
+            IReadOnlyList<string> branches)
+        {
+            if (branches != null)
+            {
+                foreach (string branch in branches)
+                {
+                    string normalized = branch?.Trim() ?? string.Empty;
+                    if (string.Equals(
+                            normalized,
+                            PackageManagerGitHubDetails.PreferredBranch,
+                            StringComparison.Ordinal) &&
+                        GitUtility.IsValidBranchName(normalized))
+                    {
+                        return normalized;
+                    }
+                }
+            }
+
+            string normalizedDefault = defaultBranch?.Trim() ?? string.Empty;
+            if (!string.IsNullOrWhiteSpace(normalizedDefault) &&
+                GitUtility.IsValidBranchName(normalizedDefault))
+            {
+                return normalizedDefault;
+            }
+
+            if (branches != null)
+            {
+                foreach (string branch in branches)
+                {
+                    string normalized = branch?.Trim() ?? string.Empty;
+                    if (!string.IsNullOrWhiteSpace(normalized) &&
+                        GitUtility.IsValidBranchName(normalized))
+                    {
+                        return normalized;
+                    }
+                }
+            }
+
+            return string.Empty;
         }
 
         internal static bool AreMetadataFieldsEnabled(

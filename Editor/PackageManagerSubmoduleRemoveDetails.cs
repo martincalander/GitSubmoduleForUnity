@@ -19,8 +19,11 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             "git-submodule-manager-cancel-remove-action";
         internal const string FeedbackElementName =
             "git-submodule-manager-remove-feedback";
-        internal const string RemoveText = "Remove Submodule";
-        internal const string ConfirmRemoveText = "Confirm Remove";
+        internal const string RemoveText = "Uninstall Submodule";
+        internal const string ConfirmRemoveText = "Confirm Uninstall";
+        internal const string ConfirmDiscardText =
+            "Discard Changes and Uninstall";
+        internal const string InspectingText = "Inspecting...";
         internal const string RemovingText = "Removing...";
         internal const string RetryRemoveText = "Retry Remove";
 
@@ -37,9 +40,12 @@ namespace MartinCalander.GitSubmoduleManager.Editor
 
         private VisualElement ownedFeedbackContainer;
         private PackageManagerSubmoduleInfo currentInfo;
+        private SubmoduleRemovalAssessment confirmedAssessment;
         private string currentIdentity = string.Empty;
         private string availabilityTooltip = string.Empty;
         private bool actionEnabled;
+        private bool discardLocalWork;
+        private bool hasSelection;
         private bool isDisposed;
         private RemoveUiState state;
 
@@ -90,6 +96,11 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         internal bool IsConfirmationPending => state == RemoveUiState.Confirming;
         internal bool IsRemoving => state == RemoveUiState.Removing;
         internal PackageManagerSubmoduleInfo CurrentInfo => currentInfo;
+        internal SubmoduleRemovalAssessment ConfirmedAssessment =>
+            confirmedAssessment;
+        internal bool DiscardLocalWork => discardLocalWork;
+        internal bool IsActionEnabled => actionEnabled;
+        internal string AvailabilityTooltip => availabilityTooltip;
 
         internal static bool TryCreate(
             VisualElement primaryActionsContainer,
@@ -167,13 +178,46 @@ namespace MartinCalander.GitSubmoduleManager.Editor
 
         internal void ShowConfirmation()
         {
-            if (isDisposed || currentInfo == null || !actionEnabled)
-                return;
+            ShowConfirmation(null);
+        }
 
+        internal bool ShowConfirmation(
+            SubmoduleRemovalAssessment assessment)
+        {
+            if (isDisposed || currentInfo == null || !actionEnabled)
+                return false;
+
+            if (assessment?.HasUnverifiedWorktreeContents == true)
+            {
+                ShowError(
+                    "The package directory contains files but is not an " +
+                    "initialized submodule worktree. Move those files to safety " +
+                    "and leave the directory empty before uninstalling. Git " +
+                    "Submodule Manager will not discard unverified files.");
+                return false;
+            }
+
+            confirmedAssessment = assessment?.CreateSnapshot();
+            discardLocalWork = assessment != null && !assessment.IsSafe;
             state = RemoveUiState.Confirming;
             ShowFeedback(
-                BuildConfirmationMessage(currentInfo),
+                BuildConfirmationMessage(currentInfo, assessment),
                 HelpBoxMessageType.Warning);
+            ApplyState();
+            return true;
+        }
+
+        internal void ShowInspecting(string message)
+        {
+            if (isDisposed || currentInfo == null)
+                return;
+
+            state = RemoveUiState.Inspecting;
+            ShowFeedback(
+                string.IsNullOrWhiteSpace(message)
+                    ? L10n.Tr("Inspecting the Git submodule for local work...")
+                    : message,
+                HelpBoxMessageType.Info);
             ApplyState();
         }
 
@@ -235,6 +279,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             feedback.RemoveFromHierarchy();
             ownedFeedbackContainer?.RemoveFromHierarchy();
             currentInfo = null;
+            confirmedAssessment = null;
         }
 
         private void OnRemoveClicked()
@@ -265,6 +310,8 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         private void ResetState()
         {
             state = RemoveUiState.Idle;
+            confirmedAssessment = null;
+            discardLocalWork = false;
             HideFeedback();
             ApplyState();
         }
@@ -274,6 +321,15 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             if (isDisposed)
                 return;
 
+            // The destructive entry point lives in Unity's native Manage menu.
+            // Only the explicit confirmation controls are mounted in the primary
+            // action row, so idle/error/progress states never reintroduce a
+            // standalone Uninstall button.
+            controls.style.display = hasSelection &&
+                                     state == RemoveUiState.Confirming
+                ? DisplayStyle.Flex
+                : DisplayStyle.None;
+
             cancelButton.style.display = state == RemoveUiState.Confirming
                 ? DisplayStyle.Flex
                 : DisplayStyle.None;
@@ -282,12 +338,20 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             switch (state)
             {
                 case RemoveUiState.Confirming:
-                    removeButton.text = L10n.Tr(ConfirmRemoveText);
+                    removeButton.text = L10n.Tr(
+                        discardLocalWork
+                            ? ConfirmDiscardText
+                            : ConfirmRemoveText);
                     removeButton.tooltip = feedback.text;
                     removeButton.SetEnabled(actionEnabled);
                     break;
                 case RemoveUiState.Removing:
                     removeButton.text = L10n.Tr(RemovingText);
+                    removeButton.tooltip = feedback.text;
+                    removeButton.SetEnabled(false);
+                    break;
+                case RemoveUiState.Inspecting:
+                    removeButton.text = L10n.Tr(InspectingText);
                     removeButton.tooltip = feedback.text;
                     removeButton.SetEnabled(false);
                     break;
@@ -352,9 +416,8 @@ namespace MartinCalander.GitSubmoduleManager.Editor
 
         private void SetVisible(bool visible)
         {
-            controls.style.display = visible
-                ? DisplayStyle.Flex
-                : DisplayStyle.None;
+            hasSelection = visible;
+            ApplyState();
             if (!visible)
                 HideFeedback();
         }
@@ -378,11 +441,26 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         internal static string BuildConfirmationMessage(
             PackageManagerSubmoduleInfo info)
         {
+            return BuildConfirmationMessage(info, null);
+        }
+
+        internal static string BuildConfirmationMessage(
+            PackageManagerSubmoduleInfo info,
+            SubmoduleRemovalAssessment assessment)
+        {
             string path = info?.PackagePath ?? string.Empty;
-            return $"Remove {info?.PackageName ?? "this package"} at {path} as a " +
-                   "Git submodule? Git will remove the tracked registration and " +
-                   "worktree. Modified, untracked, ignored, conflicted, or " +
-                   "local-only work is protected and will block removal.";
+            string packageName = info?.PackageName ?? "this package";
+            if (assessment != null && !assessment.IsSafe)
+            {
+                return assessment.BuildWarning() + " " +
+                       $"Uninstall {packageName} at {path} anyway? Git will " +
+                       "remove the package worktree and parent gitlink changes. " +
+                       "This cannot be undone from the Unity UI.";
+            }
+
+            return $"Uninstall {packageName} at {path} as a Git submodule? " +
+                   "Git will remove the tracked registration and worktree after " +
+                   "confirming their state has not changed.";
         }
 
         private static string BuildIdentity(PackageManagerSubmoduleInfo info)
@@ -394,6 +472,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         private enum RemoveUiState
         {
             Idle,
+            Inspecting,
             Confirming,
             Removing,
             Error,

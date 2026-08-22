@@ -558,6 +558,10 @@ namespace MartinCalander.GitSubmoduleManager.Editor
 
             string packagePath = package.Path;
             string displayName = package.PackageName ?? package.Name;
+            string packageName = !string.IsNullOrWhiteSpace(package.PackageName)
+                ? package.PackageName.Trim()
+                : GitUtility.NormalizePath(packagePath)
+                    .Substring(GitUtility.NormalizePath(packagePath).LastIndexOf('/') + 1);
             bool isCurrentPackage = IsCurrentPackage(package);
             SubmoduleRemovalAssessment confirmedAssessment = assessment;
             bool confirmedDiscard = discardLocalWork;
@@ -583,7 +587,14 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 (completed, effectiveOutcome) =>
                     NotifyRemoveComplete(displayName, isCurrentPackage, state, completed, effectiveOutcome),
                 true,
-                new GitOperationMetadata { PackagePath = packagePath, Phase = "remove" });
+                new GitOperationMetadata
+                {
+                    PackagePath = packagePath,
+                    Phase = "remove",
+                    PackageName = packageName,
+                    PackageResolutionExpectation =
+                        PackageManagerResolutionExpectation.Absent
+                });
         }
 
         private void NotifyRemoveComplete(
@@ -1944,7 +1955,14 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 (result, effectiveOutcome) =>
                     NotifyAddSubmoduleComplete(state, result, effectiveOutcome),
                 true,
-                new GitOperationMetadata { PackagePath = path, Phase = "add-validate-or-rollback" });
+                new GitOperationMetadata
+                {
+                    PackagePath = path,
+                    Phase = "add-validate-or-rollback",
+                    PackageName = packageName,
+                    PackageResolutionExpectation =
+                        PackageManagerResolutionExpectation.Embedded
+                });
         }
 
         private static CommandResult RunAddSubmoduleTask(
@@ -1980,7 +1998,10 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                            state.Outcome == GitOperationCompletionOutcome.Succeeded;
             SetAddStatus(
                 success
-                    ? state.Message
+                    ? string.IsNullOrWhiteSpace(result.CompletionWarning)
+                        ? state.Message
+                        : state.Message.TrimEnd() + " " +
+                          result.CompletionWarning.Trim()
                     : BuildEffectiveCompletionError(
                         "Failed to add package",
                         state?.Message ?? "The add operation returned no final state.",

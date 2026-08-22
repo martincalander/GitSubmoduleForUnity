@@ -67,6 +67,13 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- Successful submodule installs, removals, and package-source conversions now
+  hand off to Unity Package Manager's own resolve lifecycle after Git cleanup.
+  The pending handoff survives assembly reloads and waits for the exact embedded,
+  Git, or removed package state before allowing another package mutation.
+- Declared `6000.5.0f1` as the minimum Editor version and limited documented
+  support to Unity `6000.5.*f1` while other Package Manager generations remain
+  unvalidated.
 - Installed repositories on **Sources > GitHub** now retain their **Public** or
   **Private** badge instead of the redundant **Submodule** badge; normal Package
   Manager pages continue to identify installed submodules explicitly.

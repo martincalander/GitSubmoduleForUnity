@@ -6,6 +6,12 @@ using UnityEngine.UIElements;
 
 namespace MartinCalander.GitSubmoduleManager.Editor
 {
+    internal enum PackageManagerGitInstallMode
+    {
+        GitSubmodule,
+        ReadOnlyPackage
+    }
+
     /// <summary>
     /// Owns the small amount of UI added to a native Package Manager details view
     /// for a discovered GitHub repository. The controller never retains Unity's
@@ -21,6 +27,8 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             "git-submodule-manager-github-primary-actions";
         internal const string BranchFieldElementName =
             "git-submodule-manager-github-branch";
+        internal const string InstallModeFieldElementName =
+            "git-submodule-manager-github-install-mode";
         internal const string InstallActionElementName =
             "git-submodule-manager-install-action";
         internal const string CancelInstallActionElementName =
@@ -35,6 +43,10 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         internal const string InstallingText = "Installing...";
         internal const string InstalledText = "Installed";
         internal const string RepositoryLinkText = "Repository";
+        internal const string GitSubmoduleInstallModeText = "Git Submodule";
+        internal const string ReadOnlyPackageInstallModeText =
+            "Read-Only Package";
+        internal const string PreferredBranch = "main";
 
         private const string UpmLinksContainerName = "upmLinksContainer";
         private const string AssetStoreLinksContainerName = "assetStoreLinksContainer";
@@ -48,15 +60,18 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         private readonly VisualElement detailsLinksContainer;
         private readonly VisualElement controls;
         private readonly DropdownField branchField;
+        private readonly DropdownField installModeField;
         private readonly Button installButton;
         private readonly Button cancelInstallButton;
         private readonly HelpBox installFeedback;
         private readonly Label repositoryLinkSeparator;
         private readonly Button repositoryLinkButton;
-        private readonly Action<PackageManagerGitHubRepository, string> installRequested;
+        private readonly Action<PackageManagerGitHubRepository, string,
+            PackageManagerGitInstallMode> installRequested;
         private readonly Action<string> openUrl;
         private readonly RepositoryCoordinator repositoryCoordinator;
         private readonly bool branchDiscoveryEnabled;
+        private readonly bool installModeSelectionEnabled;
 
         private VisualElement ownedLinksContainer;
         private VisualElement ownedFeedbackContainer;
@@ -69,6 +84,8 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         private string observedDefaultBranch = string.Empty;
         private string confirmationSelectionIdentity = string.Empty;
         private string installAvailabilityTooltip = string.Empty;
+        private PackageManagerGitInstallMode selectedInstallMode =
+            PackageManagerGitInstallMode.GitSubmodule;
         private bool userSelectedBranch;
         private bool installActionEnabled;
         private bool isDisposed;
@@ -77,15 +94,18 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         private PackageManagerGitHubDetails(
             VisualElement primaryActionsContainer,
             VisualElement detailsLinksContainer,
-            Action<PackageManagerGitHubRepository, string> installRequested,
+            Action<PackageManagerGitHubRepository, string,
+                PackageManagerGitInstallMode> installRequested,
             Action<string> openUrl,
-            bool enableBranchDiscovery)
+            bool enableBranchDiscovery,
+            bool enableInstallModeSelection)
         {
             this.primaryActionsContainer = primaryActionsContainer;
             this.detailsLinksContainer = detailsLinksContainer;
             this.installRequested = installRequested;
             this.openUrl = openUrl;
             branchDiscoveryEnabled = enableBranchDiscovery;
+            installModeSelectionEnabled = enableInstallModeSelection;
             repositoryCoordinator = enableBranchDiscovery
                 ? new RepositoryCoordinator()
                 : null;
@@ -113,6 +133,31 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             branchField.style.marginRight = 4f;
             branchField.RegisterValueChangedCallback(OnBranchChanged);
             controls.Add(branchField);
+
+            var installModeLabel = new Label(L10n.Tr("Install as"));
+            installModeLabel.style.marginRight = 4f;
+            controls.Add(installModeLabel);
+
+            installModeField = new DropdownField
+            {
+                name = InstallModeFieldElementName,
+                choices = BuildInstallModeChoices()
+            };
+            installModeField.SetValueWithoutNotify(
+                GetInstallModeDisplayName(selectedInstallMode));
+            installModeField.style.minWidth = 120f;
+            installModeField.style.maxWidth = 180f;
+            installModeField.style.flexShrink = 1f;
+            installModeField.style.marginRight = 4f;
+            installModeField.RegisterValueChangedCallback(OnInstallModeChanged);
+            controls.Add(installModeField);
+
+            if (!installModeSelectionEnabled)
+            {
+                installModeLabel.style.display = DisplayStyle.None;
+                installModeField.style.display = DisplayStyle.None;
+                installModeField.SetEnabled(false);
+            }
 
             installButton = new Button(OnInstallClicked)
             {
@@ -160,18 +205,22 @@ namespace MartinCalander.GitSubmoduleManager.Editor
 
         internal VisualElement Controls => controls;
         internal DropdownField BranchField => branchField;
+        internal DropdownField InstallModeField => installModeField;
         internal Button InstallButton => installButton;
         internal Button CancelInstallButton => cancelInstallButton;
         internal HelpBox InstallFeedback => installFeedback;
         internal Button RepositoryLinkButton => repositoryLinkButton;
         internal PackageManagerGitHubRepository CurrentRepository => currentRepository;
         internal string SelectedBranch => selectedBranch;
+        internal PackageManagerGitInstallMode SelectedInstallMode =>
+            selectedInstallMode;
         internal bool IsInstallConfirmationPending =>
             installUiState == InstallUiState.Confirming;
         internal bool IsInstalling => installUiState == InstallUiState.Installing;
         internal bool IsInstallCompleted =>
             installUiState == InstallUiState.Completed;
         internal bool IsDisposed => isDisposed;
+        internal event Action InstallSelectionChanged;
 
         internal static bool TryCreate(
             VisualElement primaryActionsContainer,
@@ -179,6 +228,51 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             Action<PackageManagerGitHubRepository, string> installRequested,
             Action<string> openUrl,
             bool enableBranchDiscovery,
+            out PackageManagerGitHubDetails details)
+        {
+            if (installRequested == null)
+            {
+                details = null;
+                return false;
+            }
+
+            return TryCreate(
+                primaryActionsContainer,
+                detailsLinksContainer,
+                (repository, branch, _) => installRequested(repository, branch),
+                openUrl,
+                enableBranchDiscovery,
+                false,
+                out details);
+        }
+
+        internal static bool TryCreate(
+            VisualElement primaryActionsContainer,
+            VisualElement detailsLinksContainer,
+            Action<PackageManagerGitHubRepository, string,
+                PackageManagerGitInstallMode> installRequested,
+            Action<string> openUrl,
+            bool enableBranchDiscovery,
+            out PackageManagerGitHubDetails details)
+        {
+            return TryCreate(
+                primaryActionsContainer,
+                detailsLinksContainer,
+                installRequested,
+                openUrl,
+                enableBranchDiscovery,
+                true,
+                out details);
+        }
+
+        private static bool TryCreate(
+            VisualElement primaryActionsContainer,
+            VisualElement detailsLinksContainer,
+            Action<PackageManagerGitHubRepository, string,
+                PackageManagerGitInstallMode> installRequested,
+            Action<string> openUrl,
+            bool enableBranchDiscovery,
+            bool enableInstallModeSelection,
             out PackageManagerGitHubDetails details)
         {
             details = null;
@@ -201,7 +295,8 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                     detailsLinksContainer,
                     installRequested,
                     openUrl,
-                    enableBranchDiscovery);
+                    enableBranchDiscovery,
+                    enableInstallModeSelection);
                 return true;
             }
             catch
@@ -227,6 +322,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 selectedBranch = string.Empty;
                 observedDefaultBranch = string.Empty;
                 userSelectedBranch = false;
+                ResetInstallModeSelection();
                 branchField.choices = new List<string>();
                 branchField.SetValueWithoutNotify(string.Empty);
                 repositoryCoordinator?.ClearAllBranchCaches();
@@ -251,16 +347,17 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             if (changedRepository)
             {
                 ResetInstallUi();
-                selectedBranch = nextDefaultBranch;
+                selectedBranch = PreferredBranch;
                 userSelectedBranch = false;
+                ResetInstallModeSelection();
             }
             else if (changedDefaultBranch && !userSelectedBranch)
             {
-                selectedBranch = nextDefaultBranch;
+                selectedBranch = PreferredBranch;
             }
 
             observedDefaultBranch = nextDefaultBranch;
-            ApplyAvailableBranches(GetCachedBranches(repository.Url));
+            ApplyCurrentBranchChoices(repository.Url);
             if (installUiState == InstallUiState.Confirming &&
                 !ConfirmationMatchesCurrentSelection())
             {
@@ -307,7 +404,10 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             confirmationSelectionIdentity = string.Empty;
             ShowInstallFeedback(
                 string.IsNullOrWhiteSpace(message)
-                    ? L10n.Tr("Installing Git package...")
+                    ? BuildInstallingMessage(
+                        currentRepository,
+                        selectedBranch,
+                        selectedInstallMode)
                     : message,
                 HelpBoxMessageType.Info);
             ApplyInstallUiState();
@@ -338,8 +438,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             confirmationSelectionIdentity = string.Empty;
             ShowInstallFeedback(
                 string.IsNullOrWhiteSpace(message)
-                    ? L10n.Tr(
-                        "Git submodule installed. Refreshing Package Manager...")
+                    ? BuildInstalledMessage(selectedInstallMode)
                     : message,
                 HelpBoxMessageType.Info);
             ApplyInstallUiState();
@@ -348,6 +447,28 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         internal void ApplyAvailableBranchesForTests(IEnumerable<string> branches)
         {
             ApplyAvailableBranches(branches);
+        }
+
+        internal void SelectInstallModeForTests(
+            PackageManagerGitInstallMode installMode)
+        {
+            if (!installModeSelectionEnabled)
+                return;
+
+            ApplyInstallModeSelection(installMode);
+        }
+
+        internal void RestoreInstallMode(
+            PackageManagerGitInstallMode installMode)
+        {
+            if (isDisposed || !installModeSelectionEnabled)
+                return;
+
+            selectedInstallMode = installMode;
+            installModeField.SetValueWithoutNotify(
+                GetInstallModeDisplayName(selectedInstallMode));
+            UpdateBranchTooltip();
+            ResetInstallUi();
         }
 
         internal void TriggerInstall()
@@ -381,12 +502,33 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             string defaultBranch,
             IEnumerable<string> discoveredBranches)
         {
+            List<string> discovered = discoveredBranches == null
+                ? null
+                : new List<string>(discoveredBranches);
+            bool mainIsAvailable = discovered == null;
+            if (discovered != null)
+            {
+                foreach (string branch in discovered)
+                {
+                    if (string.Equals(
+                            NormalizeBranch(branch),
+                            PreferredBranch,
+                            StringComparison.Ordinal))
+                    {
+                        mainIsAvailable = true;
+                        break;
+                    }
+                }
+            }
+
             var choices = new List<string>();
             var seen = new HashSet<string>(StringComparer.Ordinal);
+            if (mainIsAvailable)
+                AddValidBranchChoice(PreferredBranch, choices, seen);
             AddValidBranchChoice(defaultBranch, choices, seen);
-            if (discoveredBranches != null)
+            if (discovered != null)
             {
-                foreach (string branch in discoveredBranches)
+                foreach (string branch in discovered)
                     AddValidBranchChoice(branch, choices, seen);
             }
 
@@ -412,10 +554,22 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             PackageManagerGitHubRepository repository,
             string branch)
         {
+            return GetInstallSelectionIdentity(
+                repository,
+                branch,
+                PackageManagerGitInstallMode.GitSubmodule);
+        }
+
+        internal static string GetInstallSelectionIdentity(
+            PackageManagerGitHubRepository repository,
+            string branch,
+            PackageManagerGitInstallMode installMode)
+        {
             string repositoryIdentity = GetInstallRepositoryIdentity(repository);
             return string.IsNullOrEmpty(repositoryIdentity)
                 ? string.Empty
-                : repositoryIdentity + "\n" + NormalizeBranch(branch);
+                : repositoryIdentity + "\n" + NormalizeBranch(branch) +
+                  "\ninstall-mode:" + installMode;
         }
 
         internal static string GetInstallRepositoryIdentity(
@@ -447,6 +601,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             if (branchDiscoveryEnabled)
                 EditorApplication.update -= OnEditorUpdate;
             branchField.UnregisterValueChangedCallback(OnBranchChanged);
+            installModeField.UnregisterValueChangedCallback(OnInstallModeChanged);
             repositoryCoordinator?.Dispose();
             RemoveRepositoryLink();
             installFeedback.RemoveFromHierarchy();
@@ -465,9 +620,25 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             bool branchStateChanged = repositoryCoordinator.TickBranchFetch();
             if (currentRepository != null && branchStateChanged)
             {
-                ApplyAvailableBranches(GetCachedBranches(currentRepository.Url));
+                ApplyCurrentBranchChoices(currentRepository.Url);
                 UpdateBranchTooltip();
             }
+        }
+
+        private void ApplyCurrentBranchChoices(string repositoryUrl)
+        {
+            IEnumerable<string> branches = GetCachedBranches(repositoryUrl);
+            if (branches != null)
+            {
+                ApplyAvailableBranches(branches);
+                return;
+            }
+
+            ApplyAvailableBranches(
+                repositoryCoordinator != null &&
+                repositoryCoordinator.TryGetBranchError(repositoryUrl, out _)
+                    ? Array.Empty<string>()
+                    : null);
         }
 
         private IEnumerable<string> GetCachedBranches(string repositoryUrl)
@@ -490,9 +661,12 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             {
                 string normalizedDefault = NormalizeBranch(
                     currentRepository?.DefaultBranch);
-                nextSelection = choices.Contains(normalizedDefault)
-                    ? normalizedDefault
-                    : choices.Count > 0 ? choices[0] : string.Empty;
+                if (choices.Contains(PreferredBranch))
+                    nextSelection = PreferredBranch;
+                else if (choices.Contains(normalizedDefault))
+                    nextSelection = normalizedDefault;
+                else
+                    nextSelection = choices.Count > 0 ? choices[0] : string.Empty;
                 userSelectedBranch = false;
             }
 
@@ -532,8 +706,12 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             }
             else
             {
-                branchField.tooltip = L10n.Tr(
-                    "Select the branch that will be checked out by the Git submodule.");
+                branchField.tooltip = selectedInstallMode ==
+                                      PackageManagerGitInstallMode.GitSubmodule
+                    ? L10n.Tr(
+                        "Select the branch that will be checked out by the Git submodule.")
+                    : L10n.Tr(
+                        "Select the branch that Unity Package Manager will resolve for the read-only package.");
             }
         }
 
@@ -550,6 +728,31 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             selectedBranch = value;
             userSelectedBranch = true;
             ResetInstallUi();
+            InstallSelectionChanged?.Invoke();
+        }
+
+        private void OnInstallModeChanged(ChangeEvent<string> changeEvent)
+        {
+            if (!installModeSelectionEnabled ||
+                !TryGetInstallMode(changeEvent?.newValue, out var installMode))
+            {
+                installModeField.SetValueWithoutNotify(
+                    GetInstallModeDisplayName(selectedInstallMode));
+                return;
+            }
+
+            ApplyInstallModeSelection(installMode);
+        }
+
+        private void ApplyInstallModeSelection(
+            PackageManagerGitInstallMode installMode)
+        {
+            selectedInstallMode = installMode;
+            installModeField.SetValueWithoutNotify(
+                GetInstallModeDisplayName(selectedInstallMode));
+            UpdateBranchTooltip();
+            ResetInstallUi();
+            InstallSelectionChanged?.Invoke();
         }
 
         private void OnInstallClicked()
@@ -566,8 +769,9 @@ namespace MartinCalander.GitSubmoduleManager.Editor
 
             PackageManagerGitHubRepository repository = currentRepository;
             string branch = selectedBranch;
-            ShowInstalling(BuildInstallingMessage(repository, branch));
-            installRequested(repository, branch);
+            PackageManagerGitInstallMode installMode = selectedInstallMode;
+            ShowInstalling(BuildInstallingMessage(repository, branch, installMode));
+            installRequested(repository, branch, installMode);
         }
 
         private void BeginInstallConfirmation()
@@ -576,7 +780,8 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             {
                 confirmationSelectionIdentity = GetInstallSelectionIdentity(
                     currentRepository,
-                    selectedBranch);
+                    selectedBranch,
+                    selectedInstallMode);
                 if (string.IsNullOrEmpty(confirmationSelectionIdentity))
                 {
                     ShowInstallError(
@@ -589,7 +794,8 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 ShowInstallFeedback(
                     BuildTrustConfirmationMessage(
                         currentRepository,
-                        selectedBranch),
+                        selectedBranch,
+                        selectedInstallMode),
                     HelpBoxMessageType.Warning);
                 ApplyInstallUiState();
             }
@@ -617,7 +823,8 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                        confirmationSelectionIdentity,
                        GetInstallSelectionIdentity(
                            currentRepository,
-                           selectedBranch),
+                           selectedBranch,
+                           selectedInstallMode),
                        StringComparison.Ordinal);
         }
 
@@ -625,27 +832,64 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             PackageManagerGitHubRepository repository,
             string branch)
         {
+            return BuildTrustConfirmationMessage(
+                repository,
+                branch,
+                PackageManagerGitInstallMode.GitSubmodule);
+        }
+
+        internal static string BuildTrustConfirmationMessage(
+            PackageManagerGitHubRepository repository,
+            string branch,
+            PackageManagerGitInstallMode installMode)
+        {
             string safeUrl = GitUtility.RedactCredentials(
                 repository?.Url?.Trim() ?? string.Empty);
             string selected = string.IsNullOrWhiteSpace(branch)
                 ? L10n.Tr("the repository default branch")
                 : branch.Trim();
-            string packagePath = GitSubmoduleAddService.GetPackagePath(
-                repository?.PackageName ?? string.Empty);
-            return $"Install {safeUrl} from {selected} at {packagePath}? " +
+            string destination;
+            if (installMode == PackageManagerGitInstallMode.GitSubmodule)
+            {
+                string packagePath = GitSubmoduleAddService.GetPackagePath(
+                    repository?.PackageName ?? string.Empty);
+                destination = $"as a Git submodule at {packagePath}";
+            }
+            else
+            {
+                destination =
+                    "as a read-only Package Manager Git dependency in Unity's Package Cache";
+            }
+
+            return $"Install {safeUrl} from {selected} {destination}? " +
                    "Unity packages can contain Editor code that executes inside " +
                    "the Unity Editor. Click Confirm Install only if you trust this repository.";
         }
 
         private static string BuildInstallingMessage(
             PackageManagerGitHubRepository repository,
-            string branch)
+            string branch,
+            PackageManagerGitInstallMode installMode)
         {
             string selected = string.IsNullOrWhiteSpace(branch)
                 ? L10n.Tr("the default branch")
                 : branch.Trim();
+            string mode = installMode ==
+                          PackageManagerGitInstallMode.GitSubmodule
+                ? "a Git submodule"
+                : "a read-only Package Manager package";
             return $"Installing {repository?.PackageName ?? "Git package"} " +
-                   $"from {selected} as a Git submodule...";
+                   $"from {selected} as {mode}...";
+        }
+
+        private static string BuildInstalledMessage(
+            PackageManagerGitInstallMode installMode)
+        {
+            return installMode == PackageManagerGitInstallMode.GitSubmodule
+                ? L10n.Tr(
+                    "Git submodule installed. Refreshing Package Manager...")
+                : L10n.Tr(
+                    "Read-only package installed. Refreshing Package Manager...");
         }
 
         private void ResetInstallUi()
@@ -671,6 +915,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                     cancelInstallButton.style.display = DisplayStyle.Flex;
                     cancelInstallButton.SetEnabled(true);
                     branchField.SetEnabled(false);
+                    installModeField.SetEnabled(false);
                     break;
                 case InstallUiState.Installing:
                     installButton.text = L10n.Tr(InstallingText);
@@ -678,6 +923,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                     installButton.SetEnabled(false);
                     cancelInstallButton.style.display = DisplayStyle.None;
                     branchField.SetEnabled(false);
+                    installModeField.SetEnabled(false);
                     break;
                 case InstallUiState.Error:
                     installButton.text = L10n.Tr(RetryInstallText);
@@ -685,6 +931,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                     installButton.SetEnabled(installActionEnabled);
                     cancelInstallButton.style.display = DisplayStyle.None;
                     branchField.SetEnabled(hasBranches);
+                    installModeField.SetEnabled(installModeSelectionEnabled);
                     break;
                 case InstallUiState.Completed:
                     installButton.text = L10n.Tr(InstalledText);
@@ -692,6 +939,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                     installButton.SetEnabled(false);
                     cancelInstallButton.style.display = DisplayStyle.None;
                     branchField.SetEnabled(false);
+                    installModeField.SetEnabled(false);
                     break;
                 default:
                     installButton.text = L10n.Tr(InstallText);
@@ -699,6 +947,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                     installButton.SetEnabled(installActionEnabled);
                     cancelInstallButton.style.display = DisplayStyle.None;
                     branchField.SetEnabled(hasBranches);
+                    installModeField.SetEnabled(installModeSelectionEnabled);
                     break;
             }
         }
@@ -849,9 +1098,64 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             if (!visible)
             {
                 installButton.SetEnabled(false);
+                installModeField.SetEnabled(false);
                 cancelInstallButton.style.display = DisplayStyle.None;
                 HideInstallFeedback();
             }
+        }
+
+        private void ResetInstallModeSelection()
+        {
+            selectedInstallMode = PackageManagerGitInstallMode.GitSubmodule;
+            installModeField.SetValueWithoutNotify(
+                GetInstallModeDisplayName(selectedInstallMode));
+        }
+
+        private static List<string> BuildInstallModeChoices()
+        {
+            return new List<string>
+            {
+                GetInstallModeDisplayName(
+                    PackageManagerGitInstallMode.GitSubmodule),
+                GetInstallModeDisplayName(
+                    PackageManagerGitInstallMode.ReadOnlyPackage)
+            };
+        }
+
+        private static string GetInstallModeDisplayName(
+            PackageManagerGitInstallMode installMode)
+        {
+            return installMode == PackageManagerGitInstallMode.ReadOnlyPackage
+                ? L10n.Tr(ReadOnlyPackageInstallModeText)
+                : L10n.Tr(GitSubmoduleInstallModeText);
+        }
+
+        private static bool TryGetInstallMode(
+            string displayName,
+            out PackageManagerGitInstallMode installMode)
+        {
+            if (string.Equals(
+                    displayName,
+                    GetInstallModeDisplayName(
+                        PackageManagerGitInstallMode.GitSubmodule),
+                    StringComparison.Ordinal))
+            {
+                installMode = PackageManagerGitInstallMode.GitSubmodule;
+                return true;
+            }
+
+            if (string.Equals(
+                    displayName,
+                    GetInstallModeDisplayName(
+                        PackageManagerGitInstallMode.ReadOnlyPackage),
+                    StringComparison.Ordinal))
+            {
+                installMode = PackageManagerGitInstallMode.ReadOnlyPackage;
+                return true;
+            }
+
+            installMode = PackageManagerGitInstallMode.GitSubmodule;
+            return false;
         }
 
         private static void AddValidBranchChoice(

@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
+using System.Linq;
 using UnityEditor;
 
 namespace MartinCalander.GitSubmoduleManager.Editor
@@ -25,6 +26,22 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             PackageName = repository?.DeclaredPackageName ?? string.Empty;
             DisplayName = repository?.DeclaredDisplayName ?? string.Empty;
             Version = repository?.DeclaredVersion ?? string.Empty;
+            PackageDescription = repository?.DeclaredDescription ?? string.Empty;
+            MinimumUnityVersion =
+                repository?.DeclaredMinimumUnityVersion ?? string.Empty;
+            AuthorName = repository?.DeclaredAuthorName ?? string.Empty;
+            DocumentationUrl = repository?.DeclaredDocumentationUrl ?? string.Empty;
+            ChangelogUrl = repository?.DeclaredChangelogUrl ?? string.Empty;
+            LicensesUrl = repository?.DeclaredLicensesUrl ?? string.Empty;
+            PackageManifestDependency[] dependencyCopies = repository?
+                .DeclaredDependencies?
+                .Where(dependency => dependency != null)
+                .Select(dependency => new PackageManifestDependency(
+                    dependency.Name,
+                    dependency.Version))
+                .ToArray() ?? Array.Empty<PackageManifestDependency>();
+            Dependencies = new ReadOnlyCollection<PackageManifestDependency>(
+                dependencyCopies);
             PackageManifestBlobOid = repository?.PackageManifestBlobOid ?? string.Empty;
         }
 
@@ -39,6 +56,13 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         internal string PackageName { get; }
         internal string DisplayName { get; }
         internal string Version { get; }
+        internal string PackageDescription { get; }
+        internal string MinimumUnityVersion { get; }
+        internal string AuthorName { get; }
+        internal string DocumentationUrl { get; }
+        internal string ChangelogUrl { get; }
+        internal string LicensesUrl { get; }
+        internal IReadOnlyList<PackageManifestDependency> Dependencies { get; }
         internal string PackageManifestBlobOid { get; }
     }
 

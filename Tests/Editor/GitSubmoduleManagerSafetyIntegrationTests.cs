@@ -602,10 +602,58 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
             string packageJson = Path.Combine(parentRoot, PackagePath, "package.json");
             File.AppendAllText(packageJson, "\n// deliberately discarded by this test\n");
 
-            bool removed = GitUtility.TryRemoveSubmodule(PackagePath, true, out string error);
+            Assert.That(
+                GitUtility.TryAssessSubmoduleRemoval(
+                    PackagePath,
+                    out SubmoduleRemovalAssessment assessment,
+                    out string assessmentError),
+                Is.True,
+                assessmentError);
+
+            bool removed = GitUtility.TryRemoveSubmodule(
+                PackagePath,
+                assessment,
+                true,
+                out string error);
 
             Assert.That(removed, Is.True, error);
             Assert.That(Directory.Exists(Path.Combine(parentRoot, PackagePath)), Is.False);
+        }
+
+        [Test]
+        public void Remove_LegacyDiscardFlagWithoutExactAssessmentRemainsSafe()
+        {
+            string packageJson = Path.Combine(parentRoot, PackagePath, "package.json");
+            const string localChange = "\n// legacy overload must preserve this\n";
+            File.AppendAllText(packageJson, localChange);
+
+            bool removed = GitUtility.TryRemoveSubmodule(
+                PackagePath,
+                true,
+                out string error);
+
+            Assert.That(removed, Is.False);
+            Assert.That(error, Does.Contain("blocked to protect your work"));
+            Assert.That(File.ReadAllText(packageJson), Does.Contain(localChange.Trim()));
+        }
+
+        [Test]
+        public void RemoveService_AssessmentTaskCapturesDirtyWarningState()
+        {
+            string packageJson = Path.Combine(parentRoot, PackagePath, "package.json");
+            File.AppendAllText(packageJson, "\n// service assessment fixture\n");
+            var state = new GitSubmoduleRemovalAssessmentTaskState();
+
+            CommandResult result = GitSubmoduleRemoveService.RunAssessmentTask(
+                PackagePath,
+                state,
+                CancellationToken.None);
+
+            Assert.That(result.IsSuccess, Is.True, result.StdErr);
+            Assert.That(state.Outcome, Is.EqualTo(GitOperationCompletionOutcome.Succeeded));
+            Assert.That(state.Assessment, Is.Not.Null);
+            Assert.That(state.Assessment.IsSafe, Is.False);
+            Assert.That(state.Assessment.BuildWarning(), Does.Contain("modified, untracked, or ignored"));
         }
 
         [Test]
@@ -672,7 +720,22 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                 Git(cleanParent, "status --porcelain=v2 --untracked-files=all -- .gitmodules \"" + PackagePath + "\"").StdOut,
                 Is.Not.Empty);
 
-            bool removed = GitUtility.TryRemoveSubmodule(PackagePath, out string error);
+            Assert.That(
+                GitUtility.TryAssessSubmoduleRemoval(
+                    PackagePath,
+                    out SubmoduleRemovalAssessment assessment,
+                    out string assessmentError),
+                Is.True,
+                assessmentError);
+            Assert.That(assessment.HasParentChanges, Is.True);
+            Assert.That(assessment.IsSafe, Is.False);
+            Assert.That(assessment.BuildWarning(), Does.Contain("uncommitted or staged"));
+
+            bool removed = GitUtility.TryRemoveSubmodule(
+                PackagePath,
+                assessment,
+                true,
+                out string error);
 
             Assert.That(removed, Is.True, error);
             Assert.That(Directory.Exists(Path.Combine(cleanParent, PackagePath)), Is.False);
@@ -697,7 +760,20 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                 "status --porcelain=v2 --untracked-files=all -- .gitmodules \"" + PackagePath + "\"").StdOut;
             Assert.That(statusBefore, Does.Contain("1 AD"));
 
-            bool removed = GitUtility.TryRemoveSubmodule(PackagePath, out string error);
+            Assert.That(
+                GitUtility.TryAssessSubmoduleRemoval(
+                    PackagePath,
+                    out SubmoduleRemovalAssessment assessment,
+                    out string assessmentError),
+                Is.True,
+                assessmentError);
+            Assert.That(assessment.IsSafe, Is.False);
+
+            bool removed = GitUtility.TryRemoveSubmodule(
+                PackagePath,
+                assessment,
+                true,
+                out string error);
 
             Assert.That(removed, Is.True, error);
             Assert.That(File.Exists(Path.Combine(cleanParent, ".gitmodules")), Is.False);
@@ -724,6 +800,106 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
             Assert.That(
                 Git(parentRoot, "ls-files --error-unmatch -- \"" + PackagePath + "\"").IsSuccess,
                 Is.False);
+        }
+
+        [Test]
+        public void Remove_AssessmentMarksStagedTargetGitmodulesUrlAndBranchEditsDirty()
+        {
+            string replacementUrl = sourceRoot + "-replacement";
+            ExpectGit(
+                parentRoot,
+                "config --file .gitmodules " +
+                "submodule.\"" + PackagePath + "\".url " +
+                GitUtility.Quote(replacementUrl));
+            ExpectGit(
+                parentRoot,
+                "config --file .gitmodules " +
+                "submodule.\"" + PackagePath + "\".branch main");
+            ExpectGit(parentRoot, "add -- .gitmodules");
+
+            bool assessed = GitUtility.TryAssessSubmoduleRemoval(
+                PackagePath,
+                out SubmoduleRemovalAssessment assessment,
+                out string error);
+
+            Assert.That(assessed, Is.True, error);
+            Assert.That(assessment.SubmoduleName, Is.EqualTo(PackagePath));
+            Assert.That(assessment.RepositoryUrl, Is.EqualTo(replacementUrl));
+            Assert.That(assessment.ResolvedRepositoryUrl, Is.EqualTo(sourceRoot));
+            Assert.That(assessment.GitModulesTargetFingerprint, Is.Not.Empty);
+            Assert.That(assessment.GitModulesTargetStatus, Does.Contain("index:"));
+            Assert.That(assessment.HasGitModulesTargetChanges, Is.True);
+            Assert.That(assessment.HasParentChanges, Is.True);
+            Assert.That(assessment.HasOnlyParentGitlinkChanges, Is.False);
+            Assert.That(assessment.IsSafe, Is.False);
+            Assert.That(assessment.BuildWarning(), Does.Contain(".gitmodules registration"));
+        }
+
+        [Test]
+        public void Remove_ExplicitDiscardRefusesTargetGitmodulesEditAfterConfirmation()
+        {
+            ExpectGit(
+                parentRoot,
+                "config --file .gitmodules " +
+                "submodule.\"" + PackagePath + "\".branch main");
+            ExpectGit(parentRoot, "add -- .gitmodules");
+            Assert.That(
+                GitUtility.TryAssessSubmoduleRemoval(
+                    PackagePath,
+                    out SubmoduleRemovalAssessment confirmed,
+                    out string assessmentError),
+                Is.True,
+                assessmentError);
+            string confirmedFingerprint = confirmed.GitModulesTargetFingerprint;
+
+            ExpectGit(
+                parentRoot,
+                "config --file .gitmodules " +
+                "submodule.\"" + PackagePath + "\".branch release");
+            ExpectGit(parentRoot, "add -- .gitmodules");
+
+            bool removed = GitUtility.TryRemoveSubmodule(
+                PackagePath,
+                confirmed,
+                true,
+                out string error);
+
+            Assert.That(removed, Is.False);
+            Assert.That(error, Does.Contain("changed after the removal warning"));
+            Assert.That(
+                ExpectGit(
+                    parentRoot,
+                    "config --file .gitmodules --get " +
+                    "submodule.\"" + PackagePath + "\".branch").StdOut.Trim(),
+                Is.EqualTo("release"));
+            Assert.That(
+                GitUtility.TryAssessSubmoduleRemoval(
+                    PackagePath,
+                    out SubmoduleRemovalAssessment current,
+                    out string currentError),
+                Is.True,
+                currentError);
+            Assert.That(
+                current.GitModulesTargetFingerprint,
+                Is.Not.EqualTo(confirmedFingerprint));
+            Assert.That(File.Exists(Path.Combine(parentRoot, PackagePath, "package.json")), Is.True);
+        }
+
+        [Test]
+        public void Remove_AssessmentRejectsInitializedOriginThatDiffersFromResolvedParentUrl()
+        {
+            ExpectGit(
+                Path.Combine(parentRoot, PackagePath),
+                "remote set-url origin " + GitUtility.Quote(sourceRoot + "-different"));
+
+            bool assessed = GitUtility.TryAssessSubmoduleRemoval(
+                PackagePath,
+                out _,
+                out string error);
+
+            Assert.That(assessed, Is.False);
+            Assert.That(error, Does.Contain("origin URL does not match"));
+            Assert.That(File.Exists(Path.Combine(parentRoot, PackagePath, "package.json")), Is.True);
         }
 
         [Test]
@@ -767,6 +943,31 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
             Assert.That(removed, Is.True, error);
             CollectionAssert.AreEqual(expected, File.ReadAllBytes(gitmodulesPath));
             Assert.That(Git(parentRoot, "diff --quiet -- .gitmodules").IsSuccess, Is.True);
+        }
+
+        [Test]
+        public void Remove_AssessmentReadsCommittedUtf8BomGitmodulesWithoutFinalNewline()
+        {
+            string gitmodulesPath = Path.Combine(parentRoot, ".gitmodules");
+            string targetSection = File.ReadAllText(gitmodulesPath)
+                .Replace("\r\n", "\n")
+                .Replace("\r", "\n")
+                .TrimEnd('\n');
+            byte[] committedContents = EncodeUtf8WithBom(
+                "# committed BOM fixture\n" + targetSection);
+            File.WriteAllBytes(gitmodulesPath, committedContents);
+            ExpectGit(parentRoot, "add -- .gitmodules");
+            ExpectGit(parentRoot, "commit -m \"Commit BOM gitmodules fixture\"");
+
+            bool assessed = GitUtility.TryAssessSubmoduleRemoval(
+                PackagePath,
+                out SubmoduleRemovalAssessment assessment,
+                out string error);
+
+            Assert.That(assessed, Is.True, error);
+            Assert.That(assessment.RepositoryUrl, Is.EqualTo(sourceRoot));
+            Assert.That(assessment.HasGitModulesTargetChanges, Is.False);
+            Assert.That(assessment.IsSafe, Is.True);
         }
 
         [Test]
@@ -1287,6 +1488,26 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
         }
 
         [Test]
+        public void Add_RefusesPhysicalEmptyDestinationDirectory()
+        {
+            string cleanParent = CreateCleanParent("physical-destination-parent");
+            string destination = "Packages/com.example.physical-destination";
+            Directory.CreateDirectory(Path.Combine(cleanParent, destination));
+            RedirectProjectRoot(cleanParent);
+
+            bool prepared = GitUtility.TryPrepareAddSubmodule(
+                sourceRoot,
+                destination,
+                out AddSubmodulePlan _,
+                out string error);
+
+            Assert.That(prepared, Is.False);
+            Assert.That(error, Does.Contain("Package path already exists"));
+            Assert.That(Directory.Exists(Path.Combine(cleanParent, destination)), Is.True);
+            Assert.That(File.Exists(Path.Combine(cleanParent, ".gitmodules")), Is.False);
+        }
+
+        [Test]
         public void Add_RefusesSymlinkGitmodulesWithoutWritingThroughIt()
         {
             if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
@@ -1587,7 +1808,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                 inner,
                 spec => string.Equals(
                     spec.Arguments,
-                    "config --null --file .gitmodules --list",
+                    "config --no-includes --null --file .gitmodules --list",
                     StringComparison.Ordinal),
                 (_, result) => result.StdOutTruncated = true);
 
@@ -1767,6 +1988,13 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                 GitUtility.TryAddSubmodule(sourceRoot, PackagePath, string.Empty, out string addError),
                 Is.True,
                 addError);
+            Assert.That(
+                GitUtility.TryAssessSubmoduleRemoval(
+                    PackagePath,
+                    out SubmoduleRemovalAssessment confirmed,
+                    out string assessmentError),
+                Is.True,
+                assessmentError);
             const string marker = "concurrent replacement bytes\n";
             using (GitUtility.OverrideBeforeGitModulesCleanupMoveForTests(path =>
                    {
@@ -1777,6 +2005,8 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
             {
                 bool removed = GitUtility.TryRemoveSubmodule(
                     PackagePath,
+                    confirmed,
+                    true,
                     out string error,
                     out GitOperationCompletionOutcome outcome);
 

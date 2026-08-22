@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Reflection;
+using System.Text;
 using System.Threading;
 using NUnit.Framework;
 using UnityEngine;
@@ -382,6 +383,164 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
             Assert.That(packageName, Is.EqualTo("com.example.valid-package"));
             Assert.That(displayName, Is.EqualTo("Valid Package"));
             Assert.That(error, Is.Empty);
+        }
+
+        [Test]
+        public void TryReadValidPackageManifestFromJson_ReadsNativeDetailsMetadata()
+        {
+            var success = GitUtility.TryReadValidPackageManifestFromJson(
+                "{\"name\":\"com.example.details\",\"version\":\"1.0.0\"," +
+                "\"displayName\":\"Details Package\"," +
+                "\"description\":\"  Native details description.  \"," +
+                "\"unity\":\"2021.3\",\"unityRelease\":\"0f1\"}",
+                out var packageName,
+                out var displayName,
+                out var version,
+                out var description,
+                out var minimumUnityVersion,
+                out var error);
+
+            Assert.That(success, Is.True, error);
+            Assert.That(packageName, Is.EqualTo("com.example.details"));
+            Assert.That(displayName, Is.EqualTo("Details Package"));
+            Assert.That(version, Is.EqualTo("1.0.0"));
+            Assert.That(description, Is.EqualTo("Native details description."));
+            Assert.That(minimumUnityVersion, Is.EqualTo("2021.3.0f1"));
+            Assert.That(error, Is.Empty);
+        }
+
+        [Test]
+        public void TryReadValidPackageManifestFromJson_ReadsImmutableManifestDetailsAndDependencies()
+        {
+            var success = GitUtility.TryReadPackageManifestMetadataFromJson(
+                "{\"name\":\"com.example.details\",\"version\":\"1.0.0\"," +
+                "\"author\":{\"name\":\"Package Author\"}," +
+                "\"documentationUrl\":\"https://example.com/docs\"," +
+                "\"changelogUrl\":\"https://example.com/changelog\"," +
+                "\"licensesUrl\":\"https://example.com/license\"," +
+                "\"dependencies\":{" +
+                "\"com.example.zeta\":\"2.0.0\"," +
+                "\"com.example.alpha\":\"1.0.0\"}}",
+                out PackageManifestMetadata metadata,
+                out var error);
+
+            Assert.That(success, Is.True, error);
+            Assert.That(metadata, Is.Not.Null);
+            Assert.That(metadata.AuthorName, Is.EqualTo("Package Author"));
+            Assert.That(metadata.DocumentationUrl, Is.EqualTo("https://example.com/docs"));
+            Assert.That(metadata.ChangelogUrl, Is.EqualTo("https://example.com/changelog"));
+            Assert.That(metadata.LicensesUrl, Is.EqualTo("https://example.com/license"));
+            Assert.That(metadata.Dependencies, Has.Count.EqualTo(2));
+            Assert.That(metadata.Dependencies[0].Name, Is.EqualTo("com.example.alpha"));
+            Assert.That(metadata.Dependencies[0].Version, Is.EqualTo("1.0.0"));
+            Assert.That(metadata.Dependencies[1].Name, Is.EqualTo("com.example.zeta"));
+            Assert.That(metadata.Dependencies[1].Version, Is.EqualTo("2.0.0"));
+        }
+
+        [TestCase("[]", "JSON object")]
+        [TestCase("{\"com.example.dependency\":1}", "versions must be strings")]
+        [TestCase("{\"invalid\":\"1.0.0\"}", "invalid UPM package name")]
+        [TestCase("{\"com.example.dependency\":\"\"}", "empty or oversized")]
+        [TestCase("{\"com.example.dependency\":\"https://user:secret@example.com/repo.git\"}", "embedded credentials")]
+        public void TryReadValidPackageManifestFromJson_RejectsUnsafeDependencyMaps(
+            string dependenciesJson,
+            string expectedError)
+        {
+            string json = "{\"name\":\"com.example.package\",\"version\":\"1.0.0\"," +
+                          "\"dependencies\":" + dependenciesJson + "}";
+
+            bool success = GitUtility.TryReadPackageManifestMetadataFromJson(
+                json,
+                out PackageManifestMetadata metadata,
+                out string error);
+
+            Assert.That(success, Is.False);
+            Assert.That(metadata, Is.Null);
+            Assert.That(error, Does.Contain(expectedError));
+        }
+
+        [Test]
+        public void TryReadValidPackageManifestFromJson_RejectsDuplicateDependencyNames()
+        {
+            const string json =
+                "{\"name\":\"com.example.package\",\"version\":\"1.0.0\"," +
+                "\"dependencies\":{" +
+                "\"com.example.dependency\":\"1.0.0\"," +
+                "\"com.example.dependency\":\"2.0.0\"}}";
+
+            bool success = GitUtility.TryReadPackageManifestMetadataFromJson(
+                json,
+                out PackageManifestMetadata metadata,
+                out string error);
+
+            Assert.That(success, Is.False);
+            Assert.That(metadata, Is.Null);
+            Assert.That(error, Does.Contain("could not be parsed"));
+        }
+
+        [Test]
+        public void TryReadValidPackageManifestFromJson_RejectsExcessiveDependencyCount()
+        {
+            var json = new StringBuilder(
+                "{\"name\":\"com.example.package\",\"version\":\"1.0.0\"," +
+                "\"dependencies\":{");
+            for (int index = 0; index < 513; index++)
+            {
+                if (index > 0)
+                    json.Append(',');
+                json.Append("\"com.example.dependency")
+                    .Append(index)
+                    .Append("\":\"1.0.0\"");
+            }
+            json.Append("}}");
+
+            bool success = GitUtility.TryReadPackageManifestMetadataFromJson(
+                json.ToString(),
+                out PackageManifestMetadata metadata,
+                out string error);
+
+            Assert.That(success, Is.False);
+            Assert.That(metadata, Is.Null);
+            Assert.That(error, Does.Contain("512-entry"));
+        }
+
+        [Test]
+        public void TryReadValidPackageManifestFromJson_RejectsExcessiveJsonDepth()
+        {
+            var json = new StringBuilder(
+                "{\"name\":\"com.example.package\",\"version\":\"1.0.0\"," +
+                "\"metadata\":");
+            json.Append('[', 40).Append('0').Append(']', 40).Append('}');
+
+            bool success = GitUtility.TryReadPackageManifestMetadataFromJson(
+                json.ToString(),
+                out PackageManifestMetadata metadata,
+                out string error);
+
+            Assert.That(success, Is.False);
+            Assert.That(metadata, Is.Null);
+            Assert.That(error, Does.Contain("could not be parsed"));
+        }
+
+        [Test]
+        public void TryReadValidPackageManifestFromJson_IgnoresUnsafeOptionalLinks()
+        {
+            const string json =
+                "{\"name\":\"com.example.package\",\"version\":\"1.0.0\"," +
+                "\"documentationUrl\":\"http://example.com/docs\"," +
+                "\"changelogUrl\":\"https://user:secret@example.com/changelog\"," +
+                "\"licensesUrl\":\"https://example.com/license?access_token=secret\"}";
+
+            bool success = GitUtility.TryReadPackageManifestMetadataFromJson(
+                json,
+                out PackageManifestMetadata metadata,
+                out string error);
+
+            Assert.That(success, Is.True, error);
+            Assert.That(metadata.DocumentationUrl, Is.Empty);
+            Assert.That(metadata.ChangelogUrl, Is.Empty);
+            Assert.That(metadata.LicensesUrl, Is.Empty);
+            Assert.That(metadata.Dependencies, Is.Empty);
         }
 
         [TestCase(" Git Submodule Manager ", "com.example.package", "submodule-key", "Git Submodule Manager")]
