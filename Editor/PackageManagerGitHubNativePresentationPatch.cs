@@ -61,6 +61,8 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             AppDomain.CurrentDomain.AssemblyLoad += OnAssemblyLoad;
             PackageManagerGitHubDiscovery.SnapshotChanged +=
                 OnDiscoverySnapshotChanged;
+            PackageManagerSubmoduleSnapshot.SnapshotChanged +=
+                OnDiscoverySnapshotChanged;
             AssemblyReloadEvents.beforeAssemblyReload += OnBeforeAssemblyReload;
             EditorApplication.update += RetryOnUpdate;
             EditorApplication.delayCall += TryPatchDelayed;
@@ -136,6 +138,16 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                     PatchPostfixIfNeeded(
                         visibilityFilterTarget,
                         GetPageVisibilityFilterPostfix());
+                }
+
+                MethodInfo supportedFiltersRefreshTarget =
+                    GetPageSupportedFiltersRefreshTarget();
+                if (supportedFiltersRefreshTarget != null)
+                {
+                    foundTarget = true;
+                    PatchPostfixIfNeeded(
+                        supportedFiltersRefreshTarget,
+                        GetPageSupportedFiltersRefreshPostfix());
                 }
 
                 patchRequested = !foundTarget;
@@ -266,6 +278,24 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 : null;
         }
 
+        internal static MethodInfo GetPageSupportedFiltersRefreshTarget()
+        {
+            Type type = PackageManagerSubmoduleHarmonyPatch.FindLoadedType(
+                PackageManagerSubmoduleNativePage.BasePageTypeName);
+            MethodInfo method = type?.GetMethod(
+                "UpdateSupportedFiltersAsync",
+                AnyInstance,
+                null,
+                Type.EmptyTypes,
+                null);
+            return method != null &&
+                   method.DeclaringType == type &&
+                   !method.IsStatic &&
+                   method.ReturnType == typeof(void)
+                ? method
+                : null;
+        }
+
         internal static FieldInfo GetPagePackageDatabaseField()
         {
             Type type = PackageManagerSubmoduleHarmonyPatch.FindLoadedType(
@@ -323,13 +353,77 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 : null;
         }
 
+        internal static PropertyInfo GetPageFilterCategoriesProperty()
+        {
+            Type filtersType = GetPageFiltersProperty()?.PropertyType;
+            PropertyInfo property = filtersType?.GetProperty(
+                "categories",
+                AnyInstance);
+            return property != null &&
+                   property.CanRead &&
+                   property.GetIndexParameters().Length == 0 &&
+                   typeof(IReadOnlyList<string>).IsAssignableFrom(
+                       property.PropertyType)
+                ? property
+                : null;
+        }
+
+        internal static PropertyInfo GetPageFilterSupportedCategoriesProperty()
+        {
+            Type filtersType = GetPageFiltersProperty()?.PropertyType;
+            PropertyInfo property = filtersType?.GetProperty(
+                "supportedCategories",
+                AnyInstance);
+            return property != null &&
+                   property.CanRead &&
+                   property.GetIndexParameters().Length == 0 &&
+                   typeof(IReadOnlyList<string>).IsAssignableFrom(
+                       property.PropertyType)
+                ? property
+                : null;
+        }
+
+        internal static PropertyInfo GetPageVisualStatesProperty()
+        {
+            Type basePageType = PackageManagerSubmoduleHarmonyPatch.FindLoadedType(
+                PackageManagerSubmoduleNativePage.BasePageTypeName);
+            PropertyInfo property = basePageType?.GetProperty(
+                "visualStates",
+                AnyInstance);
+            return property != null &&
+                   property.CanRead &&
+                   property.GetIndexParameters().Length == 0
+                ? property
+                : null;
+        }
+
+        internal static PropertyInfo GetPageOrderedGroupNamesProperty()
+        {
+            Type visualStatesType = GetPageVisualStatesProperty()?.PropertyType;
+            PropertyInfo property = visualStatesType?.GetProperty(
+                "orderedGroupNames",
+                AnyInstance);
+            return property != null &&
+                   property.CanRead &&
+                   property.GetIndexParameters().Length == 0 &&
+                   typeof(IEnumerable<string>).IsAssignableFrom(
+                       property.PropertyType)
+                ? property
+                : null;
+        }
+
         internal static bool HasPageVisibilityFilterContract()
         {
             return GetPageVisibilityFilterTarget() != null &&
                    GetPagePackageDatabaseField() != null &&
                    GetPagePackageLookupMethod() != null &&
                    GetPageFiltersProperty() != null &&
-                   GetPageFilterLabelsProperty() != null;
+                   GetPageFilterLabelsProperty() != null &&
+                   GetPageFilterCategoriesProperty() != null &&
+                   GetPageFilterSupportedCategoriesProperty() != null &&
+                   GetPageVisualStatesProperty() != null &&
+                   GetPageOrderedGroupNamesProperty() != null &&
+                   GetPageSupportedFiltersRefreshTarget() != null;
         }
 
         internal static MethodInfo GetTechnicalNamePostfix()
@@ -392,6 +486,13 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         {
             return typeof(PackageManagerGitHubNativePresentationPatch).GetMethod(
                 nameof(PageVisibilityFilterPostfix),
+                AnyStatic);
+        }
+
+        internal static MethodInfo GetPageSupportedFiltersRefreshPostfix()
+        {
+            return typeof(PackageManagerGitHubNativePresentationPatch).GetMethod(
+                nameof(PageSupportedFiltersRefreshPostfix),
                 AnyStatic);
         }
 
@@ -527,6 +628,83 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             if (!isPrivate.HasValue)
                 return false;
             return isPrivate.Value ? privateSelected : publicSelected;
+        }
+
+        internal static bool MatchesRepositoryFilters(
+            bool? isPrivate,
+            string repositoryOwner,
+            IReadOnlyList<string> selectedLabels,
+            IReadOnlyList<string> selectedCategories)
+        {
+            if (!MatchesRepositoryVisibility(isPrivate, selectedLabels))
+                return false;
+
+            bool organizationSelected = false;
+            string organizationLabel =
+                PackageManagerSubmoduleNativePage.CreateOrganizationFilterLabel(
+                    repositoryOwner);
+            if (selectedCategories != null)
+            {
+                for (int index = 0; index < selectedCategories.Count; index++)
+                {
+                    string category = selectedCategories[index];
+                    if (!PackageManagerSubmoduleNativePage
+                            .IsOrganizationFilterLabel(category))
+                    {
+                        continue;
+                    }
+
+                    organizationSelected = true;
+                    if (!string.IsNullOrEmpty(organizationLabel) &&
+                        string.Equals(
+                            category,
+                            organizationLabel,
+                            StringComparison.OrdinalIgnoreCase))
+                    {
+                        return true;
+                    }
+                }
+            }
+
+            return !organizationSelected;
+        }
+
+        internal static bool TryGetSupportedCategories(
+            object page,
+            out IReadOnlyList<string> supportedCategories)
+        {
+            return TryGetFilterStringList(
+                page,
+                GetPageFilterSupportedCategoriesProperty(),
+                out supportedCategories);
+        }
+
+        internal static bool TryGetPageGroupNames(
+            object page,
+            out IReadOnlyList<string> groupNames)
+        {
+            groupNames = null;
+            PropertyInfo visualStatesProperty = GetPageVisualStatesProperty();
+            PropertyInfo orderedGroupNamesProperty =
+                GetPageOrderedGroupNamesProperty();
+            if (page == null ||
+                visualStatesProperty == null ||
+                orderedGroupNamesProperty == null)
+            {
+                return false;
+            }
+
+            object visualStates = visualStatesProperty.GetValue(page, null);
+            if (visualStates == null)
+                return false;
+            object orderedGroupNames = orderedGroupNamesProperty.GetValue(
+                visualStates,
+                null);
+            if (!(orderedGroupNames is IEnumerable<string> enumerable))
+                return false;
+
+            groupNames = new List<string>(enumerable);
+            return true;
         }
 
         internal static bool TryGetPackageRepositoryPrivacy(
@@ -832,6 +1010,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 if (!IsGitHubPage(__0))
                     return;
 
+                PackageManagerSubmoduleNativePage.TryConfigureFilters(__0);
                 PackageManagerSubmoduleSnapshot.Refresh();
                 if (!PackageManagerGitHubDiscovery.IsStarted)
                     PackageManagerGitHubDiscovery.EnsureStarted();
@@ -851,6 +1030,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 if (!IsGitHubPage(__0))
                     return;
 
+                PackageManagerSubmoduleNativePage.TryConfigureFilters(__0);
                 PackageManagerSubmoduleSnapshot.Refresh();
                 PackageManagerGitHubDiscovery.EnsureStarted();
             }
@@ -883,12 +1063,19 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             try
             {
                 // Unity remains authoritative for search and its built-in status
-                // predicates. Our visibility facet can only narrow a native match.
+                // predicates. Our repository facets can only narrow a native match.
                 if (!__result || !IsGitHubPage(__instance) ||
                     !TryGetSelectedLabels(
                         __instance,
                         out IReadOnlyList<string> selectedLabels) ||
-                    MatchesRepositoryVisibility(null, selectedLabels))
+                    !TryGetSelectedCategories(
+                        __instance,
+                        out IReadOnlyList<string> selectedCategories) ||
+                    MatchesRepositoryFilters(
+                        null,
+                        string.Empty,
+                        selectedLabels,
+                        selectedCategories))
                 {
                     return;
                 }
@@ -902,14 +1089,33 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                     out bool resolvedPrivacy)
                     ? resolvedPrivacy
                     : null;
-                __result = MatchesRepositoryVisibility(
+                __result = MatchesRepositoryFilters(
                     isPrivate,
-                    selectedLabels);
+                    PackageManagerSubmoduleNativePage
+                        .GetGitHubRepositoryOwner(package),
+                    selectedLabels,
+                    selectedCategories);
             }
             catch
             {
                 // Reflection drift must never hide packages outside our verified
-                // visibility predicate or interfere with another Package Manager page.
+                // repository predicates or interfere with another Package Manager page.
+            }
+        }
+
+        private static void PageSupportedFiltersRefreshPostfix(object __instance)
+        {
+            try
+            {
+                if (IsGitHubPage(__instance))
+                {
+                    PackageManagerSubmoduleNativePage.TryConfigureFilters(
+                        __instance);
+                }
+            }
+            catch
+            {
+                // Unity's supported filters remain authoritative on contract drift.
             }
         }
 
@@ -925,18 +1131,40 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             object page,
             out IReadOnlyList<string> selectedLabels)
         {
-            selectedLabels = null;
+            return TryGetFilterStringList(
+                page,
+                GetPageFilterLabelsProperty(),
+                out selectedLabels);
+        }
+
+        internal static bool TryGetSelectedCategories(
+            object page,
+            out IReadOnlyList<string> selectedCategories)
+        {
+            return TryGetFilterStringList(
+                page,
+                GetPageFilterCategoriesProperty(),
+                out selectedCategories);
+        }
+
+        private static bool TryGetFilterStringList(
+            object page,
+            PropertyInfo listProperty,
+            out IReadOnlyList<string> values)
+        {
+            values = null;
             PropertyInfo filtersProperty = GetPageFiltersProperty();
-            PropertyInfo labelsProperty = GetPageFilterLabelsProperty();
-            if (filtersProperty == null || labelsProperty == null)
+            if (page == null || filtersProperty == null || listProperty == null)
                 return false;
 
             object filters = filtersProperty.GetValue(page, null);
-            object labels = labelsProperty.GetValue(filters, null);
-            if (!(labels is IEnumerable<string> enumerable))
+            if (filters == null)
+                return false;
+            object list = listProperty.GetValue(filters, null);
+            if (!(list is IEnumerable<string> enumerable))
                 return false;
 
-            selectedLabels = new List<string>(enumerable);
+            values = new List<string>(enumerable);
             return true;
         }
 
@@ -1001,8 +1229,15 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                     if (!IsGitHubPage(activePage))
                         continue;
 
+                    PackageManagerSubmoduleNativePage.TryConfigureFilters(
+                        activePage);
                     PackageManagerSubmoduleHarmonyPatch.TryRebuildPackageManagerWindow(
                         window);
+                    // Rebuild refreshes visualStates. Read its final organization
+                    // groups as a fallback for installed packages that are not in
+                    // the current discovery catalogue.
+                    PackageManagerSubmoduleNativePage.TryConfigureFilters(
+                        activePage);
                     object statusBar = GetPropertyValue(root, "packageStatusbar");
                     statusUpdate?.Invoke(statusBar, null);
                     window.rootVisualElement?.MarkDirtyRepaint();
@@ -1099,6 +1334,8 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             EditorApplication.update -= RetryOnUpdate;
             EditorApplication.delayCall -= RefreshOpenGitHubPages;
             PackageManagerGitHubDiscovery.SnapshotChanged -=
+                OnDiscoverySnapshotChanged;
+            PackageManagerSubmoduleSnapshot.SnapshotChanged -=
                 OnDiscoverySnapshotChanged;
             AppDomain.CurrentDomain.AssemblyLoad -= OnAssemblyLoad;
             AssemblyReloadEvents.beforeAssemblyReload -= OnBeforeAssemblyReload;

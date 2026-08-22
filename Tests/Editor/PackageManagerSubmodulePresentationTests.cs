@@ -1102,6 +1102,10 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                 PackageManagerGitHubNativePresentationPatch
                     .GetPageVisibilityFilterPostfix()
                     .GetParameters();
+            ParameterInfo[] supportedFiltersRefreshParameters =
+                PackageManagerGitHubNativePresentationPatch
+                    .GetPageSupportedFiltersRefreshPostfix()
+                    .GetParameters();
             Assert.That(activationParameters.Select(parameter => parameter.Name),
                 Is.EqualTo(new[] { "__0" }));
             Assert.That(loadingParameters.Select(parameter => parameter.Name),
@@ -1113,6 +1117,10 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                 Is.EqualTo(new[] { "__instance", "__0", "__result" }));
             Assert.That(visibilityFilterParameters[2].ParameterType,
                 Is.EqualTo(typeof(bool).MakeByRefType()));
+            Assert.That(
+                supportedFiltersRefreshParameters.Select(
+                    parameter => parameter.Name),
+                Is.EqualTo(new[] { "__instance" }));
         }
 
         [Test]
@@ -1170,6 +1178,9 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
             MethodInfo visibilityFilterTarget =
                 PackageManagerGitHubNativePresentationPatch
                     .GetPageVisibilityFilterTarget();
+            MethodInfo supportedFiltersRefreshTarget =
+                PackageManagerGitHubNativePresentationPatch
+                    .GetPageSupportedFiltersRefreshTarget();
 
             Assert.That(technicalTargets, Is.Not.Empty);
             Assert.That(authorTargets, Is.Not.Empty);
@@ -1180,6 +1191,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
             Assert.That(activationTargets, Is.Not.Empty);
             Assert.That(loadingTargets, Is.Not.Empty);
             Assert.That(visibilityFilterTarget, Is.Not.Null);
+            Assert.That(supportedFiltersRefreshTarget, Is.Not.Null);
             Assert.That(
                 PackageManagerGitHubNativePresentationPatch
                     .HasPageVisibilityFilterContract(),
@@ -1277,6 +1289,12 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                     PackageManagerGitHubNativePresentationPatch
                         .GetPageVisibilityFilterPostfix()),
                 Is.True);
+            Assert.That(
+                PackageManagerGitHubNativePresentationPatch.IsPatchApplied(
+                    supportedFiltersRefreshTarget,
+                    PackageManagerGitHubNativePresentationPatch
+                        .GetPageSupportedFiltersRefreshPostfix()),
+                Is.True);
         }
 
         [Test]
@@ -1325,6 +1343,323 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                     .MatchesRepositoryVisibility(null, new[] { publicLabel }),
                 Is.False,
                 "A selected visibility must not guess the privacy of an unknown repository.");
+        }
+
+        [Test]
+        public void NativeRepositoryFilter_OrganizationSelectionsUseOrSemantics()
+        {
+            string martin = PackageManagerSubmoduleNativePage
+                .CreateOrganizationFilterLabel("martincalander");
+            string essentials = PackageManagerSubmoduleNativePage
+                .CreateOrganizationFilterLabel("EssentialsForUnity");
+
+            Assert.That(
+                PackageManagerGitHubNativePresentationPatch
+                    .MatchesRepositoryFilters(
+                        null,
+                        "MartinCalander",
+                        Array.Empty<string>(),
+                        new[] { martin }),
+                Is.True,
+                "Organization matching should be case-insensitive and must not " +
+                "require repository privacy to be known.");
+            Assert.That(
+                PackageManagerGitHubNativePresentationPatch
+                    .MatchesRepositoryFilters(
+                        null,
+                        "another-owner",
+                        Array.Empty<string>(),
+                        new[] { martin }),
+                Is.False);
+            Assert.That(
+                PackageManagerGitHubNativePresentationPatch
+                    .MatchesRepositoryFilters(
+                        null,
+                        "EssentialsForUnity",
+                        Array.Empty<string>(),
+                        new[] { martin, essentials }),
+                Is.True,
+                "Selecting multiple organizations should include repositories " +
+                "from any selected organization.");
+            Assert.That(
+                PackageManagerGitHubNativePresentationPatch
+                    .MatchesRepositoryFilters(
+                        null,
+                        null,
+                        Array.Empty<string>(),
+                        new[] { martin, essentials }),
+                Is.False,
+                "A selected organization must not guess an unknown repository owner.");
+        }
+
+        [Test]
+        public void NativeRepositoryFilter_VisibilityAndOrganizationUseAndSemantics()
+        {
+            string publicLabel =
+                PackageManagerSubmodulePresentation.PublicRepositoryTagLabel;
+            string privateLabel =
+                PackageManagerSubmodulePresentation.PrivateRepositoryTagLabel;
+            string organization = PackageManagerSubmoduleNativePage
+                .CreateOrganizationFilterLabel("martincalander");
+
+            Assert.That(
+                PackageManagerGitHubNativePresentationPatch
+                    .MatchesRepositoryFilters(
+                        false,
+                        "martincalander",
+                        new[] { publicLabel },
+                        new[] { organization }),
+                Is.True);
+            Assert.That(
+                PackageManagerGitHubNativePresentationPatch
+                    .MatchesRepositoryFilters(
+                        true,
+                        "martincalander",
+                        new[] { publicLabel },
+                        new[] { organization }),
+                Is.False,
+                "The organization match must not override the visibility facet.");
+            Assert.That(
+                PackageManagerGitHubNativePresentationPatch
+                    .MatchesRepositoryFilters(
+                        false,
+                        "another-owner",
+                        new[] { publicLabel },
+                        new[] { organization }),
+                Is.False,
+                "The visibility match must not override the organization facet.");
+            Assert.That(
+                PackageManagerGitHubNativePresentationPatch
+                    .MatchesRepositoryFilters(
+                        true,
+                        "martincalander",
+                        new[] { publicLabel, privateLabel },
+                        new[] { organization }),
+                Is.True,
+                "Visibility values remain OR-ed within their facet.");
+            Assert.That(
+                PackageManagerGitHubNativePresentationPatch
+                    .MatchesRepositoryFilters(
+                        null,
+                        "martincalander",
+                        new[] { publicLabel },
+                        new[] { organization }),
+                Is.False,
+                "An active visibility facet must reject unknown privacy.");
+        }
+
+        [Test]
+        public void NativeRepositoryFilter_UnrelatedCategoriesFailOpen()
+        {
+            Assert.That(
+                PackageManagerGitHubNativePresentationPatch
+                    .MatchesRepositoryFilters(
+                        null,
+                        null,
+                        Array.Empty<string>(),
+                        new[] { "Unity Registry", "Stale Category" }),
+                Is.True,
+                "Categories not owned by this extension must remain Unity-owned.");
+        }
+
+        [Test]
+        public void NativeRepositoryFilter_OrganizationNamedPublicDoesNotCollide()
+        {
+            string publicLabel =
+                PackageManagerSubmodulePresentation.PublicRepositoryTagLabel;
+            string publicOrganization = PackageManagerSubmoduleNativePage
+                .CreateOrganizationFilterLabel(publicLabel);
+
+            Assert.That(publicOrganization, Is.EqualTo("Organization - Public"));
+            Assert.That(publicOrganization, Is.Not.EqualTo(publicLabel));
+            Assert.That(
+                PackageManagerGitHubNativePresentationPatch
+                    .MatchesRepositoryFilters(
+                        true,
+                        "Public",
+                        Array.Empty<string>(),
+                        new[] { publicOrganization }),
+                Is.True,
+                "An organization named Public is independent of repository privacy.");
+            Assert.That(
+                PackageManagerGitHubNativePresentationPatch
+                    .MatchesRepositoryFilters(
+                        true,
+                        "Public",
+                        new[] { publicLabel },
+                        new[] { publicOrganization }),
+                Is.False,
+                "Selecting the Public visibility still rejects a private repository.");
+        }
+
+        [Test]
+        public void NativeOrganizationFilters_PreserveStateUntilCatalogueIsComplete()
+        {
+            Assert.That(
+                PackageManagerSubmoduleNativePage
+                    .ShouldPreserveOrganizationFilterState(null),
+                Is.True);
+            Assert.That(
+                PackageManagerSubmoduleNativePage
+                    .ShouldPreserveOrganizationFilterState(
+                        PackageManagerGitHubDiscoverySnapshot.Empty),
+                Is.True,
+                "An idle catalogue has not proved that a saved organization is stale.");
+            Assert.That(
+                PackageManagerSubmoduleNativePage
+                    .ShouldPreserveOrganizationFilterState(
+                        CreateCatalogueSnapshot(isLoading: true)),
+                Is.True,
+                "Incremental discovery must not remove a selected organization.");
+            Assert.That(
+                PackageManagerSubmoduleNativePage
+                    .ShouldPreserveOrganizationFilterState(
+                        CreateCatalogueSnapshot(errorMessage: "GitHub unavailable")),
+                Is.True,
+                "A recoverable terminal error must retain the selection for retry.");
+            Assert.That(
+                PackageManagerSubmoduleNativePage
+                    .ShouldPreserveOrganizationFilterState(
+                        CreateCatalogueSnapshot(
+                            coverageWarningMessage: "Organizations were incomplete")),
+                Is.True);
+            Assert.That(
+                PackageManagerSubmoduleNativePage
+                    .ShouldPreserveOrganizationFilterState(
+                        CreateCatalogueSnapshot(unavailableManifestCount: 1)),
+                Is.True);
+            Assert.That(
+                PackageManagerSubmoduleNativePage
+                    .ShouldPreserveOrganizationFilterState(
+                        CreateCatalogueSnapshot(completedOwners: 1, totalOwners: 2)),
+                Is.True);
+            Assert.That(
+                PackageManagerSubmoduleNativePage
+                    .ShouldPreserveOrganizationFilterState(
+                        CreateCatalogueSnapshot()),
+                Is.False,
+                "Only a successful complete catalogue may prune stale organizations.");
+        }
+
+        [Test]
+        public void NativeFilterDefaults_DeferBothFacetsUntilOrganizationCoverageIsComplete()
+        {
+            string organization = PackageManagerSubmoduleNativePage
+                .CreateOrganizationFilterLabel("martincalander");
+
+            bool resolved = PackageManagerSubmoduleNativePage
+                .TryResolveDefaultFilterSelection(
+                    GitSubmoduleManagerDefaultVisibility.Private,
+                    "martincalander",
+                    new[] { organization },
+                    CreateCatalogueSnapshot(isLoading: true),
+                    out string loadingVisibility,
+                    out string loadingOrganization);
+            Assert.That(resolved, Is.False);
+            Assert.That(loadingVisibility, Is.Empty);
+            Assert.That(loadingOrganization, Is.Empty);
+
+            resolved = PackageManagerSubmoduleNativePage
+                .TryResolveDefaultFilterSelection(
+                    GitSubmoduleManagerDefaultVisibility.Private,
+                    "martincalander",
+                    new[] { organization },
+                    CreateCatalogueSnapshot(errorMessage: "GitHub unavailable"),
+                    out string failedVisibility,
+                    out string failedOrganization);
+            Assert.That(resolved, Is.False,
+                "An incomplete terminal snapshot must leave defaults pending for retry.");
+            Assert.That(failedVisibility, Is.Empty);
+            Assert.That(failedOrganization, Is.Empty);
+        }
+
+        [Test]
+        public void NativeFilterDefaults_ComposeWhenOrganizationExists()
+        {
+            string organization = PackageManagerSubmoduleNativePage
+                .CreateOrganizationFilterLabel("MartinCalander");
+
+            bool resolved = PackageManagerSubmoduleNativePage
+                .TryResolveDefaultFilterSelection(
+                    GitSubmoduleManagerDefaultVisibility.Public,
+                    "martincalander",
+                    new[] { organization },
+                    CreateCatalogueSnapshot(),
+                    out string visibilityLabel,
+                    out string organizationLabel);
+
+            Assert.That(resolved, Is.True);
+            Assert.That(
+                visibilityLabel,
+                Is.EqualTo(PackageManagerSubmodulePresentation.PublicRepositoryTagLabel));
+            Assert.That(organizationLabel, Is.EqualTo(organization));
+        }
+
+        [Test]
+        public void NativeFilterDefaults_VisibilityAloneDoesNotWaitForDiscovery()
+        {
+            bool resolved = PackageManagerSubmoduleNativePage
+                .TryResolveDefaultFilterSelection(
+                    GitSubmoduleManagerDefaultVisibility.Public,
+                    string.Empty,
+                    Array.Empty<string>(),
+                    PackageManagerGitHubDiscoverySnapshot.Empty,
+                    out string visibilityLabel,
+                    out string organizationLabel);
+
+            Assert.That(resolved, Is.True);
+            Assert.That(
+                visibilityLabel,
+                Is.EqualTo(PackageManagerSubmodulePresentation.PublicRepositoryTagLabel));
+            Assert.That(organizationLabel, Is.Empty);
+        }
+
+        [Test]
+        public void NativeFilterDefaults_ApplyVisibilityWhenCompleteCatalogueProvesOrgAbsent()
+        {
+            bool resolved = PackageManagerSubmoduleNativePage
+                .TryResolveDefaultFilterSelection(
+                    GitSubmoduleManagerDefaultVisibility.Private,
+                    "missing-organization",
+                    new[]
+                    {
+                        PackageManagerSubmoduleNativePage
+                            .CreateOrganizationFilterLabel("another-owner")
+                    },
+                    CreateCatalogueSnapshot(),
+                    out string visibilityLabel,
+                    out string organizationLabel);
+
+            Assert.That(resolved, Is.True);
+            Assert.That(
+                visibilityLabel,
+                Is.EqualTo(PackageManagerSubmodulePresentation.PrivateRepositoryTagLabel));
+            Assert.That(organizationLabel, Is.Empty);
+        }
+
+        [Test]
+        public void NativeFilterDefaultSignature_TracksNormalizedPreferenceChanges()
+        {
+            string all = PackageManagerSubmoduleNativePage
+                .BuildDefaultFilterPreferenceSignature(
+                    GitSubmoduleManagerDefaultVisibility.All,
+                    string.Empty);
+            string privateOnly = PackageManagerSubmoduleNativePage
+                .BuildDefaultFilterPreferenceSignature(
+                    GitSubmoduleManagerDefaultVisibility.Private,
+                    string.Empty);
+            string organization = PackageManagerSubmoduleNativePage
+                .BuildDefaultFilterPreferenceSignature(
+                    GitSubmoduleManagerDefaultVisibility.All,
+                    "Organization - Moonmilk-Games");
+            string normalizedOrganization = PackageManagerSubmoduleNativePage
+                .BuildDefaultFilterPreferenceSignature(
+                    GitSubmoduleManagerDefaultVisibility.All,
+                    "moonmilk-games");
+
+            Assert.That(privateOnly, Is.Not.EqualTo(all));
+            Assert.That(organization, Is.Not.EqualTo(all));
+            Assert.That(organization, Is.EqualTo(normalizedOrganization));
         }
 
         [Test]
@@ -1551,6 +1886,27 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                 1,
                 0,
                 1);
+        }
+
+        private static PackageManagerGitHubDiscoverySnapshot CreateCatalogueSnapshot(
+            bool isLoading = false,
+            string errorMessage = "",
+            int completedOwners = 1,
+            int totalOwners = 1,
+            int unavailableManifestCount = 0,
+            string coverageWarningMessage = "")
+        {
+            return new PackageManagerGitHubDiscoverySnapshot(
+                Array.Empty<PackageManagerGitHubRepository>(),
+                isLoading,
+                string.Empty,
+                errorMessage,
+                completedOwners,
+                completedOwners,
+                totalOwners,
+                unavailableManifestCount,
+                1,
+                coverageWarningMessage);
         }
     }
 }

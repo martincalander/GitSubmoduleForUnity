@@ -235,7 +235,19 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                     "https://github.com/example/package.git");
                 packageName.SetValueWithoutNotify("com.example.package");
                 branch.SetValueWithoutNotify("main");
-                submit.SetEnabled(true);
+                SetReadyProbeSnapshot(
+                    window,
+                    new GitSubmoduleInstallProbeSnapshot(
+                        1,
+                        "https://github.com/example/package.git",
+                        GitSubmoduleInstallProbeStatus.Ready,
+                        new[] { "main" },
+                        "main",
+                        "com.example.package",
+                        "Example Package",
+                        "1.0.0",
+                        requestedBranch: "main",
+                        inspectedBranch: "main"));
                 Assert.That(GitOperationService.IsBusy, Is.False);
 
                 SendNavigationSubmit(submit);
@@ -477,6 +489,22 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                 Is.True);
         }
 
+        [TestCase(true, true, true)]
+        [TestCase(false, true, false)]
+        [TestCase(true, false, false)]
+        [TestCase(false, false, false)]
+        public void CompletionRecord_IsConsumedOnlyBySuccessfulLivePresentation(
+            bool hadLivePresentationHost,
+            bool presentationCompleted,
+            bool expected)
+        {
+            Assert.That(
+                GitSubmoduleInstallPopup.ShouldConsumeRetainedCompletion(
+                    hadLivePresentationHost,
+                    presentationCompleted),
+                Is.EqualTo(expected));
+        }
+
         [TestCase("main", "main", false, false)]
         [TestCase("release", "main", false, true)]
         [TestCase("release", "main", true, false)]
@@ -621,6 +649,29 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
             {
                 submit.Dispose();
             }
+        }
+
+        private static void SetReadyProbeSnapshot(
+            GitSubmoduleInstallPopup window,
+            GitSubmoduleInstallProbeSnapshot snapshot)
+        {
+            const BindingFlags flags =
+                BindingFlags.Instance | BindingFlags.Public |
+                BindingFlags.NonPublic;
+            FieldInfo probeField = typeof(GitSubmoduleInstallPopup).GetField(
+                "installProbe",
+                flags);
+            var probe = probeField?.GetValue(window) as GitSubmoduleInstallProbe;
+            PropertyInfo currentProperty = typeof(GitSubmoduleInstallProbe)
+                .GetProperty("Current", flags);
+            MethodInfo updatePresentation = typeof(GitSubmoduleInstallPopup)
+                .GetMethod("UpdatePresentation", flags);
+
+            Assert.That(probe, Is.Not.Null);
+            Assert.That(currentProperty, Is.Not.Null);
+            Assert.That(updatePresentation, Is.Not.Null);
+            currentProperty.SetValue(probe, snapshot, null);
+            updatePresentation.Invoke(window, null);
         }
 
         private static string BuildLongStatus()

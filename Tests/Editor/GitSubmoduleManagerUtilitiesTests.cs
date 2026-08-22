@@ -8,7 +8,6 @@ using System.Threading;
 using NUnit.Framework;
 using UnityEngine;
 using UnityEngine.UIElements;
-using GitSubmoduleManagerView = MartinCalander.GitSubmoduleManager.Editor.GitSubmoduleManagerView;
 
 namespace MartinCalander.GitSubmoduleManager.Editor.Tests
 {
@@ -66,286 +65,6 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
             Assert.That(outcome, Is.EqualTo(GitOperationCompletionOutcome.Succeeded));
             Assert.That(notificationException, Is.TypeOf<InvalidOperationException>());
             Assert.That(notificationException.Message, Is.EqualTo("simulated UI notification failure"));
-        }
-
-        [TestCase((int)GitSubmoduleManagerView.Tab.Discover, true, true, (int)GitSubmoduleManagerView.Tab.Installed)]
-        [TestCase((int)GitSubmoduleManagerView.Tab.Installed, true, true, (int)GitSubmoduleManagerView.Tab.Discover)]
-        [TestCase((int)GitSubmoduleManagerView.Tab.Installed, true, false, (int)GitSubmoduleManagerView.Tab.Installed)]
-        [TestCase((int)GitSubmoduleManagerView.Tab.Discover, false, true, (int)GitSubmoduleManagerView.Tab.Discover)]
-        public void ResolveRequestedTab_HandlesImguiToggleSelection(
-            int current,
-            bool installedSelected,
-            bool discoverSelected,
-            int expected)
-        {
-            Assert.That(
-                (int)GitSubmoduleManagerView.ResolveRequestedTab(
-                    (GitSubmoduleManagerView.Tab)current,
-                    installedSelected,
-                    discoverSelected),
-                Is.EqualTo(expected));
-        }
-
-        [TestCase(true, true)]
-        [TestCase(false, false)]
-        public void PackageTabNavigation_DependsOnKnownGitAvailabilityNotRefreshState(
-            bool gitAvailable,
-            bool expected)
-        {
-            Assert.That(
-                GitSubmoduleManagerView.CanNavigatePackageTabs(gitAvailable),
-                Is.EqualTo(expected));
-            Assert.That(
-                GitSubmoduleManagerView.CanUseToolbarGitActions(
-                    gitAvailable,
-                    isLoading: true,
-                    backgroundLoadsDraining: false),
-                Is.False,
-                "A refresh may block mutations without blocking navigation between tabs.");
-        }
-
-        [TestCase(true, false, false, false, false, true)]
-        [TestCase(false, false, false, false, false, false)]
-        [TestCase(true, true, false, false, false, false)]
-        [TestCase(true, false, true, false, false, false)]
-        [TestCase(true, false, false, true, false, false)]
-        [TestCase(true, false, false, false, true, false)]
-        public void InstalledRefresh_IsEnabledOnlyWhenItsHandlerCanStart(
-            bool gitAvailable,
-            bool installedLoading,
-            bool backgroundLoadsDraining,
-            bool operationBusy,
-            bool recoveryRequiresReview,
-            bool expected)
-        {
-            Assert.That(
-                GitSubmoduleManagerView.CanRefreshInstalledPackages(
-                    gitAvailable,
-                    installedLoading,
-                    backgroundLoadsDraining,
-                    operationBusy,
-                    recoveryRequiresReview),
-                Is.EqualTo(expected));
-        }
-
-        [TestCase(true, true, (int)GitSubmoduleManagerView.Tab.Installed, false)]
-        [TestCase(true, true, (int)GitSubmoduleManagerView.Tab.Discover, true)]
-        [TestCase(true, false, (int)GitSubmoduleManagerView.Tab.Installed, true)]
-        [TestCase(false, false, (int)GitSubmoduleManagerView.Tab.Discover, false)]
-        public void InitialDependencyLoad_BlocksOnlyUntilGitStageOrOnGitHubTab(
-            bool isLoading,
-            bool gitStageReady,
-            int currentTab,
-            bool expected)
-        {
-            Assert.That(
-                GitSubmoduleManagerView.ShouldBlockCurrentTabDuringInitialLoad(
-                    isLoading,
-                    gitStageReady,
-                    (GitSubmoduleManagerView.Tab)currentTab),
-                Is.EqualTo(expected));
-        }
-
-        [TestCase(5, 5, 9L, 9L, true)]
-        [TestCase(4, 5, 9L, 9L, false)]
-        [TestCase(5, 5, 8L, 9L, false)]
-        public void BackgroundLoadResult_IsAppliedOnlyForBothCurrentGenerations(
-            int resultLoadGeneration,
-            int currentLoadGeneration,
-            long resultRepositoryGeneration,
-            long currentRepositoryGeneration,
-            bool expected)
-        {
-            Assert.That(
-                GitSubmoduleManagerView.IsBackgroundLoadResultCurrent(
-                    resultLoadGeneration,
-                    currentLoadGeneration,
-                    resultRepositoryGeneration,
-                    currentRepositoryGeneration),
-                Is.EqualTo(expected));
-        }
-
-        [Test]
-        public void DeferredRepositoryMutationQueue_PreservesExactlyTheFirstOperationUntilReady()
-        {
-            var queue = new DeferredRepositoryMutationQueue();
-            var competingWindowQueue = new DeferredRepositoryMutationQueue();
-            int firstRuns = 0;
-            int secondRuns = 0;
-
-            Assert.That(queue.TryEnqueue("  First mutation  ", () => firstRuns++), Is.True);
-            Assert.That(competingWindowQueue.TryEnqueue("Second mutation", () => secondRuns++), Is.False);
-            Assert.That(queue.HasPending, Is.True);
-            Assert.That(queue.Label, Is.EqualTo("First mutation"));
-            Assert.That(queue.TryDequeueWhenReady(false, out _), Is.False);
-            Assert.That(queue.HasPending, Is.True);
-
-            Assert.That(queue.TryDequeueWhenReady(true, out Action queuedMutation), Is.True);
-            queuedMutation();
-
-            Assert.That(firstRuns, Is.EqualTo(1));
-            Assert.That(secondRuns, Is.Zero);
-            Assert.That(queue.HasPending, Is.False);
-            Assert.That(queue.Label, Is.Empty);
-            Assert.That(competingWindowQueue.TryEnqueue("Second mutation", () => secondRuns++), Is.True);
-            competingWindowQueue.Clear();
-        }
-
-        [Test]
-        public void DeferredRepositoryMutationQueue_ClearPreventsExecutionAfterWindowDisable()
-        {
-            var queue = new DeferredRepositoryMutationQueue();
-            Assert.That(queue.TryEnqueue("Remove package", () => { }), Is.True);
-
-            queue.Clear();
-
-            Assert.That(queue.TryDequeueWhenReady(true, out _), Is.False);
-            Assert.That(queue.HasPending, Is.False);
-        }
-
-        [Test]
-        public void VirtualizedRows_ClampAStaleScrollOffsetAndKeepTailRowsVisible()
-        {
-            Assert.That(
-                GitSubmoduleManagerView.ClampVirtualizedScrollOffset(10000f, 5, 24f),
-                Is.EqualTo(120f));
-            Assert.That(
-                GitSubmoduleManagerView.ClampVirtualizedScrollOffset(float.NaN, 5, 24f),
-                Is.Zero);
-
-            GitSubmoduleManagerView.CalculateVisibleRowRange(
-                10000f,
-                100,
-                24f,
-                120f,
-                out int firstRow,
-                out int lastRow);
-
-            Assert.That(firstRow, Is.EqualTo(92));
-            Assert.That(lastRow, Is.EqualTo(100));
-
-            GitSubmoduleManagerView.CalculateVisibleRowRange(
-                10000f,
-                5,
-                24f,
-                400f,
-                out firstRow,
-                out lastRow);
-
-            Assert.That(firstRow, Is.Zero);
-            Assert.That(lastRow, Is.EqualTo(5));
-        }
-
-        [Test]
-        public void GitHubStageFailure_PreservesGitAndInstalledPackageState()
-        {
-            var packages = new List<GitPackageInfo> { new GitPackageInfo { Name = "package" } };
-            var result = new GitSubmoduleManagerView.InitialLoadResult
-            {
-                GitAvailable = true,
-                GitVersion = "git version 2.50.0",
-                PackagesSuccess = true,
-                Packages = packages,
-                GhAvailable = true,
-                GhAuthenticated = true
-            };
-
-            GitSubmoduleManagerView.RecordInitialLoadFailure(
-                result,
-                GitSubmoduleManagerView.InitialLoadStage.GitHub,
-                new InvalidOperationException("gh probe failed"));
-
-            Assert.That(result.GitAvailable, Is.True);
-            Assert.That(result.GitVersion, Is.EqualTo("git version 2.50.0"));
-            Assert.That(result.PackagesSuccess, Is.True);
-            Assert.That(result.Packages, Is.SameAs(packages));
-            Assert.That(result.GhAvailable, Is.False);
-            Assert.That(result.GhAuthenticated, Is.False);
-            Assert.That(result.GhError, Does.Contain("gh probe failed"));
-        }
-
-        [Test]
-        public void InstalledPackageStageFailure_PreservesGitAndBoundsTheDiagnostic()
-        {
-            var result = new GitSubmoduleManagerView.InitialLoadResult
-            {
-                GitAvailable = true,
-                GitVersion = "git version 2.50.0",
-                PackagesSuccess = true,
-                Packages = new List<GitPackageInfo> { new GitPackageInfo { Name = "stale" } }
-            };
-
-            GitSubmoduleManagerView.RecordInitialLoadFailure(
-                result,
-                GitSubmoduleManagerView.InitialLoadStage.InstalledPackages,
-                new InvalidOperationException(new string('x', 10000)));
-
-            Assert.That(result.GitAvailable, Is.True);
-            Assert.That(result.GitVersion, Is.EqualTo("git version 2.50.0"));
-            Assert.That(result.PackagesSuccess, Is.False);
-            Assert.That(result.Packages, Is.Empty);
-            Assert.That(result.PackagesError.Length, Is.LessThanOrEqualTo(GitHubUtility.MaxUiDiagnosticCharacters));
-            Assert.That(result.PackagesError, Does.Contain("installed package scan"));
-        }
-
-        [Test]
-        public void ManualPackageName_IsNotReplacedWithoutAUrlEdit()
-        {
-            const string manualName = "my intentional draft";
-
-            string resolved = GitSubmoduleManagerView.ResolvePackageNameAfterUrlEdit(
-                manualName,
-                false,
-                "com.example.previous",
-                "com.example.automatic");
-
-            Assert.That(resolved, Is.EqualTo(manualName));
-        }
-
-        [Test]
-        public void UrlEdit_UpdatesThePackageNameSuggestionOnce()
-        {
-            string resolved = GitSubmoduleManagerView.ResolvePackageNameAfterUrlEdit(
-                "com.example.old",
-                true,
-                "com.example.old",
-                "com.example.new");
-
-            Assert.That(resolved, Is.EqualTo("com.example.new"));
-        }
-
-        [Test]
-        public void UrlEdit_PreservesACustomPackageName()
-        {
-            const string customName = "my intentional draft";
-
-            string resolved = GitSubmoduleManagerView.ResolvePackageNameAfterUrlEdit(
-                customName,
-                true,
-                "com.example.previous",
-                "com.example.new");
-
-            Assert.That(resolved, Is.EqualTo(customName));
-        }
-
-        [Test]
-        public void AddFromUrlPopup_HasRoomForDiagnosticsAndScrollableControls()
-        {
-            Vector2 size = GitSubmoduleManagerView.GetAddFromUrlPopupSize();
-
-            Assert.That(size.x, Is.GreaterThanOrEqualTo(420f));
-            Assert.That(size.y, Is.GreaterThanOrEqualTo(300f));
-        }
-
-        [TestCase(false, (int)UnityEditor.MessageType.Warning)]
-        [TestCase(true, (int)UnityEditor.MessageType.Error)]
-        public void DiscoveryDrainStatus_EscalatesRestartRequirement(
-            bool requiresEditorRestart,
-            int expectedMessageType)
-        {
-            Assert.That(
-                (int)GitSubmoduleManagerView.GetDiscoveryDrainStatusType(requiresEditorRestart),
-                Is.EqualTo(expectedMessageType));
         }
 
         [Test]
@@ -407,6 +126,134 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
             Assert.That(description, Is.EqualTo("Native details description."));
             Assert.That(minimumUnityVersion, Is.EqualTo("2021.3.0f1"));
             Assert.That(error, Is.Empty);
+        }
+
+        [Test]
+        public void ValidateExpectedPackageIdentity_RequiresExactPinnedVersion()
+        {
+            Assert.That(
+                GitUtility.ValidateExpectedPackageIdentity(
+                    "com.example.package",
+                    "1.2.3",
+                    "com.example.package",
+                    "1.2.3"),
+                Is.Empty);
+            Assert.That(
+                GitUtility.ValidateExpectedPackageIdentity(
+                    "com.example.package",
+                    string.Empty,
+                    "com.example.package",
+                    "9.9.9"),
+                Is.Empty,
+                "Legacy callers without an expected version remain compatible.");
+
+            Assert.That(
+                GitUtility.ValidateExpectedPackageIdentity(
+                    "com.example.package",
+                    "1.2.3",
+                    "com.example.other",
+                    "1.2.3"),
+                Does.Contain("Package name mismatch"));
+            Assert.That(
+                GitUtility.ValidateExpectedPackageIdentity(
+                    "com.example.package",
+                    "1.2.3",
+                    "com.example.package",
+                    "1.2.4"),
+                Does.Contain("Package version mismatch"));
+        }
+
+        [Test]
+        public void ValidateExpectedPackageIdentity_SanitizesReportedValues()
+        {
+            string error = GitUtility.ValidateExpectedPackageIdentity(
+                "com.example.package",
+                "1.2.3",
+                "com.example.package",
+                "1.2.4\nforged diagnostic");
+
+            Assert.That(error, Does.Not.Contain("\n"));
+            Assert.That(error, Does.Contain("Package version mismatch"));
+        }
+
+        [Test]
+        public void PackageDependencyFingerprint_IsOrderIndependentAndDetectsDrift()
+        {
+            PackageManifestDependency[] expected =
+            {
+                new("com.example.zeta", "2.0.0"),
+                new("com.example.alpha", "1.0.0")
+            };
+            PackageManifestDependency[] reordered =
+            {
+                new("com.example.alpha", "1.0.0"),
+                new("com.example.zeta", "2.0.0")
+            };
+            PackageManifestDependency[] changed =
+            {
+                new("com.example.alpha", "1.0.1"),
+                new("com.example.zeta", "2.0.0")
+            };
+
+            string fingerprint =
+                GitUtility.ComputePackageDependencyFingerprint(expected);
+            Assert.That(
+                GitUtility.IsValidPackageDependencyFingerprint(fingerprint),
+                Is.True);
+            Assert.That(
+                GitUtility.ComputePackageDependencyFingerprint(reordered),
+                Is.EqualTo(fingerprint));
+            Assert.That(
+                GitUtility.ComputePackageDependencyFingerprint(changed),
+                Is.Not.EqualTo(fingerprint));
+        }
+
+        [Test]
+        public void ValidateExpectedPackageManifest_RejectsDependencyDrift()
+        {
+            var metadata = new PackageManifestMetadata(
+                "com.example.package",
+                "Package",
+                "1.2.3",
+                string.Empty,
+                string.Empty,
+                string.Empty,
+                string.Empty,
+                string.Empty,
+                string.Empty,
+                new[]
+                {
+                    new PackageManifestDependency("com.example.child", "2.0.0")
+                });
+            string expectedFingerprint =
+                GitUtility.ComputePackageDependencyFingerprint(new[]
+                {
+                    new PackageManifestDependency("com.example.child", "1.0.0")
+                });
+
+            string error = GitUtility.ValidateExpectedPackageManifest(
+                "com.example.package",
+                "1.2.3",
+                expectedFingerprint,
+                metadata);
+
+            Assert.That(error, Does.Contain("dependencies changed"));
+        }
+
+        [Test]
+        public void ReadOnlyMismatchCleanupFailure_WarnsThatDependencyMayRemain()
+        {
+            string message = PackageManagerReadOnlyGitInstallService
+                .BuildMismatchCleanupFailureMessage(
+                    "Package version mismatch. Expected 1.2.3, got 1.2.4.",
+                    "Unity Package Manager could not start automatic removal: " +
+                    "https://user:secret@example.com/failure\nforged");
+
+            Assert.That(message, Does.Contain("Package version mismatch"));
+            Assert.That(message, Does.Contain("may remain"));
+            Assert.That(message, Does.Contain("Packages/manifest.json"));
+            Assert.That(message, Does.Not.Contain("secret"));
+            Assert.That(message, Does.Not.Contain("\n"));
         }
 
         [Test]
@@ -541,76 +388,6 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
             Assert.That(metadata.ChangelogUrl, Is.Empty);
             Assert.That(metadata.LicensesUrl, Is.Empty);
             Assert.That(metadata.Dependencies, Is.Empty);
-        }
-
-        [TestCase(" Git Submodule Manager ", "com.example.package", "submodule-key", "Git Submodule Manager")]
-        [TestCase(null, "com.example.package", "submodule-key", "com.example.package")]
-        [TestCase(" \t ", "com.example.package", "submodule-key", "com.example.package")]
-        [TestCase(null, " ", " submodule-key ", "submodule-key")]
-        public void InstalledPackageDisplayName_UsesManifestNameWithStableFallbacks(
-            string manifestDisplayName,
-            string packageName,
-            string submoduleName,
-            string expected)
-        {
-            var package = new GitPackageInfo
-            {
-                DisplayName = manifestDisplayName,
-                PackageName = packageName,
-                Name = submoduleName
-            };
-
-            Assert.That(
-                GitSubmoduleManagerView.GetInstalledPackageDisplayName(package),
-                Is.EqualTo(expected));
-        }
-
-        [Test]
-        public void InstalledPackageIdentifier_IsSecondaryOnlyWhenDistinct()
-        {
-            var package = new GitPackageInfo
-            {
-                DisplayName = "Friendly Package",
-                PackageName = "com.example.package",
-                Name = "submodule-key"
-            };
-
-            Assert.That(
-                GitSubmoduleManagerView.GetInstalledPackageIdentifier(package),
-                Is.EqualTo("com.example.package"));
-            Assert.That(
-                GitSubmoduleManagerView.ShouldShowInstalledPackageIdentifier(package),
-                Is.True);
-
-            package.DisplayName = "com.example.package";
-            Assert.That(
-                GitSubmoduleManagerView.ShouldShowInstalledPackageIdentifier(package),
-                Is.False);
-        }
-
-        [Test]
-        public void InstalledPackageSearch_MatchesFriendlyNameAndTechnicalIdentifier()
-        {
-            var package = new GitPackageInfo
-            {
-                DisplayName = "Friendly Package",
-                PackageName = "com.example.technical"
-            };
-
-            Assert.That(GitSubmoduleManagerView.MatchesInstalledPackageSearch(package, "friendly"), Is.True);
-            Assert.That(GitSubmoduleManagerView.MatchesInstalledPackageSearch(package, "example.technical"), Is.True);
-            Assert.That(GitSubmoduleManagerView.MatchesInstalledPackageSearch(package, "unrelated"), Is.False);
-        }
-
-        [TestCase(0.0, 0)]
-        [TestCase(0.099, 0)]
-        [TestCase(0.101, 1)]
-        [TestCase(1.101, 11)]
-        [TestCase(1.201, 0)]
-        [TestCase(-1.0, 0)]
-        public void LoadingSpinnerFrameIndex_AdvancesAtTenFramesPerSecond(double timeSeconds, int expectedFrame)
-        {
-            Assert.That(GitSubmoduleManagerView.GetLoadingSpinnerFrameIndex(timeSeconds), Is.EqualTo(expectedFrame));
         }
 
         [TestCase("com.example.package")]
@@ -911,26 +688,6 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
             Assert.That(plan.AutomaticInstallUnavailableReason, Does.Contain("Homebrew"));
         }
 
-        [Test]
-        public void DependencyGate_GitLocksEverythingButGhOnlyLocksDiscovery()
-        {
-            Assert.That(
-                GitSubmoduleManagerView.GetDependencyGateState(false, true, true, false),
-                Is.EqualTo(DependencyGateState.GitMissing));
-            Assert.That(
-                GitSubmoduleManagerView.GetDependencyGateState(true, false, false, false),
-                Is.EqualTo(DependencyGateState.Ready));
-            Assert.That(
-                GitSubmoduleManagerView.GetDependencyGateState(true, false, false, true),
-                Is.EqualTo(DependencyGateState.GitHubCliMissing));
-            Assert.That(
-                GitSubmoduleManagerView.GetDependencyGateState(true, true, false, true),
-                Is.EqualTo(DependencyGateState.GitHubAuthenticationMissing));
-            Assert.That(
-                GitSubmoduleManagerView.GetDependencyGateState(true, true, true, true),
-                Is.EqualTo(DependencyGateState.Ready));
-        }
-
         [TestCase(false, false, true)]
         [TestCase(false, true, false)]
         [TestCase(true, false, false)]
@@ -942,18 +699,6 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
         {
             Assert.That(
                 GitSubmoduleManagerUserSettings.ShouldShowWelcome(persisted, shownThisSession),
-                Is.EqualTo(expected));
-        }
-
-        [TestCase(-10, GitSubmoduleManagerUserSettings.MinimumRefreshIntervalMinutes)]
-        [TestCase(1, 1)]
-        [TestCase(17, 17)]
-        [TestCase(60, 60)]
-        [TestCase(500, GitSubmoduleManagerUserSettings.MaximumRefreshIntervalMinutes)]
-        public void UserSettings_ClampRefreshInterval(int input, int expected)
-        {
-            Assert.That(
-                GitSubmoduleManagerUserSettings.ClampRefreshIntervalMinutes(input),
                 Is.EqualTo(expected));
         }
 
@@ -1120,118 +865,6 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                 Is.True);
         }
 
-        [TestCase(-1, (int)GitSubmoduleManagerStartupTab.InProject)]
-        [TestCase(0, (int)GitSubmoduleManagerStartupTab.InProject)]
-        [TestCase(1, (int)GitSubmoduleManagerStartupTab.GitHub)]
-        [TestCase(99, (int)GitSubmoduleManagerStartupTab.InProject)]
-        public void UserSettings_NormalizeStartupTab(int input, int expected)
-        {
-            Assert.That(
-                (int)GitSubmoduleManagerUserSettings.NormalizeStartupTab(
-                    (GitSubmoduleManagerStartupTab)input),
-                Is.EqualTo(expected));
-        }
-
-        [TestCase(-1, (int)GitSubmoduleManagerDefaultGitHubFilter.AllRepositories)]
-        [TestCase(0, (int)GitSubmoduleManagerDefaultGitHubFilter.AllRepositories)]
-        [TestCase(1, (int)GitSubmoduleManagerDefaultGitHubFilter.ValidUpmPackages)]
-        [TestCase(99, (int)GitSubmoduleManagerDefaultGitHubFilter.AllRepositories)]
-        public void UserSettings_NormalizeDefaultGitHubFilter(int input, int expected)
-        {
-            Assert.That(
-                (int)GitSubmoduleManagerUserSettings.NormalizeDefaultGitHubFilter(
-                    (GitSubmoduleManagerDefaultGitHubFilter)input),
-                Is.EqualTo(expected));
-        }
-
-        [TestCase(false, 3600.0, 300.0, false)]
-        [TestCase(true, 299.0, 300.0, false)]
-        [TestCase(true, 300.0, 300.0, false)]
-        [TestCase(true, 301.0, 300.0, true)]
-        [TestCase(true, 1.0, -1.0, true)]
-        public void InProjectRefresh_RespectsPreferenceAndInterval(
-            bool enabled,
-            double elapsedSeconds,
-            double intervalSeconds,
-            bool expected)
-        {
-            Assert.That(
-                GitSubmoduleManagerView.ShouldRefreshInstalledPackagesOnReturn(
-                    enabled,
-                    elapsedSeconds,
-                    intervalSeconds),
-                Is.EqualTo(expected));
-        }
-
-        [Test]
-        public void WelcomePresentation_IsRecordedOnlyAfterARepaint()
-        {
-            Assert.That(
-                GitSubmoduleManagerView.ShouldRecordWelcomeShown(true, false, EventType.Layout),
-                Is.False);
-            Assert.That(
-                GitSubmoduleManagerView.ShouldRecordWelcomeShown(true, false, EventType.Repaint),
-                Is.True);
-            Assert.That(
-                GitSubmoduleManagerView.ShouldRecordWelcomeShown(false, false, EventType.Repaint),
-                Is.False);
-            Assert.That(
-                GitSubmoduleManagerView.ShouldRecordWelcomeShown(true, true, EventType.Repaint),
-                Is.False);
-        }
-
-        [TestCase(false, false, false)]
-        [TestCase(false, true, true)]
-        [TestCase(true, false, true)]
-        [TestCase(true, true, true)]
-        public void WelcomeReopen_PreservesWhetherThePreferenceWasActuallyRecorded(
-            bool persisted,
-            bool shownThisSession,
-            bool expected)
-        {
-            Assert.That(
-                GitSubmoduleManagerView.IsWelcomePreferenceAlreadyRecorded(
-                    persisted,
-                    shownThisSession),
-                Is.EqualTo(expected));
-        }
-
-        [TestCase(true, true, true, true, (int)GitSubmoduleManagerView.WelcomeSetupState.Checking)]
-        [TestCase(false, false, true, true, (int)GitSubmoduleManagerView.WelcomeSetupState.GitMissing)]
-        [TestCase(false, true, false, false, (int)GitSubmoduleManagerView.WelcomeSetupState.GitHubCliMissing)]
-        [TestCase(false, true, true, false, (int)GitSubmoduleManagerView.WelcomeSetupState.GitHubAuthenticationMissing)]
-        [TestCase(false, true, true, true, (int)GitSubmoduleManagerView.WelcomeSetupState.Ready)]
-        public void WelcomeSetupState_UsesStableDependencyPrecedence(
-            bool checking,
-            bool git,
-            bool gh,
-            bool authenticated,
-            int expected)
-        {
-            Assert.That(
-                (int)GitSubmoduleManagerView.GetWelcomeSetupState(checking, git, gh, authenticated),
-                Is.EqualTo(expected));
-        }
-
-        [TestCase(true, true, false)]
-        [TestCase(false, false, false)]
-        [TestCase(false, true, true)]
-        public void WelcomeCanFinish_RequiresCompletedGitCheck(
-            bool checking,
-            bool git,
-            bool expected)
-        {
-            Assert.That(GitSubmoduleManagerView.CanFinishWelcome(checking, git), Is.EqualTo(expected));
-        }
-
-        [TestCase(519f, true)]
-        [TestCase(520f, false)]
-        [TestCase(620f, false)]
-        public void WelcomeActions_StackOnlyAtNarrowWidths(float width, bool expected)
-        {
-            Assert.That(GitSubmoduleManagerView.ShouldStackWelcomeActions(width), Is.EqualTo(expected));
-        }
-
         [Test]
         public void GitHubAuthenticationPlan_UsesFixedBrowserFlowWithoutTokens()
         {
@@ -1278,107 +911,6 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
             Assert.That(
                 GitHubUtility.SupportsClipboardAuthentication(versionOutput),
                 Is.EqualTo(expected));
-        }
-
-        [Test]
-        public void GitHubAuthenticationFailure_DoesNotExposeCommandOutput()
-        {
-            var result = new CommandResult
-            {
-                ExitCode = 1,
-                StdOut = "one-time-code-SECRET",
-                StdErr = "https://user:secret@github.com/login/device",
-                TerminationConfirmed = true
-            };
-
-            string message = GitSubmoduleManagerView.BuildGitHubAuthenticationFailureMessage(result);
-
-            Assert.That(message, Does.Contain("exit code 1"));
-            Assert.That(message, Does.Not.Contain("one-time-code-SECRET"));
-            Assert.That(message, Does.Not.Contain("user:secret"));
-        }
-
-        [Test]
-        public void GitHubAuthenticationFailure_UnconfirmedTerminationRequiresRestart()
-        {
-            var result = new CommandResult
-            {
-                ExitCode = -1,
-                Cancelled = true,
-                TerminationConfirmed = false
-            };
-
-            string message = GitSubmoduleManagerView.BuildGitHubAuthenticationFailureMessage(result);
-
-            Assert.That(message, Does.Contain("could not confirm"));
-            Assert.That(message, Does.Contain("Restart Unity"));
-        }
-
-        [Test]
-        public void IsCurrentPackage_DetectsPackageIdOrInstalledPath()
-        {
-            Assert.That(
-                GitSubmoduleManagerView.IsCurrentPackage(new GitPackageInfo
-                {
-                    PackageName = "com.martincalander.gitsubmodulemanager",
-                    Path = "Packages/com.example.renamedfolder"
-                }),
-                Is.True);
-            Assert.That(
-                GitSubmoduleManagerView.IsCurrentPackage(new GitPackageInfo
-                {
-                    PackageName = null,
-                    Path = @"Packages\com.martincalander.gitsubmodulemanager"
-                }),
-                Is.True);
-            Assert.That(
-                GitSubmoduleManagerView.IsCurrentPackage(new GitPackageInfo
-                {
-                    // Discovery falls back to the folder name when package.json
-                    // is missing or invalid during a removal attempt.
-                    PackageName = "com.martincalander.gitpackagemanager",
-                    Path = @"Packages\com.martincalander.gitpackagemanager"
-                }),
-                Is.True);
-            Assert.That(
-                GitSubmoduleManagerView.IsCurrentPackage(new GitPackageInfo
-                {
-                    PackageName = "com.example.otherpackage",
-                    Path = "Packages/com.example.otherpackage"
-                }),
-                Is.False);
-            Assert.That(GitSubmoduleManagerView.IsCurrentPackage(null), Is.False);
-        }
-
-        [Test]
-        public void BuildSelfRemovalWarning_ExplainsImpactAndRecovery()
-        {
-            string warning = GitSubmoduleManagerView.BuildSelfRemovalWarning(
-                "Packages/com.martincalander.gitsubmodulemanager");
-
-            Assert.That(warning, Does.Contain("Git Submodule Manager itself"));
-            Assert.That(warning, Does.Contain("window will close"));
-            Assert.That(warning, Does.Contain("reinstall"));
-            Assert.That(warning, Does.Contain("UPM"));
-            Assert.That(warning, Does.Contain("reviewed and committed"));
-        }
-
-        [Test]
-        public void BuildCliInstallFailureMessage_PreservesActionableErrorAndRedactsCredentials()
-        {
-            var result = new CommandResult
-            {
-                ExitCode = 23,
-                StdOut = string.Empty,
-                StdErr = "download failed for https://user:secret@example.com/tool"
-            };
-
-            string message = GitSubmoduleManagerView.BuildCliInstallFailureMessage("Git", result);
-
-            Assert.That(message, Does.Contain("exit code 23"));
-            Assert.That(message, Does.Contain("download failed"));
-            Assert.That(message, Does.Contain("retry"));
-            Assert.That(message, Does.Not.Contain("user:secret"));
         }
 
         [Test]
@@ -1698,6 +1230,79 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                     typeof(IReadOnlyList<string>),
                     typeof(bool)
                 }));
+            MethodInfo updateSupportedCategories =
+                PackageManagerSubmoduleNativePage
+                    .GetUpdateSupportedCategoriesMethod();
+            Assert.That(updateSupportedCategories, Is.Not.Null);
+            Assert.That(
+                updateSupportedCategories.ReturnType,
+                Is.EqualTo(typeof(bool)));
+            Assert.That(
+                updateSupportedCategories.GetParameters()
+                    .Select(parameter => parameter.ParameterType),
+                Is.EqualTo(new[]
+                {
+                    typeof(IReadOnlyList<string>),
+                    typeof(bool)
+                }));
+        }
+
+        [Test]
+        public void PackageManagerNativePage_OrganizationFiltersNormalizeSortAndDeduplicate()
+        {
+            IReadOnlyList<string> filters = PackageManagerSubmoduleNativePage
+                .BuildOrganizationFilterLabels(new[]
+                {
+                    "  zeta  ",
+                    "Alpha",
+                    "alpha",
+                    null,
+                    string.Empty,
+                    "   ",
+                    "Beta"
+                });
+
+            Assert.That(filters, Is.EqualTo(new[]
+            {
+                "Organization - Alpha",
+                "Organization - Beta",
+                "Organization - zeta"
+            }));
+            Assert.That(
+                PackageManagerSubmoduleNativePage
+                    .BuildOrganizationFilterLabels(null),
+                Is.Empty);
+        }
+
+        [Test]
+        public void PackageManagerNativePage_OrganizationFilterParsingIsUnambiguous()
+        {
+            string filter = PackageManagerSubmoduleNativePage
+                .CreateOrganizationFilterLabel("  Public  ");
+
+            Assert.That(filter, Is.EqualTo("Organization - Public"));
+            Assert.That(
+                PackageManagerSubmoduleNativePage.IsOrganizationFilterLabel(filter),
+                Is.True);
+            Assert.That(
+                PackageManagerSubmoduleNativePage.TryGetOrganizationFilterOwner(
+                    filter,
+                    out string owner),
+                Is.True);
+            Assert.That(owner, Is.EqualTo("Public"));
+            Assert.That(
+                PackageManagerSubmoduleNativePage.IsOrganizationFilterLabel(
+                    PackageManagerSubmodulePresentation.PublicRepositoryTagLabel),
+                Is.False,
+                "The Public visibility value must not be parsed as an organization.");
+            Assert.That(
+                PackageManagerSubmoduleNativePage.IsOrganizationFilterLabel(
+                    "Organization -   "),
+                Is.False);
+            Assert.That(
+                PackageManagerSubmoduleNativePage.CreateOrganizationFilterLabel(
+                    "   "),
+                Is.Empty);
         }
 
         [Test]

@@ -2,6 +2,7 @@ using System;
 using System.Collections;
 using System.Collections.Generic;
 using System.Reflection;
+using System.Runtime.CompilerServices;
 using UnityEditor;
 using UnityEngine;
 using UnityEngine.UIElements;
@@ -9,9 +10,9 @@ using UnityEngine.UIElements;
 namespace MartinCalander.GitSubmoduleManager.Editor
 {
     /// <summary>
-    /// Bridges installed GitHub submodules into Unity's internal extension-page
-    /// contract. The bridge is entirely optional: Editors without this contract
-    /// continue to use the embedded compatibility host.
+    /// Bridges discovered GitHub packages and installed Git packages into
+    /// Unity's internal extension-page contract. The package deliberately
+    /// targets the declared Unity 6000.5 Package Manager contract.
     /// </summary>
     internal static class PackageManagerSubmoduleNativePage
     {
@@ -32,6 +33,8 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             "UnityEditor.PackageManager.UI.Internal.Sidebar";
         internal const string SidebarExtensionRowsUpdateMethodName =
             "UpdateExtensionPageRelatedRows";
+        private const string OrganizationFilterFormat =
+            "Organization - {0}";
 
         private const string SidebarRowTypeName =
             "UnityEditor.PackageManager.UI.Internal.SidebarRow";
@@ -42,6 +45,8 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         private const string GetPageMethodName = "GetPage";
         private const string UpdateSupportedLabelsMethodName =
             "UpdateSupportedLabels";
+        private const string UpdateSupportedCategoriesMethodName =
+            "UpdateSupportedCategories";
 
         private static readonly IReadOnlyList<string> SupportedVisibilityLabels =
             Array.AsReadOnly(new[]
@@ -49,6 +54,14 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 PackageManagerSubmodulePresentation.PublicRepositoryTagLabel,
                 PackageManagerSubmodulePresentation.PrivateRepositoryTagLabel
             });
+
+        private sealed class DefaultFilterMarker
+        {
+            internal string PreferenceSignature = string.Empty;
+        }
+
+        private static readonly ConditionalWeakTable<object, DefaultFilterMarker>
+            DefaultFiltersApplied = new();
 
         private const BindingFlags AnyInstance =
             BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
@@ -74,6 +87,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                    typeof(VisualElement).IsAssignableFrom(sidebarRowType) &&
                    HasRequiredArgsFields(argsType) &&
                    GetUpdateSupportedLabelsMethod() != null &&
+                   GetUpdateSupportedCategoriesMethod() != null &&
                    PackageManagerGitHubNativePresentationPatch
                        .HasRequiredDiscoveryLifecycleContract();
         }
@@ -132,7 +146,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 // proves that the current window lifecycle is registered.
                 page = FindRegisteredPage(pageManager);
                 if (page != null)
-                    return TryConfigureVisibilityFilters(page);
+                    return TryConfigureFilters(page);
 
                 if (!TryCreateExtensionPageArgs(out object args))
                     return false;
@@ -146,7 +160,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 addPage.Invoke(pageManager, new[] { args });
                 page = FindRegisteredPage(pageManager) ??
                        FindPageById(pageManager, ExtensionPageId);
-                return page != null && TryConfigureVisibilityFilters(page);
+                return page != null && TryConfigureFilters(page);
             }
             catch
             {
@@ -231,7 +245,198 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 : null;
         }
 
-        internal static bool TryConfigureVisibilityFilters(object page)
+        internal static MethodInfo GetUpdateSupportedCategoriesMethod()
+        {
+            Type basePageType = FindLoadedType(BasePageTypeName);
+            MethodInfo method = basePageType?.GetMethod(
+                UpdateSupportedCategoriesMethodName,
+                AnyInstance,
+                null,
+                new[] { typeof(IReadOnlyList<string>), typeof(bool) },
+                null);
+            return method != null &&
+                   !method.IsStatic &&
+                   method.ReturnType == typeof(bool)
+                ? method
+                : null;
+        }
+
+        internal static string CreateOrganizationFilterLabel(string owner)
+        {
+            string normalizedOwner = owner?.Trim() ?? string.Empty;
+            return string.IsNullOrEmpty(normalizedOwner)
+                ? string.Empty
+                : string.Format(
+                    GetLocalizedOrganizationFilterFormat(),
+                    normalizedOwner);
+        }
+
+        internal static bool IsOrganizationFilterLabel(string label)
+        {
+            return TryGetOrganizationFilterOwner(label, out _);
+        }
+
+        internal static bool TryGetOrganizationFilterOwner(
+            string label,
+            out string owner)
+        {
+            owner = string.Empty;
+            if (string.IsNullOrWhiteSpace(label))
+                return false;
+
+            string format = GetLocalizedOrganizationFilterFormat();
+            int placeholderIndex = format.IndexOf("{0}", StringComparison.Ordinal);
+            if (placeholderIndex < 0)
+                return false;
+
+            string prefix = format.Substring(0, placeholderIndex);
+            string suffix = format.Substring(placeholderIndex + 3);
+            if (!label.StartsWith(prefix, StringComparison.Ordinal) ||
+                !label.EndsWith(suffix, StringComparison.Ordinal) ||
+                label.Length < prefix.Length + suffix.Length)
+            {
+                return false;
+            }
+
+            owner = label.Substring(
+                    prefix.Length,
+                    label.Length - prefix.Length - suffix.Length)
+                .Trim();
+            return !string.IsNullOrEmpty(owner);
+        }
+
+        private static string GetLocalizedOrganizationFilterFormat()
+        {
+            string localized = L10n.Tr(OrganizationFilterFormat);
+            if (string.IsNullOrEmpty(localized) ||
+                localized.IndexOf("{0}", StringComparison.Ordinal) < 0)
+            {
+                return OrganizationFilterFormat;
+            }
+
+            try
+            {
+                string.Format(localized, "owner");
+                return localized;
+            }
+            catch (FormatException)
+            {
+                return OrganizationFilterFormat;
+            }
+        }
+
+        internal static IReadOnlyList<string> BuildOrganizationFilterLabels(
+            IEnumerable<string> owners)
+        {
+            var normalizedOwners =
+                new SortedSet<string>(StringComparer.OrdinalIgnoreCase);
+            if (owners != null)
+            {
+                foreach (string owner in owners)
+                {
+                    string normalizedOwner = owner?.Trim();
+                    if (!string.IsNullOrEmpty(normalizedOwner))
+                        normalizedOwners.Add(normalizedOwner);
+                }
+            }
+
+            var labels = new List<string>(normalizedOwners.Count);
+            foreach (string owner in normalizedOwners)
+                labels.Add(CreateOrganizationFilterLabel(owner));
+            return labels;
+        }
+
+        internal static bool IsSuccessfulCompleteOrganizationCatalogue(
+            PackageManagerGitHubDiscoverySnapshot snapshot)
+        {
+            return snapshot != null &&
+                   !snapshot.IsLoading &&
+                   string.IsNullOrWhiteSpace(snapshot.ErrorMessage) &&
+                   string.IsNullOrWhiteSpace(snapshot.CoverageWarningMessage) &&
+                   snapshot.UnavailableManifestCount == 0 &&
+                   snapshot.TotalOwners > 0 &&
+                   snapshot.CompletedOwners >= snapshot.TotalOwners;
+        }
+
+        internal static bool ShouldPreserveOrganizationFilterState(
+            PackageManagerGitHubDiscoverySnapshot snapshot)
+        {
+            // Native PageFilters removes selected values whenever their supported
+            // category disappears. Until a complete catalogue proves an owner is
+            // stale, retain the prior values across loading and recoverable gaps.
+            return !IsSuccessfulCompleteOrganizationCatalogue(snapshot);
+        }
+
+        internal static IReadOnlyList<string> GetSupportedOrganizationFilters(
+            object page)
+        {
+            var owners = new List<string>();
+            PackageManagerGitHubDiscoverySnapshot snapshot =
+                PackageManagerGitHubDiscovery.Current;
+            IReadOnlyList<PackageManagerGitHubRepository> repositories =
+                snapshot?.Repositories;
+            if (repositories != null)
+            {
+                for (int index = 0; index < repositories.Count; index++)
+                    owners.Add(repositories[index]?.Owner);
+            }
+
+            if (PackageManagerGitHubNativePresentationPatch.TryGetPageGroupNames(
+                    page,
+                    out IReadOnlyList<string> groupNames))
+            {
+                for (int index = 0; index < groupNames.Count; index++)
+                {
+                    if (TryGetOrganizationFilterOwner(
+                            groupNames[index],
+                            out string owner))
+                    {
+                        owners.Add(owner);
+                    }
+                }
+            }
+
+            if (ShouldPreserveOrganizationFilterState(snapshot))
+            {
+                AddOrganizationFilterOwners(
+                    page,
+                    PackageManagerGitHubNativePresentationPatch
+                        .TryGetSupportedCategories,
+                    owners);
+                AddOrganizationFilterOwners(
+                    page,
+                    PackageManagerGitHubNativePresentationPatch
+                        .TryGetSelectedCategories,
+                    owners);
+            }
+
+            return BuildOrganizationFilterLabels(owners);
+        }
+
+        private static void AddOrganizationFilterOwners(
+            object page,
+            TryGetStringList tryGetValues,
+            ICollection<string> owners)
+        {
+            if (tryGetValues == null ||
+                owners == null ||
+                !tryGetValues(page, out IReadOnlyList<string> values))
+            {
+                return;
+            }
+
+            for (int index = 0; index < values.Count; index++)
+            {
+                if (TryGetOrganizationFilterOwner(values[index], out string owner))
+                    owners.Add(owner);
+            }
+        }
+
+        private delegate bool TryGetStringList(
+            object page,
+            out IReadOnlyList<string> values);
+
+        internal static bool TryConfigureFilters(object page)
         {
             if (page == null ||
                 !string.Equals(
@@ -250,30 +455,49 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 MethodInfo filterPostfix =
                     PackageManagerGitHubNativePresentationPatch
                         .GetPageVisibilityFilterPostfix();
-                if (filterTarget == null || filterPostfix == null)
+                MethodInfo supportedFiltersTarget =
+                    PackageManagerGitHubNativePresentationPatch
+                        .GetPageSupportedFiltersRefreshTarget();
+                MethodInfo supportedFiltersPostfix =
+                    PackageManagerGitHubNativePresentationPatch
+                        .GetPageSupportedFiltersRefreshPostfix();
+                if (filterTarget == null ||
+                    filterPostfix == null ||
+                    supportedFiltersTarget == null ||
+                    supportedFiltersPostfix == null)
                 {
                     return false;
                 }
 
-                bool isFilterPatched =
+                bool areFiltersPatched =
                     PackageManagerGitHubNativePresentationPatch.IsPatchApplied(
                         filterTarget,
-                        filterPostfix);
-                if (!isFilterPatched)
+                        filterPostfix) &&
+                    PackageManagerGitHubNativePresentationPatch.IsPatchApplied(
+                        supportedFiltersTarget,
+                        supportedFiltersPostfix);
+                if (!areFiltersPatched)
                 {
-                    isFilterPatched =
+                    areFiltersPatched =
                         PackageManagerGitHubNativePresentationPatch.TryPatch() &&
                         PackageManagerGitHubNativePresentationPatch.IsPatchApplied(
                             filterTarget,
-                            filterPostfix);
+                            filterPostfix) &&
+                        PackageManagerGitHubNativePresentationPatch.IsPatchApplied(
+                            supportedFiltersTarget,
+                            supportedFiltersPostfix);
                 }
-                if (!isFilterPatched)
+                if (!areFiltersPatched)
                     return false;
 
                 MethodInfo updateSupportedLabels =
                     GetUpdateSupportedLabelsMethod();
+                MethodInfo updateSupportedCategories =
+                    GetUpdateSupportedCategoriesMethod();
                 if (updateSupportedLabels == null ||
-                    !updateSupportedLabels.DeclaringType.IsInstanceOfType(page))
+                    updateSupportedCategories == null ||
+                    !updateSupportedLabels.DeclaringType.IsInstanceOfType(page) ||
+                    !updateSupportedCategories.DeclaringType.IsInstanceOfType(page))
                 {
                     return false;
                 }
@@ -281,11 +505,290 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 updateSupportedLabels.Invoke(
                     page,
                     new object[] { SupportedVisibilityLabels, true });
+                updateSupportedCategories.Invoke(
+                    page,
+                    new object[]
+                    {
+                        GetSupportedOrganizationFilters(page),
+                        true
+                    });
+                TryApplyDefaultFilters(page);
                 return true;
             }
             catch
             {
                 return false;
+            }
+        }
+
+        internal static bool TryApplyDefaultFilters(object page)
+        {
+            if (page == null)
+                return false;
+
+            try
+            {
+                GitSubmoduleManagerUserSettings settings =
+                    GitSubmoduleManagerUserSettings.Instance;
+                string preferenceSignature = BuildDefaultFilterPreferenceSignature(
+                    settings.DefaultGitHubVisibility,
+                    settings.DefaultGitHubOrganization);
+                if (DefaultFiltersApplied.TryGetValue(
+                        page,
+                        out DefaultFilterMarker appliedMarker) &&
+                    string.Equals(
+                        appliedMarker.PreferenceSignature,
+                        preferenceSignature,
+                        StringComparison.Ordinal))
+                {
+                    return true;
+                }
+
+                PropertyInfo filtersProperty =
+                    PackageManagerGitHubNativePresentationPatch
+                        .GetPageFiltersProperty();
+                object currentFilters = filtersProperty?.GetValue(page, null);
+                if (currentFilters == null)
+                    return false;
+
+                PropertyInfo isFilterSetProperty = currentFilters.GetType()
+                    .GetProperty("isFilterSet", AnyInstance);
+                if (!(isFilterSetProperty?.GetValue(currentFilters, null) is
+                      bool isFilterSet))
+                {
+                    return false;
+                }
+
+                if (isFilterSet)
+                {
+                    // A user/native selection always wins when Preferences
+                    // change. Remember the new signature without rewriting it.
+                    MarkDefaultFiltersApplied(page, preferenceSignature);
+                    return true;
+                }
+
+                IReadOnlyList<string> supportedOrganizations =
+                    string.IsNullOrEmpty(settings.DefaultGitHubOrganization)
+                        ? Array.Empty<string>()
+                        : GetSupportedOrganizationFilters(page);
+                if (!TryResolveDefaultFilterSelection(
+                        settings.DefaultGitHubVisibility,
+                        settings.DefaultGitHubOrganization,
+                        supportedOrganizations,
+                        PackageManagerGitHubDiscovery.Current,
+                        out string visibilityLabel,
+                        out string organizationLabel))
+                {
+                    return false;
+                }
+
+                if (string.IsNullOrEmpty(visibilityLabel) &&
+                    string.IsNullOrEmpty(organizationLabel))
+                {
+                    MarkDefaultFiltersApplied(page, preferenceSignature);
+                    return true;
+                }
+
+                Type filtersType = currentFilters.GetType();
+                ConstructorInfo copyConstructor = null;
+                foreach (ConstructorInfo constructor in filtersType.GetConstructors(
+                             AnyInstance))
+                {
+                    ParameterInfo[] parameters = constructor.GetParameters();
+                    if (parameters.Length == 1 &&
+                        parameters[0].ParameterType.IsInstanceOfType(
+                            currentFilters))
+                    {
+                        copyConstructor = constructor;
+                        break;
+                    }
+                }
+
+                object nextFilters = copyConstructor?.Invoke(
+                    new[] { currentFilters });
+                if (nextFilters == null)
+                    return false;
+
+                MethodInfo updateLabels = filtersType.GetMethod(
+                    "UpdateLabels",
+                    AnyInstance,
+                    null,
+                    new[] { typeof(IReadOnlyList<string>) },
+                    null);
+                MethodInfo updateCategories = filtersType.GetMethod(
+                    "UpdateCategories",
+                    AnyInstance,
+                    null,
+                    new[] { typeof(IReadOnlyList<string>) },
+                    null);
+                if (updateLabels == null || updateCategories == null)
+                    return false;
+
+                updateLabels.Invoke(
+                    nextFilters,
+                    new object[]
+                    {
+                        string.IsNullOrEmpty(visibilityLabel)
+                            ? Array.Empty<string>()
+                            : new[] { visibilityLabel }
+                    });
+                updateCategories.Invoke(
+                    nextFilters,
+                    new object[]
+                    {
+                        string.IsNullOrEmpty(organizationLabel)
+                            ? Array.Empty<string>()
+                            : new[] { organizationLabel }
+                    });
+
+                MethodInfo updateFilters = null;
+                for (Type type = page.GetType();
+                     type != null && updateFilters == null;
+                     type = type.BaseType)
+                {
+                    foreach (MethodInfo method in type.GetMethods(
+                                 AnyInstance | BindingFlags.DeclaredOnly))
+                    {
+                        ParameterInfo[] parameters = method.GetParameters();
+                        if (string.Equals(
+                                method.Name,
+                                "UpdateFilters",
+                                StringComparison.Ordinal) &&
+                            parameters.Length == 1 &&
+                            parameters[0].ParameterType.IsInstanceOfType(
+                                nextFilters))
+                        {
+                            updateFilters = method;
+                            break;
+                        }
+                    }
+                }
+
+                if (updateFilters == null)
+                    return false;
+
+                updateFilters.Invoke(page, new[] { nextFilters });
+                MarkDefaultFiltersApplied(page, preferenceSignature);
+                return true;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        internal static string GetDefaultVisibilityLabel(
+            GitSubmoduleManagerDefaultVisibility visibility)
+        {
+            switch (GitSubmoduleManagerUserSettings
+                        .NormalizeDefaultGitHubVisibility(visibility))
+            {
+                case GitSubmoduleManagerDefaultVisibility.Public:
+                    return PackageManagerSubmodulePresentation
+                        .PublicRepositoryTagLabel;
+                case GitSubmoduleManagerDefaultVisibility.Private:
+                    return PackageManagerSubmodulePresentation
+                        .PrivateRepositoryTagLabel;
+                default:
+                    return string.Empty;
+            }
+        }
+
+        internal static string BuildDefaultFilterPreferenceSignature(
+            GitSubmoduleManagerDefaultVisibility visibility,
+            string organization)
+        {
+            GitSubmoduleManagerDefaultVisibility normalizedVisibility =
+                GitSubmoduleManagerUserSettings
+                    .NormalizeDefaultGitHubVisibility(visibility);
+            string normalizedOrganization = GitSubmoduleManagerUserSettings
+                .NormalizeDefaultGitHubOrganization(organization)
+                .ToLowerInvariant();
+            return normalizedVisibility + "\n" + normalizedOrganization;
+        }
+
+        internal static bool TryResolveDefaultFilterSelection(
+            GitSubmoduleManagerDefaultVisibility visibility,
+            string organization,
+            IReadOnlyList<string> supportedOrganizations,
+            PackageManagerGitHubDiscoverySnapshot snapshot,
+            out string visibilityLabel,
+            out string organizationLabel)
+        {
+            visibilityLabel = string.Empty;
+            organizationLabel = string.Empty;
+            string normalizedOrganization = GitSubmoduleManagerUserSettings
+                .NormalizeDefaultGitHubOrganization(organization);
+            if (string.IsNullOrEmpty(normalizedOrganization))
+            {
+                visibilityLabel = GetDefaultVisibilityLabel(visibility);
+                return true;
+            }
+
+            // An organization default is meaningful only after a complete scan.
+            // Loading or incomplete/error snapshots cannot prove either presence
+            // or absence, so defer both facets until a later successful terminal
+            // snapshot. This avoids a partial visibility default becoming sticky.
+            if (!IsSuccessfulCompleteOrganizationCatalogue(snapshot))
+                return false;
+
+            visibilityLabel = GetDefaultVisibilityLabel(visibility);
+
+            if (supportedOrganizations != null)
+            {
+                for (int index = 0; index < supportedOrganizations.Count; index++)
+                {
+                    if (TryGetOrganizationFilterOwner(
+                            supportedOrganizations[index],
+                            out string owner) &&
+                        string.Equals(
+                            owner,
+                            normalizedOrganization,
+                            StringComparison.OrdinalIgnoreCase))
+                    {
+                        organizationLabel = supportedOrganizations[index];
+                        break;
+                    }
+                }
+            }
+
+            // A complete catalogue can prove that the configured organization has
+            // no current packages. In that case the independent visibility default
+            // remains useful and the unavailable organization is left unselected.
+            return true;
+        }
+
+        private static void MarkDefaultFiltersApplied(
+            object page,
+            string preferenceSignature)
+        {
+            if (DefaultFiltersApplied.TryGetValue(
+                    page,
+                    out DefaultFilterMarker existingMarker))
+            {
+                existingMarker.PreferenceSignature = preferenceSignature;
+                return;
+            }
+
+            try
+            {
+                DefaultFiltersApplied.Add(
+                    page,
+                    new DefaultFilterMarker
+                    {
+                        PreferenceSignature = preferenceSignature
+                    });
+            }
+            catch (ArgumentException)
+            {
+                // Another registration path marked the same page first. Preserve
+                // the newest normalized Preferences signature in that marker.
+                if (DefaultFiltersApplied.TryGetValue(
+                        page,
+                        out existingMarker))
+                {
+                    existingMarker.PreferenceSignature = preferenceSignature;
+                }
             }
         }
 
@@ -425,9 +928,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             {
                 return string.IsNullOrWhiteSpace(repository.Owner)
                     ? L10n.Tr("Organization")
-                    : string.Format(
-                        L10n.Tr("Organization - {0}"),
-                        repository.Owner.Trim());
+                    : CreateOrganizationFilterLabel(repository.Owner);
             }
 
             object primaryVersion = GetPrimaryVersion(package);
@@ -437,11 +938,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             {
                 string repositoryOwner = GetGitHubRepositoryOwner(submoduleInfo);
                 if (!string.IsNullOrWhiteSpace(repositoryOwner))
-                {
-                    return string.Format(
-                        L10n.Tr("Organization - {0}"),
-                        repositoryOwner);
-                }
+                    return CreateOrganizationFilterLabel(repositoryOwner);
             }
 
             if (PackageManagerReadOnlyGitPackage.TryGetInfo(
@@ -454,18 +951,14 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             {
                 return string.IsNullOrWhiteSpace(readOnlyOwner)
                     ? L10n.Tr("Organization")
-                    : string.Format(
-                        L10n.Tr("Organization - {0}"),
-                        readOnlyOwner.Trim());
+                    : CreateOrganizationFilterLabel(readOnlyOwner);
             }
 
             object author = GetPropertyValue(primaryVersion, "author");
             string authorName = GetPropertyValue(author, "name") as string;
             return string.IsNullOrWhiteSpace(authorName)
                 ? L10n.Tr("Organization")
-                : string.Format(
-                    L10n.Tr("Organization - {0}"),
-                    authorName.Trim());
+                : CreateOrganizationFilterLabel(authorName);
         }
 
         internal static string GetGitHubRepositoryOwner(
@@ -482,6 +975,40 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             }
 
             return repositoryOwner?.Trim() ?? string.Empty;
+        }
+
+        internal static string GetGitHubRepositoryOwner(object package)
+        {
+            if (PackageManagerGitHubPackageProjection.TryGetRepository(
+                    package,
+                    out PackageManagerGitHubRepository repository))
+            {
+                return repository.Owner?.Trim() ?? string.Empty;
+            }
+
+            object primaryVersion = GetPrimaryVersion(package);
+            if (PackageManagerSubmodulePresentation.TryGetPresentation(
+                    primaryVersion,
+                    out PackageManagerSubmoduleInfo submoduleInfo))
+            {
+                string submoduleOwner =
+                    GetGitHubRepositoryOwner(submoduleInfo);
+                if (!string.IsNullOrEmpty(submoduleOwner))
+                    return submoduleOwner;
+            }
+
+            if (PackageManagerReadOnlyGitPackage.TryGetInfo(
+                    package,
+                    out PackageManagerReadOnlyGitInfo readOnlyInfo) &&
+                GitHubUtility.TryParseGitHubRepo(
+                    readOnlyInfo.RepositoryUrl,
+                    out string readOnlyOwner,
+                    out _))
+            {
+                return readOnlyOwner?.Trim() ?? string.Empty;
+            }
+
+            return string.Empty;
         }
 
         internal static Type FindLoadedType(string fullName)

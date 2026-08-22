@@ -38,7 +38,6 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             !PackageManagerSubmoduleSnapshot.IsReaderActive &&
             !GitSubmoduleInstallProbe.IsReaderActive &&
             !AsyncCommandDrainRegistry.IsDraining &&
-            !GitSubmoduleManagerView.AreBackgroundLoadsDraining &&
             string.IsNullOrWhiteSpace(GitOperationService.RecoveryWarning);
 
         internal static string ValidateInput(
@@ -85,9 +84,61 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             Action<GitSubmoduleAddCompletion> onComplete,
             out string error)
         {
+            return TryStart(
+                url,
+                branch,
+                packageName,
+                string.Empty,
+                onComplete,
+                out error);
+        }
+
+        internal static bool TryStart(
+            string url,
+            string branch,
+            string packageName,
+            string expectedVersion,
+            Action<GitSubmoduleAddCompletion> onComplete,
+            out string error)
+        {
+            return TryStart(
+                url,
+                branch,
+                packageName,
+                expectedVersion,
+                string.Empty,
+                onComplete,
+                out error);
+        }
+
+        internal static bool TryStart(
+            string url,
+            string branch,
+            string packageName,
+            string expectedVersion,
+            string expectedDependencyFingerprint,
+            Action<GitSubmoduleAddCompletion> onComplete,
+            out string error)
+        {
             error = ValidateInput(url, packageName, branch);
             if (!string.IsNullOrEmpty(error))
                 return false;
+            string version = expectedVersion?.Trim() ?? string.Empty;
+            if (!string.IsNullOrEmpty(version) &&
+                !GitUtility.IsValidSemanticVersion(version))
+            {
+                error = "The expected package version must be valid SemVer 2.0.";
+                return false;
+            }
+            string dependencyFingerprint =
+                expectedDependencyFingerprint?.Trim() ?? string.Empty;
+            if (!string.IsNullOrEmpty(dependencyFingerprint) &&
+                !GitUtility.IsValidPackageDependencyFingerprint(
+                    dependencyFingerprint))
+            {
+                error = "The expected package dependency fingerprint is invalid.";
+                return false;
+            }
 
             string path = GetPackagePath(packageName);
             var state = new GitSubmoduleAddTaskState();
@@ -97,6 +148,8 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                     url,
                     branch,
                     packageName,
+                    version,
+                    dependencyFingerprint,
                     path,
                     state,
                     cancellationToken),
@@ -152,6 +205,46 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             string url,
             string branch,
             string packageName,
+            string path,
+            GitSubmoduleAddTaskState state,
+            CancellationToken cancellationToken)
+        {
+            return RunAddSubmoduleTask(
+                url,
+                branch,
+                packageName,
+                string.Empty,
+                path,
+                state,
+                cancellationToken);
+        }
+
+        internal static CommandResult RunAddSubmoduleTask(
+            string url,
+            string branch,
+            string packageName,
+            string expectedVersion,
+            string path,
+            GitSubmoduleAddTaskState state,
+            CancellationToken cancellationToken)
+        {
+            return RunAddSubmoduleTask(
+                url,
+                branch,
+                packageName,
+                expectedVersion,
+                string.Empty,
+                path,
+                state,
+                cancellationToken);
+        }
+
+        internal static CommandResult RunAddSubmoduleTask(
+            string url,
+            string branch,
+            string packageName,
+            string expectedVersion,
+            string expectedDependencyFingerprint,
             string path,
             GitSubmoduleAddTaskState state,
             CancellationToken cancellationToken)
@@ -229,21 +322,26 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 path,
                 "package.json");
             string validationError = string.Empty;
-            if (!GitUtility.TryReadValidPackageManifest(
+            if (!GitUtility.TryReadPackageManifestMetadata(
                     packageJsonPath,
-                    out string declaredName,
+                    out PackageManifestMetadata metadata,
                     out string manifestError,
                     cancellationToken))
             {
                 validationError =
                     "Added submodule package.json is invalid: " + manifestError;
             }
-            else if (!string.Equals(declaredName, packageName, StringComparison.Ordinal))
+            else
             {
-                validationError =
-                    $"Package name mismatch. Expected {packageName}, got {declaredName}.";
+                validationError = GitUtility.ValidateExpectedPackageManifest(
+                    packageName,
+                    expectedVersion,
+                    expectedDependencyFingerprint,
+                    metadata);
             }
-            else if (!GitUtility.TryVerifyAddedSubmodule(
+
+            if (string.IsNullOrEmpty(validationError) &&
+                !GitUtility.TryVerifyAddedSubmodule(
                          plan,
                          url,
                          branch,

@@ -855,6 +855,153 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
         }
 
         [Test]
+        public void RecoveredDependencyCompletion_MatchesOnlyItsNativeDetails()
+        {
+            PackageManagerGitHubRepository repository = CreateRepository(
+                "repository",
+                "main",
+                "https://github.com/example/repository.git");
+            var matching = new PackageDependencyInstallPipelineCompletion(
+                true,
+                false,
+                "Installed.",
+                "git@github.com:example/repository.git",
+                "main",
+                "com.example.repository",
+                PackageManagerGitInstallMode.GitSubmodule);
+            var wrongPackage = new PackageDependencyInstallPipelineCompletion(
+                true,
+                false,
+                "Installed.",
+                repository.Url,
+                "main",
+                "com.example.other",
+                PackageManagerGitInstallMode.GitSubmodule);
+            var wrongRepository = new PackageDependencyInstallPipelineCompletion(
+                true,
+                false,
+                "Installed.",
+                "https://github.com/example/other.git",
+                "main",
+                repository.PackageName,
+                PackageManagerGitInstallMode.GitSubmodule);
+
+            Assert.That(
+                PackageManagerGitHubNativeActions
+                    .MatchesDependencyInstallCompletion(repository, matching),
+                Is.True);
+            Assert.That(
+                PackageManagerGitHubNativeActions
+                    .MatchesDependencyInstallCompletion(repository, wrongPackage),
+                Is.False);
+            Assert.That(
+                PackageManagerGitHubNativeActions
+                    .MatchesDependencyInstallCompletion(repository, wrongRepository),
+                Is.False);
+            Assert.That(
+                PackageManagerGitHubNativeActions
+                    .MatchesDependencyInstallCompletion(null, matching),
+                Is.False);
+        }
+
+        [Test]
+        public void DependencyCompletion_SchedulesFallbackOnlyWhenRetainedAndUnshown()
+        {
+            var live = new PackageDependencyInstallPipelineCompletion(
+                true,
+                false,
+                "Installed.",
+                "https://github.com/example/repository.git",
+                "main",
+                "com.example.repository",
+                PackageManagerGitInstallMode.GitSubmodule);
+            var recovered = new PackageDependencyInstallPipelineCompletion(
+                true,
+                false,
+                "Installed.",
+                "https://github.com/example/repository.git",
+                "main",
+                "com.example.repository",
+                PackageManagerGitInstallMode.GitSubmodule,
+                true);
+
+            Assert.That(
+                PackageManagerGitHubNativeActions
+                    .ShouldScheduleRecoveredCompletion(live, false, false),
+                Is.False,
+                "A live popup callback that consumed its result must not gain " +
+                "a second global dialog.");
+            Assert.That(
+                PackageManagerGitHubNativeActions
+                    .ShouldScheduleRecoveredCompletion(live, false, true),
+                Is.True,
+                "A closed popup leaves the retained result for immediate " +
+                "global presentation even without an assembly reload.");
+            Assert.That(
+                PackageManagerGitHubNativeActions
+                    .ShouldScheduleRecoveredCompletion(recovered, true),
+                Is.False,
+                "Matching native details already presented the result inline.");
+            Assert.That(
+                PackageManagerGitHubNativeActions
+                    .ShouldScheduleRecoveredCompletion(recovered, false),
+                Is.True,
+                "A callback lost to reload needs the global recovery path.");
+        }
+
+        [Test]
+        public void CoordinatedReadOnlyPrimitive_IsNeverPresentedAsStandaloneAfterCoordinatorClears()
+        {
+            string operationId = System.Guid.NewGuid().ToString("N");
+            var leaf = new ReadOnlyGitPackageInstallCompletion(
+                false,
+                "Dependency failed.",
+                "com.example.dependency",
+                null,
+                operationId);
+            var root = new ReadOnlyGitPackageInstallCompletion(
+                false,
+                "Root failed.",
+                "com.example.root",
+                null,
+                operationId);
+            var standalone = new ReadOnlyGitPackageInstallCompletion(
+                false,
+                "Standalone failed.",
+                "com.example.standalone",
+                null);
+
+            Assert.That(
+                PackageManagerGitHubNativeActions
+                    .ShouldPresentReadOnlyCompletionAsStandalone(
+                        leaf,
+                        false,
+                        false),
+                Is.False);
+            Assert.That(
+                PackageManagerGitHubNativeActions
+                    .ShouldPresentReadOnlyCompletionAsStandalone(
+                        root,
+                        false,
+                        false),
+                Is.False);
+            Assert.That(
+                PackageManagerGitHubNativeActions
+                    .ShouldPresentReadOnlyCompletionAsStandalone(
+                        standalone,
+                        false,
+                        false),
+                Is.True);
+            Assert.That(
+                PackageManagerGitHubNativeActions
+                    .ShouldPresentReadOnlyCompletionAsStandalone(
+                        standalone,
+                        true,
+                        false),
+                Is.False);
+        }
+
+        [Test]
         public void InstallFeedback_ShowsProgressAndRecoverableInlineError()
         {
             using PackageManagerGitHubDetails details = CreateDetails(

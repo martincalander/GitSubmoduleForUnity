@@ -1,25 +1,29 @@
 # Git Submodule Manager
 
-Git Submodule Manager is an editor-only Unity package for managing Git
-submodules as embedded UPM packages under `Packages/`.
+Git Submodule Manager is an editor-only Unity package for installing and
+managing Git-hosted UPM packages as editable submodules under `Packages/` or as
+normal read-only Git dependencies.
 
 ## Start Here
 
 1. Follow [Installation](installation.md) to install Git, optionally configure
    GitHub CLI, and add the package.
-2. On Unity 6000.5.x, open **Window > Package Manager**, then select **Sources >
-   GitHub**. Unity's native list, search,
+2. On Unity `6000.5.*f1`, open **Window > Package Management > Package Manager**,
+   then select **Sources > GitHub**. Unity's native list, search,
    sorting, and details show installed GitHub submodules plus valid UPM packages
    discovered incrementally from authenticated personal and organization
    repositories.
-3. Select a discovered package, inspect its **Repository** link, choose a branch
-   (the default branch is preselected), and choose **Install**. Choose
-   **Refresh** to rescan the project and GitHub.
-4. Open **Window > Package Management > Git Submodule Manager** for the complete
-   management and discovery workspace. A guarded embedded Package Manager
-   fallback remains available if a supported patch changes a native contract.
-5. Continue with the [User Guide](user-guide.md).
-6. Use [Troubleshooting](troubleshooting.md) when a CLI, credential, or
+3. Use Package Manager's native **Filters** control for visibility and
+   organization. Select a discovered package, inspect its **Repository** link,
+   choose a branch and install mode, and choose **Install**. Review any missing
+   dependency plan, then choose **Refresh** whenever you need to rescan.
+4. Use an installed package's native **Manage** menu to convert eligible Git
+   packages or safely uninstall a submodule. The Package Manager **+** menu adds
+   **Install package as Git Submodule...** for direct URL installation.
+5. Open **Preferences > Git Submodule Manager** to configure defaults, show the
+   standalone Welcome window, or reopen **Sources > GitHub**.
+6. Continue with the [User Guide](user-guide.md).
+7. Use [Troubleshooting](troubleshooting.md) when a CLI, credential, or
    submodule command fails.
 
 ## Documentation
@@ -38,8 +42,8 @@ submodules as embedded UPM packages under `Packages/`.
 Git Submodule Manager intentionally manages one workflow:
 
 - Git repositories;
-- represented as Git submodules;
-- mounted as direct UPM packages at `Packages/com.author.package`;
+- represented as editable Git submodules or read-only UPM Git dependencies;
+- with editable submodules mounted directly at `Packages/com.author.package`;
 - controlled explicitly from the Unity Editor.
 
 It does not manage Git subtrees, arbitrary project folders, scoped registries,

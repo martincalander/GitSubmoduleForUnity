@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Text;
 using System.Threading;
 using UnityEditor;
 using UnityEditor.PackageManager;
@@ -16,18 +17,27 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             bool success,
             string message,
             string packageName,
-            UpmPackageInfo packageInfo)
+            UpmPackageInfo packageInfo,
+            string dependencyInstallOperationId = "")
         {
             Success = success;
             Message = message ?? string.Empty;
             PackageName = packageName ?? string.Empty;
             PackageInfo = packageInfo;
+            DependencyInstallOperationId =
+                dependencyInstallOperationId?.Trim() ?? string.Empty;
         }
 
         internal bool Success { get; }
         internal string Message { get; }
         internal string PackageName { get; }
         internal UpmPackageInfo PackageInfo { get; }
+        internal string DependencyInstallOperationId { get; }
+        internal bool IsDependencyInstallPrimitive =>
+            Guid.TryParseExact(
+                DependencyInstallOperationId,
+                "N",
+                out _);
     }
 
     /// <summary>
@@ -81,7 +91,6 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 return "Wait for the current Git package operation to finish.";
             if (PackageManagerSubmoduleSnapshot.IsReaderActive ||
                 GitSubmoduleInstallProbe.IsReaderActive ||
-                GitSubmoduleManagerView.AreBackgroundLoadsDraining ||
                 AsyncCommandDrainRegistry.IsDraining)
             {
                 return "Wait for the current package or repository inspection to finish.";
@@ -168,9 +177,90 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             Action<ReadOnlyGitPackageInstallCompletion> onComplete,
             out string error)
         {
+            return TryStart(
+                repositoryUrl,
+                revision,
+                expectedPackageName,
+                string.Empty,
+                onComplete,
+                out error);
+        }
+
+        internal static bool TryStart(
+            string repositoryUrl,
+            string revision,
+            string expectedPackageName,
+            string expectedVersion,
+            Action<ReadOnlyGitPackageInstallCompletion> onComplete,
+            out string error)
+        {
+            return TryStart(
+                repositoryUrl,
+                revision,
+                expectedPackageName,
+                expectedVersion,
+                string.Empty,
+                onComplete,
+                out error);
+        }
+
+        internal static bool TryStart(
+            string repositoryUrl,
+            string revision,
+            string expectedPackageName,
+            string expectedVersion,
+            string expectedDependencyFingerprint,
+            Action<ReadOnlyGitPackageInstallCompletion> onComplete,
+            out string error)
+        {
+            return TryStart(
+                repositoryUrl,
+                revision,
+                expectedPackageName,
+                expectedVersion,
+                expectedDependencyFingerprint,
+                string.Empty,
+                onComplete,
+                out error);
+        }
+
+        internal static bool TryStart(
+            string repositoryUrl,
+            string revision,
+            string expectedPackageName,
+            string expectedVersion,
+            string expectedDependencyFingerprint,
+            string dependencyInstallOperationId,
+            Action<ReadOnlyGitPackageInstallCompletion> onComplete,
+            out string error)
+        {
             error = ValidateInput(repositoryUrl, revision, expectedPackageName);
             if (!string.IsNullOrEmpty(error))
                 return false;
+            string version = expectedVersion?.Trim() ?? string.Empty;
+            if (!string.IsNullOrEmpty(version) &&
+                !GitUtility.IsValidSemanticVersion(version))
+            {
+                error = "The expected package version must be valid SemVer 2.0.";
+                return false;
+            }
+            string dependencyFingerprint =
+                expectedDependencyFingerprint?.Trim() ?? string.Empty;
+            if (!string.IsNullOrEmpty(dependencyFingerprint) &&
+                !GitUtility.IsValidPackageDependencyFingerprint(
+                    dependencyFingerprint))
+            {
+                error = "The expected package dependency fingerprint is invalid.";
+                return false;
+            }
+            string operationId =
+                dependencyInstallOperationId?.Trim() ?? string.Empty;
+            if (!string.IsNullOrEmpty(operationId) &&
+                !Guid.TryParseExact(operationId, "N", out _))
+            {
+                error = "The dependency install operation identity is invalid.";
+                return false;
+            }
 
             if (!PackageManifestGitDependencyStore.TryBuildGitSpec(
                     repositoryUrl,
@@ -200,6 +290,9 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 RepositoryUrl = repositoryUrl.Trim(),
                 Revision = revision?.Trim() ?? string.Empty,
                 ExpectedPackageName = expectedPackageName,
+                ExpectedVersion = version,
+                ExpectedDependencyFingerprint = dependencyFingerprint,
+                DependencyInstallOperationId = operationId,
                 Spec = spec,
                 DirectPackageNamesBefore = directPackageNames,
                 StartedUtcTicks = DateTime.UtcNow.Ticks
@@ -237,13 +330,22 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             {
                 PersistedCompletion persisted =
                     JsonUtility.FromJson<PersistedCompletion>(json);
-                if (persisted == null)
+                if (persisted == null ||
+                    (!string.IsNullOrWhiteSpace(
+                         persisted.DependencyInstallOperationId) &&
+                     !Guid.TryParseExact(
+                         persisted.DependencyInstallOperationId,
+                         "N",
+                         out _)))
+                {
                     return false;
+                }
                 completion = new ReadOnlyGitPackageInstallCompletion(
                     persisted.Success,
                     persisted.Message,
                     persisted.PackageName,
-                    FindRegisteredPackage(persisted.PackageName));
+                    FindRegisteredPackage(persisted.PackageName),
+                    persisted.DependencyInstallOperationId);
                 return true;
             }
             catch
@@ -302,13 +404,16 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 return;
             }
 
-            if (!TryStartMismatchCleanup(result, error))
+            if (!TryStartMismatchCleanup(
+                    result,
+                    error,
+                    out string cleanupFailureMessage))
             {
                 Finish(
                     false,
                     activeState.ExpectedPackageName,
                     result,
-                    error);
+                    cleanupFailureMessage);
             }
         }
 
@@ -338,13 +443,16 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                     return;
                 }
 
-                if (!TryStartMismatchCleanup(exactSpecPackage, error))
+                if (!TryStartMismatchCleanup(
+                        exactSpecPackage,
+                        error,
+                        out string cleanupFailureMessage))
                 {
                     Finish(
                         false,
                         activeState.ExpectedPackageName,
                         exactSpecPackage,
-                        error);
+                        cleanupFailureMessage);
                 }
                 return;
             }
@@ -372,13 +480,14 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 return false;
             }
 
-            if (!string.Equals(
-                    result.name,
-                    activeState.ExpectedPackageName,
-                    StringComparison.Ordinal))
+            string identityError = GitUtility.ValidateExpectedPackageIdentity(
+                activeState.ExpectedPackageName,
+                activeState.ExpectedVersion,
+                result.name,
+                result.version);
+            if (!string.IsNullOrEmpty(identityError))
             {
-                error =
-                    $"The repository declared {result.name ?? "an unknown package"}, not the expected package {activeState.ExpectedPackageName}.";
+                error = identityError;
                 return false;
             }
 
@@ -398,6 +507,44 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 return false;
             }
 
+            string packageJsonPath;
+            try
+            {
+                packageJsonPath = Path.Combine(
+                    result.resolvedPath ?? string.Empty,
+                    "package.json");
+            }
+            catch (Exception exception)
+            {
+                error = SanitizeMessage(
+                    "The installed package path could not be inspected: " +
+                    exception.Message);
+                return false;
+            }
+
+            if (!GitUtility.TryReadPackageManifestMetadata(
+                    packageJsonPath,
+                    out PackageManifestMetadata metadata,
+                    out string manifestError))
+            {
+                error = SanitizeMessage(
+                    "The installed package.json could not be validated: " +
+                    manifestError);
+                return false;
+            }
+
+            string packageManifestError =
+                GitUtility.ValidateExpectedPackageManifest(
+                    activeState.ExpectedPackageName,
+                    activeState.ExpectedVersion,
+                    activeState.ExpectedDependencyFingerprint,
+                    metadata);
+            if (!string.IsNullOrEmpty(packageManifestError))
+            {
+                error = packageManifestError;
+                return false;
+            }
+
             return PackageManagerReadOnlyGitPackage.TryCreateInfo(
                 result,
                 out info,
@@ -406,8 +553,10 @@ namespace MartinCalander.GitSubmoduleManager.Editor
 
         private static bool TryStartMismatchCleanup(
             UpmPackageInfo result,
-            string verificationError)
+            string verificationError,
+            out string cleanupFailureMessage)
         {
+            cleanupFailureMessage = string.Empty;
             if (result == null ||
                 !GitUtility.IsValidUpmPackageName(result.name) ||
                 !result.isDirectDependency ||
@@ -416,6 +565,9 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                     result,
                     activeState.Spec))
             {
+                cleanupFailureMessage = BuildMismatchCleanupFailureMessage(
+                    verificationError,
+                    "cleanup ownership could not be proven safely");
                 return false;
             }
 
@@ -424,9 +576,9 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             activeState.FailureMessage =
                 (verificationError ?? "The installed package did not match the request.") +
                 " The newly-added dependency is being removed.";
-            SaveActiveState();
             try
             {
+                SaveActiveState();
                 activeRemoveRequest = Client.Remove(result.name);
                 if (activeRemoveRequest == null)
                     throw new InvalidOperationException("Unity did not create a remove request.");
@@ -434,14 +586,32 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             }
             catch (Exception exception)
             {
-                activeState.FailureMessage = SanitizeMessage(
-                    verificationError +
-                    " Automatic removal could not start: " +
-                    exception.Message +
-                    ". Inspect Packages/manifest.json before retrying.");
-                SaveActiveState();
+                cleanupFailureMessage = BuildMismatchCleanupFailureMessage(
+                    verificationError,
+                    "Unity Package Manager could not start automatic removal: " +
+                    exception.Message);
                 return false;
             }
+        }
+
+        internal static string BuildMismatchCleanupFailureMessage(
+            string verificationError,
+            string cleanupFailure)
+        {
+            string mismatch = string.IsNullOrWhiteSpace(verificationError)
+                ? "The installed package did not match the request."
+                : verificationError.Trim();
+            string detail = string.IsNullOrWhiteSpace(cleanupFailure)
+                ? "automatic cleanup did not complete"
+                : cleanupFailure.Trim().TrimEnd('.');
+            string sanitized = SanitizeMessage(
+                mismatch.TrimEnd() + " Automatic removal was not completed because " +
+                detail + ". The mismatched dependency may remain in " +
+                "Packages/manifest.json; inspect it before retrying.");
+            var singleLine = new StringBuilder(sanitized.Length);
+            foreach (char character in sanitized)
+                singleLine.Append(char.IsControl(character) ? ' ' : character);
+            return singleLine.ToString().Trim();
         }
 
         private static void UpdateCleanup()
@@ -524,7 +694,8 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 success,
                 SanitizeMessage(message),
                 packageName,
-                packageInfo);
+                packageInfo,
+                activeState?.DependencyInstallOperationId);
             PersistCompletion(completion);
 
             Action<ReadOnlyGitPackageInstallCompletion> callback = activeCallback;
@@ -662,6 +833,18 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                     JsonUtility.FromJson<PersistedInstallState>(json);
                 if (state == null ||
                     !GitUtility.IsValidUpmPackageName(state.ExpectedPackageName) ||
+                    (!string.IsNullOrWhiteSpace(state.ExpectedVersion) &&
+                     !GitUtility.IsValidSemanticVersion(state.ExpectedVersion)) ||
+                    (!string.IsNullOrWhiteSpace(
+                         state.ExpectedDependencyFingerprint) &&
+                     !GitUtility.IsValidPackageDependencyFingerprint(
+                         state.ExpectedDependencyFingerprint)) ||
+                    (!string.IsNullOrWhiteSpace(
+                         state.DependencyInstallOperationId) &&
+                     !Guid.TryParseExact(
+                         state.DependencyInstallOperationId,
+                         "N",
+                         out _)) ||
                     !PackageManifestGitDependencyStore.TryBuildGitSpec(
                         state.RepositoryUrl,
                         state.Revision,
@@ -705,7 +888,9 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 {
                     Success = completion.Success,
                     Message = completion.Message,
-                    PackageName = completion.PackageName
+                    PackageName = completion.PackageName,
+                    DependencyInstallOperationId =
+                        completion.DependencyInstallOperationId
                 }));
         }
 
@@ -732,6 +917,9 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             public string RepositoryUrl = string.Empty;
             public string Revision = string.Empty;
             public string ExpectedPackageName = string.Empty;
+            public string ExpectedVersion = string.Empty;
+            public string ExpectedDependencyFingerprint = string.Empty;
+            public string DependencyInstallOperationId = string.Empty;
             public string Spec = string.Empty;
             public string[] DirectPackageNamesBefore = Array.Empty<string>();
             public string CleanupPackageName = string.Empty;
@@ -745,6 +933,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             public bool Success;
             public string Message = string.Empty;
             public string PackageName = string.Empty;
+            public string DependencyInstallOperationId = string.Empty;
         }
     }
 }

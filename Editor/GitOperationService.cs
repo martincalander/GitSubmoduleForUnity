@@ -661,7 +661,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             }
 
             if (ShouldBlockMutationForReaders(
-                    GitSubmoduleManagerView.AreBackgroundLoadsDraining,
+                    false,
                     PackageManagerSubmoduleSnapshot.IsReaderActive,
                     GitSubmoduleInstallProbe.IsReaderActive,
                     AsyncCommandDrainRegistry.IsDraining))

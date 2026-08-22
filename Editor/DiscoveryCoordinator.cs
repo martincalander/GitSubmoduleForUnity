@@ -1290,7 +1290,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
 
         private static bool CanStartGitHubCommandNow =>
             CanStartGitHubCommand(
-                GitSubmoduleManagerView.IsSharedGitHubAuthenticationBlocked,
+                false,
                 AsyncCommandDrainRegistry.IsDraining ||
                 CliCommandRunner.GitHubCommandRequiresEditorRestart);
 

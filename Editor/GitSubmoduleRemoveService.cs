@@ -51,7 +51,6 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             !PackageManagerSubmoduleSnapshot.IsReaderActive &&
             !GitSubmoduleInstallProbe.IsReaderActive &&
             !AsyncCommandDrainRegistry.IsDraining &&
-            !GitSubmoduleManagerView.AreBackgroundLoadsDraining &&
             string.IsNullOrWhiteSpace(GitOperationService.RecoveryWarning);
 
         internal static string ValidateInput(PackageManagerSubmoduleInfo info)

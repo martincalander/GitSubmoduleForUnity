@@ -5,7 +5,6 @@ using System.Runtime.InteropServices;
 using System.Text;
 using System.Threading;
 using NUnit.Framework;
-using GitSubmoduleManagerView = MartinCalander.GitSubmoduleManager.Editor.GitSubmoduleManagerView;
 
 namespace MartinCalander.GitSubmoduleManager.Editor.Tests
 {
@@ -242,41 +241,6 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                     cancellationSource.Token));
         }
 
-        [Test]
-        public void InstalledDetailsIdentity_FollowsPackagePathAndRepositoryInsteadOfListPosition()
-        {
-            var original = new GitPackageInfo
-            {
-                Path = "Packages/com.example.package",
-                Url = "https://github.com/example/package.git"
-            };
-            var refreshedSamePackage = new GitPackageInfo
-            {
-                Path = "Packages/com.example.package",
-                Url = "git@github.com:example/package.git"
-            };
-            var replacementAtSameIndex = new GitPackageInfo
-            {
-                Path = "Packages/com.example.other",
-                Url = "https://github.com/example/other.git"
-            };
-
-            Assert.That(
-                GitSubmoduleManagerView.BuildInstalledPackageIdentity(refreshedSamePackage),
-                Is.EqualTo(GitSubmoduleManagerView.BuildInstalledPackageIdentity(original)));
-            Assert.That(
-                GitSubmoduleManagerView.BuildInstalledPackageIdentity(replacementAtSameIndex),
-                Is.Not.EqualTo(GitSubmoduleManagerView.BuildInstalledPackageIdentity(original)));
-        }
-
-        [Test]
-        public void InstalledBranchPresentation_DoesNotInventMainForRepositoryDefault()
-        {
-            Assert.That(GitSubmoduleManagerView.NormalizeInstalledBranch(null), Is.Empty);
-            Assert.That(GitSubmoduleManagerView.NormalizeInstalledBranch("   "), Is.Empty);
-            Assert.That(GitSubmoduleManagerView.GetInstalledBranchLabel(string.Empty), Is.EqualTo("repository default"));
-            Assert.That(GitSubmoduleManagerView.GetInstalledBranchLabel(" feature/test "), Is.EqualTo("feature/test"));
-        }
     }
 
     [Parallelizable(ParallelScope.None)]
@@ -480,6 +444,61 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                 out string error);
 
             Assert.That(verified, Is.True, error);
+        }
+
+        [Test]
+        public void AddService_DependencyDriftIsRolledBackBeforeSuccess()
+        {
+            const string packageName = "com.example.drifted-package";
+            string cleanParent = CreateCleanParent("dependency-drift-parent");
+            string source = CreateSourceRepository(
+                "dependency-drift-source",
+                packageName);
+            File.WriteAllText(
+                Path.Combine(source, "package.json"),
+                "{\"name\":\"" + packageName + "\",\"version\":\"1.0.0\"," +
+                "\"dependencies\":{\"com.example.child\":\"2.0.0\"}}\n");
+            ExpectGit(source, "add -- package.json");
+            ExpectGit(source, "commit -m \"Change dependency\"");
+            RedirectProjectRoot(cleanParent);
+
+            string expectedFingerprint =
+                GitUtility.ComputePackageDependencyFingerprint(new[]
+                {
+                    new PackageManifestDependency(
+                        "com.example.child",
+                        "1.0.0")
+                });
+            string packagePath = "Packages/" + packageName;
+            var state = new GitSubmoduleAddTaskState();
+
+            CommandResult result = GitSubmoduleAddService.RunAddSubmoduleTask(
+                source,
+                string.Empty,
+                packageName,
+                "1.0.0",
+                expectedFingerprint,
+                packagePath,
+                state,
+                CancellationToken.None);
+
+            Assert.That(result.IsSuccess, Is.False);
+            Assert.That(state.AddedSuccessfully, Is.False);
+            Assert.That(
+                state.Outcome,
+                Is.EqualTo(GitOperationCompletionOutcome.FailedButRolledBack));
+            Assert.That(state.Message, Does.Contain("dependencies changed"));
+            Assert.That(
+                Directory.Exists(Path.Combine(cleanParent, packagePath)),
+                Is.False);
+            Assert.That(
+                Git(cleanParent, "diff --cached --name-only").StdOut.Trim(),
+                Is.Empty,
+                "A rejected manifest must not leave staged submodule state.");
+            Assert.That(
+                Git(cleanParent, "diff --name-only").StdOut.Trim(),
+                Is.Empty,
+                "A rejected manifest must restore tracked parent files.");
         }
 
         [Test]

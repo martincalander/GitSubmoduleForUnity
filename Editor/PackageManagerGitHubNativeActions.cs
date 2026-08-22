@@ -41,11 +41,16 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             new(ReferenceComparer.Instance);
         private static readonly Dictionary<string, string> ActiveInstallMessages =
             new(StringComparer.Ordinal);
+        private static bool recoveredCompletionPresentationScheduled;
 
         static PackageManagerGitHubNativeActions()
         {
             PackageManagerReadOnlyGitInstallService.Completed +=
                 OnReadOnlyInstallServiceCompleted;
+            PackageDependencyInstallPipeline.Changed +=
+                OnDependencyInstallPipelineChanged;
+            PackageDependencyInstallPipeline.Completed +=
+                OnDependencyInstallPipelineCompleted;
         }
 
         internal static int InstalledRootCount => EntriesByRoot.Count;
@@ -88,6 +93,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                         current.RemoveDetails.EnsureControlsMounted();
                         current.ConversionDetails.EnsureControlsMounted();
                         RefreshForToolbar(toolbar, GetFieldValue(toolbar, "m_Package"));
+                        TryScheduleRecoveredDependencyInstallCompletion();
                         return true;
                     }
 
@@ -167,12 +173,13 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 EntriesByRoot[root] = entry;
                 EntriesByToolbar[toolbar] = entry;
                 root.RegisterCallback(detached);
-                if (PackageManagerReadOnlyGitInstallService.TryConsumeLastCompletion(
+                RefreshForToolbar(toolbar, GetFieldValue(toolbar, "m_Package"));
+                if (!TryScheduleRecoveredDependencyInstallCompletion() &&
+                    PackageManagerReadOnlyGitInstallService.TryConsumeLastCompletion(
                         out ReadOnlyGitPackageInstallCompletion recoveredCompletion))
                 {
                     OnReadOnlyInstallServiceCompleted(recoveredCompletion);
                 }
-                RefreshForToolbar(toolbar, GetFieldValue(toolbar, "m_Package"));
                 return true;
             }
             catch
@@ -398,8 +405,32 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 }
                 PackageManagerGitInstallMode selectedInstallMode =
                     entry.Details.SelectedInstallMode;
+                string selectedBranch = entry.Details.SelectedBranch;
+                PackageDependencyInstallPipelineSnapshot pipeline =
+                    PackageDependencyInstallPipeline.Current;
+                if (MatchesPipelineInstall(
+                        repository,
+                        selectedBranch,
+                        selectedInstallMode,
+                        pipeline))
+                {
+                    string pipelineMessage = string.IsNullOrWhiteSpace(
+                        pipeline.Message)
+                        ? "Installing this package and its missing dependencies..."
+                        : pipeline.Message;
+                    entry.Details.ShowInstalling(pipelineMessage);
+                    entry.Details.SetInstallState(
+                        true,
+                        false,
+                        pipelineMessage);
+                    return;
+                }
+
                 string installRepositoryIdentity =
-                    BuildActiveInstallIdentity(repository, selectedInstallMode);
+                    BuildActiveInstallIdentity(
+                        repository,
+                        selectedBranch,
+                        selectedInstallMode);
                 if (ActiveInstallMessages.TryGetValue(
                         installRepositoryIdentity,
                         out string activeInstallMessage))
@@ -451,7 +482,6 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                         "could not match its final state. Use Refresh to retry.");
                 }
 
-                string selectedBranch = entry.Details.SelectedBranch;
                 string validationError = selectedInstallMode ==
                                          PackageManagerGitInstallMode.ReadOnlyPackage
                     ? PackageManagerReadOnlyGitInstallService.ValidateInput(
@@ -463,10 +493,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                         repository.PackageName,
                         selectedBranch);
                 bool enabled = string.IsNullOrWhiteSpace(validationError) &&
-                               (selectedInstallMode ==
-                                PackageManagerGitInstallMode.ReadOnlyPackage
-                                   ? !PackageManagerReadOnlyGitInstallService.IsBusy
-                                   : GitSubmoduleAddService.CanStart);
+                               CanStartDependencyInstallPipeline();
                 string tooltip = enabled
                     ? BuildEnabledTooltip(
                         repository,
@@ -813,6 +840,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             if (GitSubmoduleRemoveService.TryStartAssessment(
                     requestedInfo,
                     completion => OnRemoveAssessmentCompleted(
+                        toolbar,
                         preferredDetails,
                         requestedInfo,
                         completion),
@@ -832,6 +860,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         }
 
         private static void OnRemoveAssessmentCompleted(
+            VisualElement toolbar,
             PackageManagerSubmoduleRemoveDetails preferredDetails,
             PackageManagerSubmoduleInfo info,
             GitSubmoduleRemovalAssessmentCompletion completion)
@@ -853,11 +882,80 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             SubmoduleRemovalAssessment assessment = completion.Assessment;
             EditorApplication.delayCall += () =>
             {
-                RefreshAllEntries();
-                ApplyRemoveStateForSubmodule(
-                    preferredDetails,
-                    info,
-                    details => details.ShowConfirmation(assessment));
+                if (toolbar == null ||
+                    !EntriesByToolbar.TryGetValue(
+                        toolbar,
+                        out NativeActionEntry entry) ||
+                    !SameSubmodule(entry.RemoveDetails.CurrentInfo, info))
+                {
+                    ReportRemoveErrorForSubmodule(
+                        preferredDetails,
+                        info,
+                        "The selected package changed while its Git state was " +
+                        "being inspected. Select it again and retry.");
+                    return;
+                }
+
+                object selectedPackage = GetFieldValue(toolbar, "m_Package");
+                object selectedVersion =
+                    PackageManagerSubmoduleNativePage.GetPrimaryVersion(
+                        selectedPackage);
+                if (!PackageManagerSubmodulePresentation.TryGetPresentation(
+                        selectedVersion,
+                        out PackageManagerSubmoduleInfo selectedInfo) ||
+                    !SameSubmodule(selectedInfo, info))
+                {
+                    ReportRemoveErrorForSubmodule(
+                        preferredDetails,
+                        info,
+                        "The selected package changed while its Git state was " +
+                        "being inspected. Select it again and retry.");
+                    return;
+                }
+
+                PackageManagerSubmoduleConfirmationDecision decision =
+                    PackageManagerSubmoduleConfirmationPolicy.Evaluate(
+                        PackageManagerSubmoduleDestructiveAction.Uninstall,
+                        info.PackageName,
+                        info.PackagePath,
+                        assessment,
+                        GitSubmoduleManagerUserSettings.Instance
+                            .SuppressRoutineSubmoduleRemovalConfirmations);
+                if (decision.IsBlocked)
+                {
+                    ReportRemoveErrorForSubmodule(
+                        preferredDetails,
+                        info,
+                        decision.Message);
+                    return;
+                }
+
+                bool accepted = decision.CanProceedWithoutPrompt ||
+                                (!Application.isBatchMode &&
+                                 EditorUtility.DisplayDialog(
+                                     decision.Title,
+                                     decision.Message,
+                                     decision.AcceptText,
+                                     decision.CancelText));
+                if (!accepted)
+                {
+                    ApplyRemoveStateForSubmodule(
+                        preferredDetails,
+                        info,
+                        details => details.CancelInspection());
+                    return;
+                }
+
+                if (!entry.RemoveDetails.TriggerAssessedRemoval(
+                        assessment,
+                        decision.DiscardLocalWorkIfAccepted))
+                {
+                    ReportRemoveErrorForSubmodule(
+                        preferredDetails,
+                        info,
+                        "The inspected package state could not be bound to the " +
+                        "uninstall action. Select it again and retry.");
+                }
             };
         }
 
@@ -1136,6 +1234,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             if (GitSubmoduleRemoveService.TryStartAssessment(
                     requestedInfo,
                     completion => OnConversionAssessmentCompleted(
+                        toolbar,
                         preferredDetails,
                         requestedTarget,
                         completion),
@@ -1155,6 +1254,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         }
 
         private static void OnConversionAssessmentCompleted(
+            VisualElement toolbar,
             PackageManagerPackageConversionDetails preferredDetails,
             PackageManagerPackageConversionTarget target,
             GitSubmoduleRemovalAssessmentCompletion completion)
@@ -1176,10 +1276,85 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             SubmoduleRemovalAssessment assessment = completion.Assessment;
             EditorApplication.delayCall += () =>
             {
-                RefreshAllEntries();
-                ApplyConversionState(
-                    target,
-                    details => details.ShowConfirmation(assessment));
+                if (toolbar == null ||
+                    !EntriesByToolbar.TryGetValue(
+                        toolbar,
+                        out NativeActionEntry entry) ||
+                    !SameConversionTarget(
+                        entry.ConversionDetails.CurrentTarget,
+                        target))
+                {
+                    ReportConversionError(
+                        preferredDetails,
+                        target,
+                        "The selected package changed while its Git state was " +
+                        "being inspected. Select it again and retry.");
+                    return;
+                }
+
+                object selectedPackage = GetFieldValue(toolbar, "m_Package");
+                object selectedVersion =
+                    PackageManagerSubmoduleNativePage.GetPrimaryVersion(
+                        selectedPackage);
+                if (!PackageManagerSubmodulePresentation.TryGetPresentation(
+                        selectedVersion,
+                        out PackageManagerSubmoduleInfo selectedInfo) ||
+                    !SameConversionTarget(
+                        BuildConversionTarget(selectedInfo),
+                        target))
+                {
+                    ReportConversionError(
+                        preferredDetails,
+                        target,
+                        "The selected package changed while its Git state was " +
+                        "being inspected. Select it again and retry.");
+                    return;
+                }
+
+                PackageManagerSubmoduleConfirmationDecision decision =
+                    PackageManagerSubmoduleConfirmationPolicy.Evaluate(
+                        PackageManagerSubmoduleDestructiveAction
+                            .ConvertToReadOnly,
+                        target.PackageName,
+                        target.PackagePath,
+                        assessment,
+                        GitSubmoduleManagerUserSettings.Instance
+                            .SuppressRoutineSubmoduleRemovalConfirmations);
+                if (decision.IsBlocked)
+                {
+                    ReportConversionError(
+                        preferredDetails,
+                        target,
+                        decision.Message);
+                    return;
+                }
+
+                bool accepted = decision.CanProceedWithoutPrompt ||
+                                (!Application.isBatchMode &&
+                                 EditorUtility.DisplayDialog(
+                                     decision.Title,
+                                     decision.Message,
+                                     decision.AcceptText,
+                                     decision.CancelText));
+                if (!accepted)
+                {
+                    ApplyConversionState(
+                        target,
+                        details => details.CancelInspection(target));
+                    return;
+                }
+
+                if (!entry.ConversionDetails.TriggerAssessedConversion(
+                        target,
+                        assessment,
+                        decision.DiscardLocalWorkIfAccepted))
+                {
+                    ReportConversionError(
+                        preferredDetails,
+                        target,
+                        "The inspected package state could not be bound to the " +
+                        "conversion action. Select it again and retry.");
+                }
             };
         }
 
@@ -1532,11 +1707,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                     return;
                 }
 
-                bool canStart = installMode ==
-                                PackageManagerGitInstallMode.ReadOnlyPackage
-                    ? !PackageManagerReadOnlyGitInstallService.IsBusy &&
-                      !GitOperationService.IsBusy
-                    : GitSubmoduleAddService.CanStart;
+                bool canStart = CanStartDependencyInstallPipeline();
                 if (!canStart)
                 {
                     ReportInstallError(
@@ -1550,7 +1721,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 string installIdentity =
                     PackageManagerGitHubDetails.GetRepositoryIdentity(repository);
                 activeInstallIdentity =
-                    BuildActiveInstallIdentity(repository, installMode);
+                    BuildActiveInstallIdentity(repository, branch, installMode);
                 if (string.IsNullOrEmpty(installIdentity) ||
                     string.IsNullOrEmpty(activeInstallIdentity))
                 {
@@ -1563,7 +1734,6 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                     return;
                 }
 
-                PackageManagerGitHubDetails completionTarget = feedbackTarget;
                 string installMessage = feedbackTarget?.InstallFeedback?.text;
                 if (string.IsNullOrWhiteSpace(installMessage))
                 {
@@ -1575,30 +1745,14 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 }
 
                 ActiveInstallMessages[activeInstallIdentity] = installMessage;
-                bool started;
-                string startError;
-                if (installMode == PackageManagerGitInstallMode.ReadOnlyPackage)
-                {
-                    started = PackageManagerReadOnlyGitInstallService.TryStart(
-                        repository.Url,
-                        branch,
-                        repository.PackageName,
-                        null,
-                        out startError);
-                }
-                else
-                {
-                    started = GitSubmoduleAddService.TryStart(
-                        repository.Url,
-                        branch,
-                        repository.PackageName,
-                        completion => OnAddCompleted(
-                            completionTarget,
-                            installIdentity,
-                            activeInstallIdentity,
-                            completion),
-                        out startError);
-                }
+                bool started = PackageDependencyInstallPipeline.TryStart(
+                    repository.Url,
+                    branch,
+                    repository.PackageName,
+                    installMode,
+                    null,
+                    null,
+                    out string startError);
                 operationStarted = started;
                 if (!started)
                 {
@@ -1635,70 +1789,204 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             }
         }
 
-        private static void OnAddCompleted(
-            PackageManagerGitHubDetails preferredDetails,
-            string repositoryIdentity,
-            string activeInstallIdentity,
-            GitSubmoduleAddCompletion completion)
+        private static void OnDependencyInstallPipelineChanged(
+            PackageDependencyInstallPipelineSnapshot snapshot)
         {
-            if (!string.IsNullOrEmpty(activeInstallIdentity))
-                ActiveInstallMessages.Remove(activeInstallIdentity);
+            if (snapshot?.IsBusy == true)
+            {
+                foreach (NativeActionEntry entry in EntriesByToolbar.Values)
+                {
+                    PackageManagerGitHubRepository repository =
+                        entry?.Details?.CurrentRepository;
+                    if (repository == null ||
+                        !MatchesPipelineInstall(
+                            repository,
+                            entry.Details.SelectedBranch,
+                            entry.Details.SelectedInstallMode,
+                            snapshot))
+                    {
+                        continue;
+                    }
 
-            if (completion == null || !completion.Success)
-            {
-                string failureMessage =
-                    string.IsNullOrWhiteSpace(completion?.Message)
-                        ? "The Git package operation did not complete successfully."
-                        : completion.Message;
-                // The Package Manager may have recycled its details hierarchy
-                // while Git was running. Refresh first, then resolve the current
-                // controller so the useful failure remains visible inline.
-                RefreshAllEntries();
-                ReportInstallErrorForRepository(
-                    preferredDetails,
-                    repositoryIdentity,
-                    activeInstallIdentity,
-                    "Could Not Install Git Package",
-                    failureMessage);
-                return;
-            }
-
-            try
-            {
-                // A verified Git add is already a successful install. Unity can
-                // register the embedded package, compile its scripts, and reload
-                // the domain after this callback returns. The durable
-                // registeredPackages/snapshot hooks reconcile the projection in
-                // that new domain, so an immediate projection result must never
-                // turn the successful Git operation into a UI error.
-                PackageManagerSubmoduleSnapshot.Refresh();
-            }
-            catch (Exception exception)
-            {
-                Debug.LogWarning(
-                    "[Git Submodule Manager] The Git submodule was installed, " +
-                    "but the early Package Manager snapshot request failed. " +
-                    "Unity's package registration event will retry it: " +
-                    GitHubUtility.SanitizeUiDiagnostic(exception.Message));
+                    string identity = BuildActiveInstallIdentity(
+                        repository,
+                        snapshot.Branch,
+                        snapshot.InstallMode);
+                    if (!string.IsNullOrEmpty(identity))
+                    {
+                        ActiveInstallMessages[identity] =
+                            string.IsNullOrWhiteSpace(snapshot.Message)
+                                ? "Installing this package and its missing dependencies..."
+                                : snapshot.Message;
+                    }
+                }
             }
 
             RefreshAllEntries();
-            string completionMessage =
-                completion.CommandResult?.CompletionWarning;
-            if (string.IsNullOrWhiteSpace(completionMessage))
+        }
+
+        private static void OnDependencyInstallPipelineCompleted(
+            PackageDependencyInstallPipelineCompletion completion)
+        {
+            bool displayed = PresentDependencyInstallPipelineCompletion(
+                completion,
+                false);
+            bool retainedCompletionAvailable =
+                PackageDependencyInstallPipeline.TryGetLastCompletion(out _);
+            if (ShouldScheduleRecoveredCompletion(
+                    completion,
+                    displayed,
+                    retainedCompletionAvailable))
             {
-                completionMessage =
-                    "Git submodule installed. Unity is resolving, importing, and " +
-                    "compiling the package; Package Manager will update automatically.";
+                TryScheduleRecoveredDependencyInstallCompletion();
             }
-            foreach (PackageManagerGitHubDetails details in
-                     FindDetailsForInstall(
-                         preferredDetails,
-                         repositoryIdentity,
-                         activeInstallIdentity))
+        }
+
+        internal static bool ShouldScheduleRecoveredCompletion(
+            PackageDependencyInstallPipelineCompletion completion,
+            bool alreadyDisplayed,
+            bool retainedCompletionAvailable = false)
+        {
+            return !alreadyDisplayed &&
+                   completion != null &&
+                   (completion.RecoveredAfterReload ||
+                    retainedCompletionAvailable);
+        }
+
+        private static bool TryScheduleRecoveredDependencyInstallCompletion()
+        {
+            if (!PackageDependencyInstallPipeline.TryGetLastCompletion(out _))
             {
-                details.ShowInstallCompleted(completionMessage);
+                return false;
             }
+
+            if (!recoveredCompletionPresentationScheduled)
+            {
+                recoveredCompletionPresentationScheduled = true;
+                EditorApplication.delayCall +=
+                    PresentRecoveredDependencyInstallCompletion;
+            }
+
+            return true;
+        }
+
+        private static void PresentRecoveredDependencyInstallCompletion()
+        {
+            EditorApplication.delayCall -=
+                PresentRecoveredDependencyInstallCompletion;
+            recoveredCompletionPresentationScheduled = false;
+            if (!PackageDependencyInstallPipeline.TryGetLastCompletion(
+                    out PackageDependencyInstallPipelineCompletion completion))
+            {
+                return;
+            }
+
+            PresentDependencyInstallPipelineCompletion(completion, true);
+        }
+
+        private static bool PresentDependencyInstallPipelineCompletion(
+            PackageDependencyInstallPipelineCompletion completion,
+            bool allowRecoveredDialog)
+        {
+            if (completion == null)
+                return false;
+
+            ActiveInstallMessages.Clear();
+            if (completion.Success &&
+                completion.InstallMode ==
+                    PackageManagerGitInstallMode.GitSubmodule)
+            {
+                try
+                {
+                    PackageManagerSubmoduleSnapshot.Refresh();
+                }
+                catch (Exception exception)
+                {
+                    Debug.LogWarning(
+                        "[Git Submodule Manager] Installation succeeded, but " +
+                        "the early Package Manager snapshot refresh failed. " +
+                        "Unity's registered-packages event will retry it: " +
+                        GitHubUtility.SanitizeUiDiagnostic(exception.Message));
+                }
+            }
+
+            RefreshAllEntries();
+            var matchingDetails = new List<PackageManagerGitHubDetails>();
+            foreach (NativeActionEntry entry in EntriesByToolbar.Values)
+            {
+                PackageManagerGitHubDetails details = entry?.Details;
+                PackageManagerGitHubRepository repository =
+                    details?.CurrentRepository;
+                if (details == null || details.IsDisposed ||
+                    !MatchesDependencyInstallCompletion(
+                        repository,
+                        completion))
+                {
+                    continue;
+                }
+
+                matchingDetails.Add(details);
+            }
+
+            if (!completion.Success)
+            {
+                string failureMessage =
+                    string.IsNullOrWhiteSpace(completion.Message)
+                        ? "The dependency-aware Git package operation did not complete successfully."
+                        : completion.Message;
+                foreach (PackageManagerGitHubDetails details in matchingDetails)
+                    details.ShowInstallError(failureMessage);
+            }
+            else
+            {
+                string completionMessage =
+                    string.IsNullOrWhiteSpace(completion.Message)
+                        ? "Package and missing dependencies installed successfully."
+                        : completion.Message;
+                foreach (PackageManagerGitHubDetails details in matchingDetails)
+                    details.ShowInstallCompleted(completionMessage);
+            }
+
+            bool displayed = matchingDetails.Count > 0;
+            if (!displayed && allowRecoveredDialog)
+            {
+                displayed = PackageDependencyInstallPipeline
+                    .TryPresentRecoveredCompletion(completion);
+            }
+
+            bool shouldLogFailure = displayed ||
+                                    (!allowRecoveredDialog &&
+                                     !completion.RecoveredAfterReload);
+            if (!completion.Success && !completion.Cancelled &&
+                shouldLogFailure)
+            {
+                string failureMessage =
+                    string.IsNullOrWhiteSpace(completion.Message)
+                        ? "The dependency-aware Git package operation did not complete successfully."
+                        : completion.Message;
+                Debug.LogWarning(
+                    "[Git Submodule Manager] " +
+                    GitHubUtility.SanitizeUiDiagnostic(failureMessage));
+            }
+
+            if (displayed)
+                PackageDependencyInstallPipeline.TryConsumeLastCompletion(completion);
+            return displayed;
+        }
+
+        internal static bool MatchesDependencyInstallCompletion(
+            PackageManagerGitHubRepository repository,
+            PackageDependencyInstallPipelineCompletion completion)
+        {
+            return repository != null && completion != null &&
+                   string.Equals(
+                       repository.PackageName,
+                       completion.PackageName,
+                       StringComparison.Ordinal) &&
+                   (string.IsNullOrWhiteSpace(completion.RepositoryUrl) ||
+                    GitUtility.AreRepositoryUrlsEquivalent(
+                        repository.Url,
+                        completion.RepositoryUrl));
         }
 
         private static void OnReadOnlyInstallServiceCompleted(
@@ -1706,6 +1994,14 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         {
             if (completion == null)
                 return;
+
+            if (!ShouldPresentReadOnlyCompletionAsStandalone(
+                    completion,
+                    PackageDependencyInstallPipeline.IsBusy,
+                    PackageDependencyInstallCoordinator.IsBusy))
+            {
+                return;
+            }
 
             RemoveActiveReadOnlyInstallMessages(completion.PackageName);
 
@@ -1733,6 +2029,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 ActiveInstallMessages.Remove(
                     BuildActiveInstallIdentity(
                         repository,
+                        details.SelectedBranch,
                         PackageManagerGitInstallMode.ReadOnlyPackage));
             }
 
@@ -1760,6 +2057,22 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             RefreshAllEntries();
         }
 
+        internal static bool ShouldPresentReadOnlyCompletionAsStandalone(
+            ReadOnlyGitPackageInstallCompletion completion,
+            bool dependencyPipelineIsBusy,
+            bool dependencyCoordinatorIsBusy)
+        {
+            // Dependency-aware installs persist their coordinator operation ID
+            // in the primitive itself. That ownership outlives callback order,
+            // coordinator completion, and domain reload; a busy-only check does
+            // not. Never present a dependency leaf or coordinated root as an
+            // unrelated standalone Package Manager operation.
+            return completion != null &&
+                   !completion.IsDependencyInstallPrimitive &&
+                   !dependencyPipelineIsBusy &&
+                   !dependencyCoordinatorIsBusy;
+        }
+
         private static void RemoveActiveReadOnlyInstallMessages(
             string packageName)
         {
@@ -1770,8 +2083,19 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                             PackageManagerGitInstallMode.ReadOnlyPackage;
             foreach (string key in new List<string>(ActiveInstallMessages.Keys))
             {
-                if (key.EndsWith(suffix, StringComparison.Ordinal))
+                bool currentFormat =
+                    key.Contains(
+                        "\n" + packageName.Trim() + "\n",
+                        StringComparison.Ordinal) &&
+                    key.EndsWith(
+                        "\ninstall-mode:" +
+                        PackageManagerGitInstallMode.ReadOnlyPackage,
+                        StringComparison.Ordinal);
+                if (currentFormat ||
+                    key.EndsWith(suffix, StringComparison.Ordinal))
+                {
                     ActiveInstallMessages.Remove(key);
+                }
             }
         }
 
@@ -1812,20 +2136,53 @@ namespace MartinCalander.GitSubmoduleManager.Editor
 
         private static string BuildActiveInstallIdentity(
             PackageManagerGitHubRepository repository,
+            string branch,
             PackageManagerGitInstallMode installMode)
         {
-            string repositoryIdentity =
-                PackageManagerGitHubDetails.GetInstallRepositoryIdentity(
-                    repository);
-            return string.IsNullOrWhiteSpace(repositoryIdentity)
-                ? string.Empty
-                : repositoryIdentity + "\nmode:" + installMode;
+            return PackageManagerGitHubDetails.GetInstallSelectionIdentity(
+                repository,
+                branch,
+                installMode);
+        }
+
+        private static bool MatchesPipelineInstall(
+            PackageManagerGitHubRepository repository,
+            string selectedBranch,
+            PackageManagerGitInstallMode installMode,
+            PackageDependencyInstallPipelineSnapshot pipeline)
+        {
+            if (repository == null || pipeline?.IsBusy != true ||
+                installMode != pipeline.InstallMode ||
+                !string.Equals(
+                    repository.PackageName,
+                    pipeline.PackageName,
+                    StringComparison.Ordinal) ||
+                !GitUtility.AreRepositoryUrlsEquivalent(
+                    repository.Url,
+                    pipeline.RepositoryUrl))
+            {
+                return false;
+            }
+
+            return string.IsNullOrWhiteSpace(pipeline.Branch) ||
+                   string.Equals(
+                       selectedBranch?.Trim(),
+                       pipeline.Branch,
+                       StringComparison.Ordinal);
         }
 
         private static string BuildDisabledTooltip(string validationError)
         {
             if (!string.IsNullOrWhiteSpace(validationError))
                 return validationError.Trim();
+
+            if (PackageDependencyInstallPipeline.IsBusy)
+            {
+                string message = PackageDependencyInstallPipeline.Current?.Message;
+                return string.IsNullOrWhiteSpace(message)
+                    ? "Wait for the current dependency-aware package install to finish."
+                    : message.Trim();
+            }
 
             if (PackageManagerProjectResolutionService.IsBusy)
                 return PackageManagerProjectResolutionService.BuildUnavailableMessage();
@@ -1839,6 +2196,15 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 return $"Wait for {activeLabel.Trim()} to finish.";
 
             return "Wait for current package scans and repository operations to finish.";
+        }
+
+        private static bool CanStartDependencyInstallPipeline()
+        {
+            return !PackageDependencyInstallPipeline.IsBusy &&
+                   !GitOperationService.IsBusy &&
+                   !PackageManagerReadOnlyGitInstallService.IsBusy &&
+                   !PackageManagerProjectResolutionService.IsBusy &&
+                   !AsyncCommandDrainRegistry.RequiresEditorRestart;
         }
 
         private static bool IsGitHubPage(object toolbar)
@@ -2018,6 +2384,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                     installIdentity,
                     BuildActiveInstallIdentity(
                         details.CurrentRepository,
+                        details.SelectedBranch,
                         details.SelectedInstallMode),
                     StringComparison.Ordinal)
                 : IsDetailsShowingRepository(

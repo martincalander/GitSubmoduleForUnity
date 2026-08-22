@@ -8,6 +8,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
     internal sealed class GitSubmoduleManagerPreferencesProvider : SettingsProvider
     {
         private string saveError = string.Empty;
+        private string recoveryError = string.Empty;
 
         private static readonly string[] SearchKeywords =
         {
@@ -15,22 +16,29 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             "GitHub",
             "Package Manager",
             "Submodule",
-            "Refresh",
+            "Read-Only",
+            "Dependencies",
+            "Confirmation",
+            "Filters",
+            "Organization",
+            "Public",
+            "Private",
             "Welcome",
-            "Startup",
-            "UPM"
+            "Install",
+            "Recovery"
         };
 
-        private static readonly string[] StartupTabLabels =
-        {
-            "In Project",
-            "GitHub"
-        };
-
-        private static readonly string[] GitHubFilterLabels =
+        private static readonly string[] VisibilityLabels =
         {
             "All Repositories",
-            "Valid UPM Packages"
+            "Public Only",
+            "Private Only"
+        };
+
+        private static readonly string[] InstallModeLabels =
+        {
+            "Git Submodule",
+            "Read-Only Package"
         };
 
         private GitSubmoduleManagerPreferencesProvider()
@@ -50,56 +58,66 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         {
             GitSubmoduleManagerUserSettings settings = GitSubmoduleManagerUserSettings.Instance;
 
-            EditorGUILayout.LabelField("General", EditorStyles.boldLabel);
+            EditorGUILayout.LabelField("Confirmations", EditorStyles.boldLabel);
             EditorGUI.BeginChangeCheck();
 
-            GitSubmoduleManagerStartupTab startupTab =
-                (GitSubmoduleManagerStartupTab)EditorGUILayout.Popup(
-                    new GUIContent(
-                        "Startup Tab",
-                        "The tab selected when Git Submodule Manager opens inside Package Manager."),
-                    (int)settings.StartupTab,
-                    StartupTabLabels);
-
-            bool refreshWhenRevisited = EditorGUILayout.Toggle(
+            bool suppressRoutineConfirmations = EditorGUILayout.Toggle(
                 new GUIContent(
-                    "Refresh In Project",
-                    "Refresh installed submodules when returning to In Project after the configured interval."),
-                settings.RefreshInProjectWhenRevisited);
+                    "Skip Routine Confirmation",
+                    "Skip the second confirmation only after Git verifies that a " +
+                    "submodule removal or conversion is clean and routine."),
+                settings.SuppressRoutineSubmoduleRemovalConfirmations);
+            EditorGUILayout.HelpBox(
+                "Warnings for uncommitted, unpushed, changed, or unverified " +
+                "work are safety checks and can never be suppressed.",
+                MessageType.Warning);
 
-            int intervalMinutes;
-            using (new EditorGUI.DisabledScope(!refreshWhenRevisited))
-            {
-                intervalMinutes = EditorGUILayout.IntSlider(
-                    new GUIContent(
-                        "Refresh Interval (Minutes)",
-                        "How stale the In Project list may be before returning to the tab refreshes it."),
-                    settings.RefreshIntervalMinutes,
-                    GitSubmoduleManagerUserSettings.MinimumRefreshIntervalMinutes,
-                    GitSubmoduleManagerUserSettings.MaximumRefreshIntervalMinutes);
-            }
+            bool installDependenciesWithoutPrompt = EditorGUILayout.Toggle(
+                new GUIContent(
+                    "Install Dependencies Automatically",
+                    "Install a complete, unambiguous dependency plan without showing its confirmation first."),
+                settings.InstallDependenciesWithoutPrompt);
+            EditorGUILayout.HelpBox(
+                "Automatic dependency installation applies only when every " +
+                "missing dependency has been resolved safely. Ambiguous or " +
+                "unresolved dependencies still stop the install and require attention.",
+                MessageType.Info);
 
             EditorGUILayout.Space(10f);
-            EditorGUILayout.LabelField("GitHub", EditorStyles.boldLabel);
-            GitSubmoduleManagerDefaultGitHubFilter defaultFilter =
-                (GitSubmoduleManagerDefaultGitHubFilter)EditorGUILayout.Popup(
+            EditorGUILayout.LabelField("Package Manager Defaults", EditorStyles.boldLabel);
+            GitSubmoduleManagerDefaultVisibility defaultVisibility =
+                (GitSubmoduleManagerDefaultVisibility)EditorGUILayout.Popup(
                     new GUIContent(
-                        "Default Filter",
-                        "The repository filter selected when the GitHub source opens in Package Manager."),
-                    (int)settings.DefaultGitHubFilter,
-                    GitHubFilterLabels);
+                        "Visibility",
+                        "The visibility filter used when Sources > GitHub opens without an existing filter selection."),
+                    (int)settings.DefaultGitHubVisibility,
+                    VisibilityLabels);
+            string defaultOrganization = EditorGUILayout.TextField(
+                new GUIContent(
+                    "Organization",
+                    "A GitHub organization login to select by default. Leave empty to show every organization."),
+                settings.DefaultGitHubOrganization);
+            PackageManagerGitInstallMode defaultInstallMode =
+                (PackageManagerGitInstallMode)EditorGUILayout.Popup(
+                    new GUIContent(
+                        "Install Mode",
+                        "The initially selected install mode for a discovered GitHub package."),
+                    (int)settings.DefaultInstallMode,
+                    InstallModeLabels);
             EditorGUILayout.HelpBox(
-                "Valid UPM Packages checks the root package.json files on the current GitHub page. " +
-                "All Repositories starts faster and is recommended for very large accounts.",
-                MessageType.Info);
+                "Leave Organization empty for all organizations. Defaults are " +
+                "only applied when the native GitHub page has no existing " +
+                "filter selection.",
+                MessageType.None);
 
             if (EditorGUI.EndChangeCheck())
             {
                 settings.TryUpdatePreferences(
-                    refreshWhenRevisited,
-                    intervalMinutes,
-                    startupTab,
-                    defaultFilter,
+                    suppressRoutineConfirmations,
+                    installDependenciesWithoutPrompt,
+                    defaultVisibility,
+                    defaultOrganization,
+                    defaultInstallMode,
                     out saveError);
             }
 
@@ -113,8 +131,62 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 GitSubmoduleManagerUserSettings.SettingsFilePath + ".",
                 MessageType.None);
 
-            if (GUILayout.Button("Open Welcome & Setup", GUILayout.Width(180f)))
-                GitSubmoduleManagerPackageManagerHost.Open(openWelcome: true);
+            EditorGUILayout.BeginHorizontal();
+            if (GUILayout.Button("Show Welcome", GUILayout.Width(150f)))
+                GitSubmoduleManagerWelcomeWindow.Open();
+            if (GUILayout.Button("Open Sources > GitHub", GUILayout.Width(180f)))
+                GitSubmoduleManagerPackageManagerHost.OpenGitHubSource();
+            EditorGUILayout.EndHorizontal();
+
+            DrawRecoverySection();
+        }
+
+        private void DrawRecoverySection()
+        {
+            string recoveryWarning = GitOperationService.RecoveryWarning;
+            if (string.IsNullOrWhiteSpace(recoveryWarning))
+                return;
+
+            EditorGUILayout.Space(10f);
+            EditorGUILayout.LabelField("Repository Recovery", EditorStyles.boldLabel);
+            EditorGUILayout.HelpBox(
+                recoveryWarning,
+                MessageType.Error);
+            EditorGUILayout.HelpBox(
+                "Inspect git status, .gitmodules, the affected package path, " +
+                "and any running Git processes before acknowledging. This " +
+                "safety warning cannot be suppressed by the routine-confirmation setting.",
+                MessageType.Warning);
+
+            using (new EditorGUI.DisabledScope(GitOperationService.IsBusy))
+            {
+                if (GUILayout.Button(
+                        "Acknowledge Inspected Recovery State...",
+                        GUILayout.Width(280f)) &&
+                    EditorUtility.DisplayDialog(
+                        "Acknowledge Repository Recovery State?",
+                        "Only continue after you have inspected the parent " +
+                        "repository, .gitmodules, and the affected package path. " +
+                        "Acknowledging clears the retained recovery journal and " +
+                        "allows repository mutations again.",
+                        "I Inspected It — Acknowledge",
+                        "Cancel"))
+                {
+                    if (!GitOperationService.TryAcknowledgeRecoveryWarning(
+                            out recoveryError))
+                    {
+                        recoveryError = GitHubUtility.SanitizeUiDiagnostic(
+                            recoveryError);
+                    }
+                    else
+                    {
+                        recoveryError = string.Empty;
+                    }
+                }
+            }
+
+            if (!string.IsNullOrWhiteSpace(recoveryError))
+                EditorGUILayout.HelpBox(recoveryError, MessageType.Error);
         }
     }
 }

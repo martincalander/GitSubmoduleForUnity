@@ -436,9 +436,18 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
             IReadOnlyList<MethodInfo> loadingTargets =
                 PackageManagerGitHubNativePresentationPatch
                     .GetPageLoadingTargets();
-            MethodInfo visibilityFilterTarget =
+            MethodInfo repositoryFilterTarget =
                 PackageManagerGitHubNativePresentationPatch
                     .GetPageVisibilityFilterTarget();
+            MethodInfo supportedFiltersRefreshTarget =
+                PackageManagerGitHubNativePresentationPatch
+                    .GetPageSupportedFiltersRefreshTarget();
+            PropertyInfo selectedCategories =
+                PackageManagerGitHubNativePresentationPatch
+                    .GetPageFilterCategoriesProperty();
+            PropertyInfo supportedCategories =
+                PackageManagerGitHubNativePresentationPatch
+                    .GetPageFilterSupportedCategoriesProperty();
             Type technicalNameType =
                 PackageManagerSubmoduleHarmonyPatch.FindLoadedType(
                     PackageManagerGitHubNativePresentationPatch
@@ -452,13 +461,27 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
             report.Observe("Page activation hooks", DescribeMethods(activationTargets));
             report.Observe("Page loading hooks", DescribeMethods(loadingTargets));
             report.Observe(
-                "GitHub visibility filter hook",
-                DescribeMethod(visibilityFilterTarget));
+                "GitHub repository filter hook",
+                DescribeMethod(repositoryFilterTarget));
             report.Observe(
                 "Supported-label updater",
                 DescribeMethod(
                     PackageManagerSubmoduleNativePage
                         .GetUpdateSupportedLabelsMethod()));
+            report.Observe(
+                "Supported-category updater",
+                DescribeMethod(
+                    PackageManagerSubmoduleNativePage
+                        .GetUpdateSupportedCategoriesMethod()));
+            report.Observe(
+                "Selected categories",
+                DescribeProperty(selectedCategories));
+            report.Observe(
+                "Supported categories",
+                DescribeProperty(supportedCategories));
+            report.Observe(
+                "Supported-filter refresh hook",
+                DescribeMethod(supportedFiltersRefreshTarget));
             report.Observe(
                 "Status update",
                 DescribeMethod(
@@ -489,13 +512,30 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                 report.Require(
                     PackageManagerGitHubNativePresentationPatch
                         .HasPageVisibilityFilterContract(),
-                    "The GitHub page visibility filter contract is incomplete; " +
+                    "The GitHub page repository filter contract is incomplete; " +
                     "the toolbar must not expose inert filters.");
                 report.Require(
                     PackageManagerSubmoduleNativePage
                         .GetUpdateSupportedLabelsMethod() != null,
                     "BasePage.UpdateSupportedLabels(IReadOnlyList<string>, bool) " +
                     "is missing.");
+                report.Require(
+                    PackageManagerSubmoduleNativePage
+                        .GetUpdateSupportedCategoriesMethod() != null,
+                    "BasePage.UpdateSupportedCategories(" +
+                    "IReadOnlyList<string>, bool) is missing.");
+                report.Require(
+                    selectedCategories != null,
+                    "PageFilters.categories is missing or is no longer a " +
+                    "readable IReadOnlyList<string>.");
+                report.Require(
+                    supportedCategories != null,
+                    "PageFilters.supportedCategories is missing or is no " +
+                    "longer a readable IReadOnlyList<string>.");
+                report.Require(
+                    supportedFiltersRefreshTarget != null,
+                    "BasePage.UpdateSupportedFiltersAsync() is missing or no " +
+                    "longer an instance void method declared by BasePage.");
                 report.Require(
                     PackageManagerGitHubNativePresentationPatch
                         .HasRequiredDiscoveryLifecycleContract(),
@@ -533,9 +573,14 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                         .GetPageLoadingPostfix());
                 RequireOwnedPostfixes(
                     report,
-                    new[] { visibilityFilterTarget },
+                    new[] { repositoryFilterTarget },
                     PackageManagerGitHubNativePresentationPatch
                         .GetPageVisibilityFilterPostfix());
+                RequireOwnedPostfixes(
+                    report,
+                    new[] { supportedFiltersRefreshTarget },
+                    PackageManagerGitHubNativePresentationPatch
+                        .GetPageSupportedFiltersRefreshPostfix());
 
                 GitSubmoduleManagerPackageManagerHost.TryPatch(out _);
                 report.Require(
@@ -602,6 +647,11 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                 "__instance",
                 "__0",
                 "__result");
+            RequireParameterNames(
+                report,
+                PackageManagerGitHubNativePresentationPatch
+                    .GetPageSupportedFiltersRefreshPostfix(),
+                "__instance");
 
             Complete(report);
         }
@@ -799,6 +849,16 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                            .Select(parameter =>
                                parameter.ParameterType.FullName ??
                                parameter.ParameterType.Name)) + ")";
+        }
+
+        private static string DescribeProperty(PropertyInfo property)
+        {
+            if (property == null)
+                return "unresolved";
+
+            return (property.DeclaringType?.FullName ?? "<unknown-type>") + "." +
+                   property.Name + " : " +
+                   (property.PropertyType.FullName ?? property.PropertyType.Name);
         }
 
         private static string EmptyAsUnknown(string value)

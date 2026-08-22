@@ -26,27 +26,20 @@ gh --version
 gh api user --hostname github.com --jq .login
 ```
 
-If authentication fails, use the in-editor **Authenticate with GitHub...**
-action or run `gh auth login --hostname github.com --web` in a visible terminal.
+If authentication fails, open **Preferences > Git Submodule Manager > Show
+Welcome**, copy the authentication command, or run `gh auth login --hostname
+github.com --web` in a visible terminal.
 Ensure the active account can see the user or organization repositories you
 expect. Until authentication is restored, **Sources > GitHub** continues to show
-installed GitHub submodules, and the management workspace remains available for
-installed-package operations and direct URL installation. After fixing GitHub
-CLI or authentication, choose **Refresh** in Package Manager to start a new
-catalogue scan.
-
-One-click authentication requires GitHub CLI 2.79.0 or newer and working system
-clipboard access. If no device code is available to paste, cancel the in-editor
-flow and use the visible-terminal command after cancellation finishes so the
-code remains visible. Restart Unity first if the editor reports that process
-termination could not be confirmed.
+installed GitHub packages. Installed-package actions remain in Package Manager,
+and **+ > Install package as Git Submodule...** remains available for direct URL
+installation. After fixing GitHub CLI or authentication, choose **Refresh** in
+Package Manager to start a new catalogue scan.
 
 If Unity reports that `GH_TOKEN` or `GITHUB_TOKEN` controls GitHub CLI, the
-one-click flow cannot replace that environment-provided identity. Remove or
-update the variable, restart Unity, and click **Check again**, or authenticate
-from a terminal where the variable is unset. If a script reload interrupted an
-authentication attempt, restart Unity before starting another one; this avoids
-leaving two hidden GitHub CLI login processes active.
+copied authentication command cannot replace that environment-provided identity.
+Remove or update the variable, restart Unity, and click **Check Again**, or run
+the command from a terminal where the variable is unset.
 
 ## A Repository URL Is Rejected
 
@@ -67,7 +60,7 @@ verify the configured Git credential manager.
 
 ## A Package Is Uninitialized
 
-Select the package and click **Initialize**, or run:
+Initialize it with Git, then return to Package Manager and choose **Refresh**:
 
 ```bash
 git submodule update --init --recursive -- Packages/com.author.package
@@ -103,6 +96,32 @@ unavailable, or nested manifest is intentionally excluded. Correct the
 repository or access issue, then choose **Refresh** in Package Manager to rescan
 the account and organizations.
 
+## Dependency Resolution Says GitHub Coverage Is Incomplete
+
+For package names outside `com.unity.*`, configured registries are searched only
+after a successful scan of the authenticated user's repositories and every
+visible organization proves that GitHub has no matching package. A failed owner
+page, coverage warning, or unavailable `package.json` therefore blocks the root
+install instead of guessing that registry fallback is safe.
+
+Restore GitHub CLI authentication and repository access, correct the unavailable
+manifest if you control it, then choose **Refresh** and retry. If GitHub does
+contain the package, that source has priority; a duplicate match, version
+mismatch, or incomplete repository identity must be corrected rather than
+bypassed through a registry.
+
+## An Installed Manifest Did Not Match Preflight
+
+Dependency-aware installation compares the resulting root `package.json` with
+the exact name, version, and dependency map inspected before mutation. When a
+branch changes during installation or Unity resolves an unexpected direct Git
+entry, the new install is rejected and automatic rollback or removal is
+attempted only when ownership is proven.
+
+If the diagnostic says cleanup was incomplete, inspect `git status`, the package
+path, and `Packages/manifest.json` before retrying. The mismatched checkout or
+manifest entry may still be present.
+
 ## The Package Name Is Rejected
 
 Managed names use lowercase reverse-domain form with at least three segments:
@@ -116,7 +135,7 @@ Spaces, uppercase letters, path separators, and traversal segments are rejected.
 ## An Update Changed Files but Unity Still Shows the Old State
 
 Wait for Unity's package import to finish, then choose **Refresh** in Package
-Manager or in the management workspace.
+Manager.
 
 Confirm the parent repository records the new submodule commit with:
 
@@ -130,8 +149,9 @@ git submodule status
 Do not dismiss the recovery warning until you have inspected `git status`,
 `.gitmodules`, the package path, and any Git or SSH processes that may still be
 running. The warning is retained when process termination, rollback, or a
-postcondition cannot be proven. Once the repository is safe, use the recovery
-acknowledgement in the management workspace and refresh again.
+postcondition cannot be proven. Once the repository is safe, open **Preferences
+> Git Submodule Manager**, review the retained warning again, choose
+**Acknowledge Inspected Recovery State...**, and refresh Package Manager.
 
 ## A Teammate Cannot Clone a Private Package
 

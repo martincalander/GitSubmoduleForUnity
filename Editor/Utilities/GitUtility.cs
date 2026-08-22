@@ -487,8 +487,48 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             out string error,
             CancellationToken cancellationToken = default(CancellationToken))
         {
+            return TryReadValidPackageManifest(
+                packageJsonPath,
+                out packageName,
+                out displayName,
+                out _,
+                out error,
+                cancellationToken);
+        }
+
+        internal static bool TryReadValidPackageManifest(
+            string packageJsonPath,
+            out string packageName,
+            out string displayName,
+            out string version,
+            out string error,
+            CancellationToken cancellationToken = default(CancellationToken))
+        {
             packageName = string.Empty;
             displayName = string.Empty;
+            version = string.Empty;
+            if (!TryReadPackageManifestMetadata(
+                    packageJsonPath,
+                    out PackageManifestMetadata metadata,
+                    out error,
+                    cancellationToken))
+            {
+                return false;
+            }
+
+            packageName = metadata.PackageName;
+            displayName = metadata.DisplayName;
+            version = metadata.Version;
+            return true;
+        }
+
+        internal static bool TryReadPackageManifestMetadata(
+            string packageJsonPath,
+            out PackageManifestMetadata metadata,
+            out string error,
+            CancellationToken cancellationToken = default(CancellationToken))
+        {
+            metadata = null;
             error = string.Empty;
             if (string.IsNullOrWhiteSpace(packageJsonPath))
             {
@@ -544,10 +584,9 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 }
 
                 cancellationToken.ThrowIfCancellationRequested();
-                return TryReadValidPackageManifestFromJson(
+                return TryReadPackageManifestMetadataFromJson(
                     content.ToString(),
-                    out packageName,
-                    out displayName,
+                    out metadata,
                     out error);
             }
             catch (OperationCanceledException)
@@ -585,6 +624,119 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             {
                 return false;
             }
+        }
+
+        internal static string ValidateExpectedPackageIdentity(
+            string expectedPackageName,
+            string expectedVersion,
+            string declaredPackageName,
+            string declaredVersion)
+        {
+            string expectedName = expectedPackageName?.Trim() ?? string.Empty;
+            string actualName = declaredPackageName?.Trim() ?? string.Empty;
+            if (!string.Equals(expectedName, actualName, StringComparison.Ordinal))
+            {
+                string safeActualName = SanitizePackageIdentityValue(
+                    string.IsNullOrEmpty(actualName) ? "unknown" : actualName);
+                return $"Package name mismatch. Expected {expectedName}, got " +
+                       safeActualName + ".";
+            }
+
+            string expected = expectedVersion?.Trim() ?? string.Empty;
+            if (string.IsNullOrEmpty(expected))
+                return string.Empty;
+
+            string actual = declaredVersion?.Trim() ?? string.Empty;
+            if (string.Equals(expected, actual, StringComparison.Ordinal))
+                return string.Empty;
+
+            string safeActualVersion = SanitizePackageIdentityValue(
+                string.IsNullOrEmpty(actual) ? "unknown" : actual);
+            return $"Package version mismatch. Expected {expected}, got " +
+                   safeActualVersion + ".";
+        }
+
+        internal static string ComputePackageDependencyFingerprint(
+            IEnumerable<PackageManifestDependency> dependencies)
+        {
+            string canonical = string.Join(
+                "\n",
+                (dependencies ?? Array.Empty<PackageManifestDependency>())
+                .Where(dependency => dependency != null)
+                .Select(dependency => new
+                {
+                    Name = dependency.Name?.Trim() ?? string.Empty,
+                    Version = dependency.Version?.Trim() ?? string.Empty
+                })
+                .OrderBy(dependency => dependency.Name, StringComparer.Ordinal)
+                .ThenBy(dependency => dependency.Version, StringComparer.Ordinal)
+                .Select(dependency =>
+                    dependency.Name.Length + ":" + dependency.Name +
+                    dependency.Version.Length + ":" + dependency.Version));
+            byte[] bytes = Encoding.UTF8.GetBytes(canonical);
+            using SHA256 sha256 = SHA256.Create();
+            byte[] digest = sha256.ComputeHash(bytes);
+            var result = new StringBuilder(digest.Length * 2);
+            foreach (byte value in digest)
+                result.Append(value.ToString("x2"));
+            return result.ToString();
+        }
+
+        internal static bool IsValidPackageDependencyFingerprint(string value)
+        {
+            if (value == null || value.Length != 64)
+                return false;
+            foreach (char character in value)
+            {
+                bool hexadecimal = character >= '0' && character <= '9' ||
+                                   character >= 'a' && character <= 'f';
+                if (!hexadecimal)
+                    return false;
+            }
+            return true;
+        }
+
+        internal static string ValidateExpectedPackageManifest(
+            string expectedPackageName,
+            string expectedVersion,
+            string expectedDependencyFingerprint,
+            PackageManifestMetadata actualMetadata)
+        {
+            if (actualMetadata == null)
+                return "The installed package manifest is missing.";
+
+            string identityError = ValidateExpectedPackageIdentity(
+                expectedPackageName,
+                expectedVersion,
+                actualMetadata.PackageName,
+                actualMetadata.Version);
+            if (!string.IsNullOrEmpty(identityError))
+                return identityError;
+
+            string expectedFingerprint =
+                expectedDependencyFingerprint?.Trim() ?? string.Empty;
+            if (string.IsNullOrEmpty(expectedFingerprint))
+                return string.Empty;
+            if (!IsValidPackageDependencyFingerprint(expectedFingerprint))
+                return "The expected package dependency fingerprint is invalid.";
+
+            string actualFingerprint = ComputePackageDependencyFingerprint(
+                actualMetadata.Dependencies);
+            return string.Equals(
+                expectedFingerprint,
+                actualFingerprint,
+                StringComparison.Ordinal)
+                ? string.Empty
+                : "Package dependencies changed after preflight. The install was not accepted.";
+        }
+
+        private static string SanitizePackageIdentityValue(string value)
+        {
+            string sanitized = GitHubUtility.SanitizeUiDiagnostic(value);
+            var singleLine = new StringBuilder(sanitized.Length);
+            foreach (char character in sanitized)
+                singleLine.Append(char.IsControl(character) ? ' ' : character);
+            return singleLine.ToString().Trim();
         }
 
         internal static bool TryReadValidPackageManifestFromJson(

@@ -14,6 +14,21 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Discovered GitHub packages can now be installed as either editable Git
+  submodules or normal read-only UPM Git dependencies. Eligible installed
+  packages expose **Convert to Submodule**, **Convert to Read-Only Package**,
+  and **Uninstall Submodule** through Package Manager's native **Manage** menu.
+- Missing-dependency preflight now lists each safely resolved source before an
+  install. GitHub dependencies install leaf-first in the root package's selected
+  mode, registry dependencies remain transitive, and unresolved, mismatched, or
+  ambiguous requirements block the operation. Non-Unity packages prefer GitHub
+  and fall back to configured registries only after complete personal and
+  organization discovery proves absence; incomplete catalogue coverage fails
+  closed.
+- Package Manager's native **Filters** control now filters **Sources > GitHub**
+  by repository visibility and organization. Per-user Preferences provide the
+  initial visibility, organization, and install-mode defaults: all repositories,
+  all owners, and Git submodule respectively.
 - Package Manager presentation for installed package submodules, including a
   **Submodule** tag and **GitHub** source with the existing themed Git icon.
 - A fully native **GitHub** page under Package Manager's **Sources** section on
@@ -24,8 +39,9 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   _owner_**, carry **Public** or **Private** repository badges, and use Package
   Manager's native loading message and spinner while discovery is running.
 - Native discovered-package details with a **Repository** website link, Git-based
-  branch selector defaulted to the repository's default branch, and a primary
-  **Install** action outside Unity's **Extensions** overflow. Installation uses
+  branch selector that prefers `main` and otherwise uses the repository's default
+  branch, and a primary **Install** action outside Unity's **Extensions**
+  overflow. Installation uses
   the shared validated add transaction and rolls back failed clones or
   postcondition checks when process termination and cleanup ownership can be
   proven.
@@ -34,10 +50,6 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   branches, the default branch, and the exact root `package.json` name before
   enabling those inputs, then uses the existing trust confirmation and
   validated add transaction with safe rollback.
-- The complete management, discovery, add, update, retarget, and remove
-  workspace remains available from **Window > Package Management > Git
-  Submodule Manager**, with an embedded fallback for older Package Manager
-  layouts.
 - Editor-only Harmony 2.4.1 integration with guarded hooks for supported Unity
   Package Manager internals.
 - Guarded Package Manager removal for installed submodules, with inline
@@ -47,8 +59,8 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   UPM manual.
 - Repository sanity checks and tagged-release packaging workflows.
 - Open-source MIT licensing with attribution to Martin Calander.
-- Explicit-consent Git and GitHub CLI installation assistance on supported
-  macOS and Windows setups, with safe terminal guidance elsewhere.
+- External Git and GitHub CLI installation guidance, plus a copyable GitHub
+  authentication command that runs only in the user's visible terminal.
 - Dependency-gate, installer-failure, local-repository, and branch-fetch
   regression coverage.
 - A persistent self-removal warning and a second explicit confirmation before
@@ -56,21 +68,34 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Dirty-work, local-only commit, interrupted-operation, process cancellation,
   linked-worktree, and cross-platform repository integration coverage.
 - A project-wide operation journal for recovery after an interrupted mutation.
-- A lazy "Valid UPM Packages" repository filter that batch-validates root
-  `package.json` manifests without issuing one GitHub process per repository.
 - Unity-native animated loading indicators for installed packages, GitHub
   repository pages, and package-manifest validation.
-- A one-time, theme-aware welcome and setup page with persistent user settings,
-  dependency status, opt-in installers, and verified GitHub browser login.
-- A native per-user Preferences page for startup, refresh, discovery-filter,
-  and welcome/setup options.
+- A one-time standalone Welcome window with Git, GitHub CLI, and authentication
+  status, external setup guidance, a copyable authentication command, and direct
+  access to **Sources > GitHub**.
+- A native per-user Preferences page for routine confirmations, dependency-plan
+  prompting, GitHub visibility and organization defaults, install-mode default,
+  Welcome, and GitHub-source activation.
 
 ### Changed
 
+- Current management now lives exclusively at **Window > Package Management >
+  Package Manager > Sources > GitHub** and in Package Manager's native details,
+  **+**, and **Manage** controls. The setup experience is a small standalone
+  Welcome window reopened from **Preferences > Git Submodule Manager**.
+- Preferences now control only current native workflows: safe routine
+  confirmation suppression, complete dependency-plan auto-install, GitHub
+  visibility and organization defaults, default install mode, Welcome, and
+  direct GitHub-source activation. Safety warnings for dirty or unverified work
+  remain mandatory.
 - Successful submodule installs, removals, and package-source conversions now
   hand off to Unity Package Manager's own resolve lifecycle after Git cleanup.
   The pending handoff survives assembly reloads and waits for the exact embedded,
   Git, or removed package state before allowing another package mutation.
+- Dependency-aware installs now preserve their exact ordered step and phase
+  across assembly reload, never reissue an attempted mutation, verify Unity's
+  registered package state before advancing, and retain one terminal outcome
+  until Package Manager presents it.
 - Declared `6000.5.0f1` as the minimum Editor version and limited documented
   support to Unity `6000.5.*f1` while other Package Manager generations remain
   unvalidated.
@@ -79,9 +104,6 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   Manager pages continue to identify installed submodules explicitly.
 - The top-left Git-submodule installer now uses a compact baseline layout and a
   bounded scrolling diagnostic area that expands only when status text needs it.
-- Moved the complete management workspace from its standalone Editor window
-  into Unity's existing Package Manager. The explicit package menu opens that
-  workspace, while the former public window redirects to it for compatibility.
 - Renamed the product from Git Package Manager to Git Submodule Manager,
   including the UPM package ID, editor and test assemblies, namespaces,
   serialized editor types, menu and Preferences UI, documentation, and tests.
@@ -114,7 +136,14 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   repository readers drain.
 - Package Manager refresh now rescans both installed submodules and the remote
   GitHub catalogue. Missing or unauthenticated GitHub CLI state leaves installed
-  packages and the embedded management fallback usable.
+  packages and Git-only direct URL installation usable.
+
+### Removed
+
+- Removed the former package menu, management EditorWindow compatibility
+  redirect, embedded manager, **In Project** tab, and interactive **Valid UPM
+  Packages** filter. The native GitHub catalogue always admits only validated
+  root UPM packages.
 
 ### Fixed
 
@@ -133,6 +162,10 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Resolve module metadata through Git so remove/re-add works in linked worktrees.
 - Validate bounded regular UTF-8 manifests after cloning, reject duplicate
   submodule registrations, and discard truncated structural Git output.
+- Verify the exact package name, version, and dependency map captured during
+  preflight after each dependency-aware submodule or read-only Git install.
+  Mismatches trigger owned rollback or removal; incomplete cleanup reports that
+  the checkout or `Packages/manifest.json` entry may remain.
 - Preserve repository-default branch semantics instead of silently forcing or
   displaying `main` when no branch is configured.
 - Keep installed navigation usable during optional GitHub failures, prevent

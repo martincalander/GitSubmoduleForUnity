@@ -96,7 +96,8 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             int completedOwners,
             int totalOwners,
             int unavailableManifestCount,
-            long revision)
+            long revision,
+            string coverageWarningMessage = "")
         {
             Repositories = repositories ?? EmptyRepositories;
             IsLoading = isLoading;
@@ -107,6 +108,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             TotalOwners = totalOwners;
             UnavailableManifestCount = unavailableManifestCount;
             Revision = revision;
+            CoverageWarningMessage = coverageWarningMessage ?? string.Empty;
         }
 
         internal IReadOnlyList<PackageManagerGitHubRepository> Repositories { get; }
@@ -118,6 +120,13 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         internal int TotalOwners { get; }
         internal int UnavailableManifestCount { get; }
         internal long Revision { get; }
+        /// <summary>
+        /// A terminal discovery can still be usable for presentation while not
+        /// being complete enough to prove that a package is absent. For example,
+        /// organization enumeration can fail after personal repositories load.
+        /// Dependency resolution treats this as fail-closed coverage metadata.
+        /// </summary>
+        internal string CoverageWarningMessage { get; }
     }
 
     /// <summary>
@@ -154,6 +163,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         private static string activeOwner = string.Empty;
         private static string statusMessage = string.Empty;
         private static string errorMessage = string.Empty;
+        private static string coverageWarningMessage = string.Empty;
         private static bool isStarted;
         private static bool isLoading;
         private static bool awaitingPageResult;
@@ -404,6 +414,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 ? $" {unavailableManifestCount} repositories could not be validated."
                 : string.Empty;
             string organizationWarning = coordinator?.WarningMessage;
+            coverageWarningMessage = organizationWarning ?? string.Empty;
             string warningSuffix = string.IsNullOrWhiteSpace(organizationWarning)
                 ? string.Empty
                 : " " + organizationWarning.Trim();
@@ -557,7 +568,8 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 completedOwners,
                 totalOwners,
                 unavailableManifestCount,
-                ++revision);
+                ++revision,
+                coverageWarningMessage);
             InvokeSnapshotChanged();
         }
 
@@ -614,6 +626,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             activeOwner = string.Empty;
             statusMessage = string.Empty;
             errorMessage = string.Empty;
+            coverageWarningMessage = string.Empty;
             isLoading = false;
             awaitingPageResult = false;
             pageProcessed = false;

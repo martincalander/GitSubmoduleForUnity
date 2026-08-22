@@ -11,79 +11,157 @@ Editor/
 │                               per-user, per-project preferences
 ├── GitSubmoduleManagerPreferencesProvider.cs
 │                               native Unity Preferences integration
+├── GitSubmoduleManagerWelcomeWindow.cs
+│                               standalone setup/status window
 ├── GitSubmoduleManagerPackageManagerHost.cs
-│                               Package Manager lifecycle and compatibility host
-├── GitSubmoduleManagerLegacyWindow.cs
-│                               compatibility redirect for the former window
-├── GitSubmoduleManagerView.*   host-neutral IMGUI view and user actions
+│                               Package Manager lifecycle and activation host
 ├── PackageManagerSubmoduleNativePage.cs
-│                               reflected native ExtensionPage registration
-├── PackageManagerSubmoduleSnapshot.cs
-│                               asynchronous package-submodule classification
-├── PackageManagerSubmoduleHarmonyPatch.cs
-│                               Package Manager tag and source integration
+│                               reflected native Sources/GitHub registration
 ├── PackageManagerGitHubDiscovery.cs
-│                               lazy full-account valid-package catalogue
+│                               lazy authenticated package catalogue
+├── PackageManagerGitHubPackageProjection.cs
+│                               transient native package-list projection
+├── PackageManagerGitHubDetails.cs
+│                               branch, install-mode, and install controls
+├── PackageManagerGitSubmoduleInstallMenu.cs
+│                               native Package Manager + menu extension
+├── PackageManagerSubmoduleManageMenu.cs
+│                               native conversion and removal actions
+├── PackageDependencyResolutionService.cs
+├── PackageDependencyInstallPreflight.cs
+├── PackageDependencyInstallPrompt.cs
+├── PackageDependencyInstallPipeline.cs
+├── PackageDependencyInstallCoordinator.cs
+│                               safe missing-dependency planning and consent
 ├── GitSubmoduleAddService.cs
-│                               shared validated add and rollback transaction
+├── GitPackageConversionService.cs
+├── GitSubmoduleRemoveService.cs
+│                               validated mutation transactions
+├── PackageManagerSubmoduleSnapshot.cs
+│                               asynchronous installed-package classification
+├── PackageManagerSubmoduleHarmonyPatch.cs
+├── PackageManagerGitHubNativePresentationPatch.cs
+│                               guarded Package Manager presentation hooks
 ├── DiscoveryCoordinator.cs    paged GitHub discovery state
 ├── RepositoryCoordinator.cs   lazy remote branch loading and cache
 ├── Models/                    package and repository data
 └── Utilities/
     ├── CliCommandRunner.cs    process execution and async handles
-    ├── CliInstaller.cs        consent-based native install plans and guidance
-    ├── GitUtility.cs          validated Git submodule operations
+    ├── GitUtility.cs          validated Git operations
     └── GitHubUtility.cs       gh authentication, parsing, and API helpers
 ```
 
+The former management EditorWindow, compatibility redirect, and host-neutral
+embedded view have been removed. Current package discovery and management are
+implemented on Unity's native Package Manager surface. The Welcome window is a
+small independent setup/status surface and does not manage packages itself.
+
 ## Package Manager Integration
 
-On supported Unity 6000.5 final releases, the host registers a native **GitHub**
+On supported Unity `6000.5.*f1` releases, the host registers a native **GitHub**
 page through Unity's internal `ExtensionPage` contract and places its row under
-**Sources**. The page
-combines GitHub package submodules classified by the asynchronous installed
-snapshot with valid packages published by the authenticated discovery
-catalogue. Both participate in Package Manager's own list, search, sorting,
-selection, and details UI. The page's **Refresh** action restarts the installed
-snapshot and the remote catalogue scan.
+**Sources**. Users reach it through **Window > Package Management > Package
+Manager > Sources > GitHub**, or through the explicit buttons in Welcome and
+Preferences.
+
+The page combines installed GitHub packages from the asynchronous submodule
+snapshot and Package Manager's installed Git-package state with valid root UPM
+packages from the authenticated discovery catalogue. All records participate in
+Package Manager's own list, search, sorting, filtering, selection, details tabs,
+action toolbar, and loading state. **Refresh** restarts installed-state discovery
+and the remote scan.
 
 For a valid repository that is not installed, the projection creates a
-transient, non-installed placeholder in Package Manager's in-memory package
-database. The placeholder exists only so Unity can render and search the
-discovery result; it is never written to `Packages/manifest.json` or
-`Packages/packages-lock.json`, and it is never classified as an installed
-submodule. Selecting it mounts a **Repository** website link, a branch selector,
-and a primary **Install** action in Unity's details and built-in action regions,
-not the extension-action overflow. The selector starts on the repository's
-default branch and uses `git ls-remote --heads` for additional choices. The
-action passes the repository's declared package name, clone URL, and selected
-branch to the shared validated add transaction.
+transient placeholder in Package Manager's in-memory database. It exists only
+so Unity can render and search the discovery result. It is never written to
+`Packages/manifest.json` or `Packages/packages-lock.json` and is never treated
+as installed.
+
+Selecting a discovery result mounts a **Repository** link, a branch selector,
+an install-mode selector, and a primary **Install** action in Unity's native
+details regions. The selector prefers `main`, falls back to the remote default
+when `main` is unavailable, and uses `git ls-remote --heads` for additional
+choices. Install mode is either an
+editable Git submodule or a normal read-only UPM Git dependency.
+
+The package extends Package Manager's native **+** menu with **Install package
+as Git Submodule...**. Its Git-only probe reads the repository's default branch,
+remote branches, and root package identity before enabling the corresponding
+fields.
+
+For an installed verified submodule, Unity's native **Manage** menu receives
+**Convert to Read-Only Package** and **Uninstall Submodule**. An eligible direct
+read-only Git dependency receives **Convert to Submodule**. Read-only packages
+whose `package.json` is selected from a repository subdirectory are deliberately
+not convertible because a package submodule must expose its manifest at the
+checkout root.
 
 Projection records are owned by a specific Package Manager host lifecycle.
-Refresh retires the previous catalogue handles before replacing obsolete
-records; window teardown releases that host's projection ownership, removing
-package-created placeholders after the last host releases them; and domain
-reload or Editor shutdown disposes the discovery coordinator and its process
-handles. Registration, injection, action wiring, and cleanup all probe Unity's
-internal contracts defensively. If a required contract is absent or an
-operation cannot be proven safe, the integration fails open: Unity's package
-database is not replaced or broadly cleared, installed submodules remain
-available where supported, and the host-neutral management workspace remains
-the fallback.
+Refresh retires obsolete catalogue handles before replacing records; window
+teardown releases that host's transient projections; domain reload and Editor
+shutdown dispose discovery coordinators and process handles.
 
-The package probes and invokes this internal contract through guarded reflection
-and Harmony lifecycle hooks. Registration, row placement, and icon application
-fail independently without replacing Unity's package database or selection
-model. The presentation hook labels installed package submodules **Submodule**
-on normal Package Manager pages and uses matching **Public** or **Private**
-repository metadata on the exact GitHub extension page. It reports their
-**GitHub** or **Git** source in normal Package Manager details.
+## Reflection and Compatibility Boundary
 
-The explicit **Window > Package Management > Git Submodule Manager** menu opens
-the host-neutral management workspace for discovery, add, initialize, update,
-retarget, and remove operations. A guarded embedded fallback remains for
-contract drift and migration diagnostics, but Editors outside the Unity 6000.5
-final-release line are not currently supported.
+The package probes Package Manager's internal contracts through guarded
+reflection and Harmony lifecycle hooks. Page registration, sidebar placement,
+filters, projection, details, add-menu, Manage-menu, and presentation hooks are
+validated independently. Installed package submodules are labelled
+**Submodule** on normal Package Manager pages. On the exact GitHub extension
+page, repository visibility is shown as **Public** or **Private**. The Source
+card reports **GitHub** with the themed Git icon, or **Git** for another host.
+
+The supported contract line is Unity `6000.5.*f1`, with `6000.5.0f1` declared as
+the minimum. If a required internal contract cannot be verified, that extension
+feature is not installed. The package does not replace, hide, or broadly clear
+Unity's package database or standard Package Manager UI, and no legacy manager
+fallback is injected.
+
+## Native Filters and Defaults
+
+The GitHub extension contributes repository visibility and organization values
+to Package Manager's native **Filters** control. Visibility accepts all, public,
+or private repositories. Organization values use the localized presentation
+form **Organization - _owner_** while the saved user preference stores only a
+sanitized GitHub login.
+
+Per-user Preferences provide default visibility, organization, and install mode.
+The safe defaults are all repositories, no owner restriction, and **Git
+Submodule**. Visibility and organization defaults are applied only when the
+native page has no existing filter selection, so a user's current Package
+Manager state is not overwritten on refresh. The install-mode default initializes
+the selector when a discovered repository is selected. Both confirmation types
+remain active until the user explicitly opts out of the eligible prompt.
+
+## Dependency Planning
+
+Before a root install mutates the project, dependency preflight considers only
+manifest dependencies that are not already registered directly or transitively.
+The resolver combines immutable installed-package state, Unity/default and
+configured-registry search results, and the current GitHub catalogue.
+
+A registered package satisfies a requirement only when Unity reports one
+complete package identity at the exact requested version. `com.unity.*`
+requirements proceed directly to registry search. Every other package name gives
+GitHub priority: resolution waits for a successful terminal scan of the user's
+repositories and every visible organization, chooses a unique exact GitHub
+match when present, and searches configured registries only after complete
+catalogue coverage proves that no GitHub package exists. A discovery error,
+coverage warning, unavailable manifest, incomplete owner scan, duplicate GitHub
+match, or mismatched GitHub version or install identity is blocking; registry
+fallback is deliberately skipped in those cases.
+
+A plan is installable only when every missing dependency has exactly one safe,
+version-compatible source. Unresolved, mismatched, or ambiguous requirements
+block the root install. The confirmation lists every missing requirement and
+its selected source.
+
+GitHub dependencies are installed explicitly, leaf-first, in the same mode as
+the root package. Unity/default or configured-registry dependencies remain
+transitive and are left to Unity Package Manager; the extension never adds them
+as direct project dependencies. The per-user automatic-dependency option skips
+only the confirmation for a complete unambiguous plan. It never bypasses
+resolution or safety checks.
 
 ## Process Execution
 
@@ -92,148 +170,126 @@ Commands run through `System.Diagnostics.Process` with:
 - `UseShellExecute = false`;
 - redirected standard output and error;
 - concurrent stream draining;
-- bounded timeouts;
+- bounded output and timeouts;
 - `GIT_TERMINAL_PROMPT=0` and `GCM_INTERACTIVE=Never`;
-- explicit executable resolution for supported editor platforms.
+- explicit executable resolution for Windows, macOS, and Linux Editors.
 
-The runner does not interpret input through Bash, PowerShell, Command Prompt, or
-another shell.
-
-GitHub authentication uses a fixed, token-free argument list for GitHub CLI's
-device flow. It pins `github.com`, asks GitHub CLI to copy the one-time code,
-opens the fixed GitHub device page from Unity, keeps command output out of the
-UI, and performs a separate active-account `gh api user` check before
-treating discovery as authenticated. The one-click path is gated to GitHub CLI
-2.79.0 or newer. Clipboard failure and older versions fall back to a compatible
-command in a visible terminal so the device code is never trapped in hidden
-output. The confirmation also discloses that the automated path selects HTTPS
-as GitHub CLI's host-wide Git protocol.
-
-Missing CLI tools are never installed silently. On macOS and Windows, the
-management workspace shows the exact native command and requires an explicit
-confirmation before starting it. Linux keeps installation in the user's
-terminal so the distribution package manager can request administrator
-permission normally.
+The runner never interprets repository input through Bash, PowerShell, Command
+Prompt, or another shell. The standalone Welcome window performs Git and GitHub
+CLI probes on a worker thread, links to official install guidance, and exposes a
+fixed copyable authentication command. Authentication remains owned by GitHub
+CLI; the extension never accepts a token.
 
 ## Mutation Boundary
 
 Before a Git mutation, the utility validates:
 
 - a secure HTTPS/SSH repository URL or explicit local repository argument;
-- branch reference syntax;
-- reverse-domain package name;
-- a direct destination below `Packages/`.
+- branch and revision syntax;
+- a reverse-domain package name;
+- a direct destination below `Packages/`;
+- the expected repository, package manifest, gitlink, and `.gitmodules` state.
 
 The tool refuses mutation outside `Packages/com.author.package`. Plaintext
 `http://` and `git://` remotes, embedded credentials, executable remote-helper
-syntax, symlinked manifests, oversized manifests, duplicate path registrations,
-and malformed or truncated structural Git output fail closed. Persisted
-`.gitmodules` entries, local submodule configuration, and initialized worktree
-origins are revalidated before they are used.
+syntax, symlinked or oversized manifests, duplicate registrations, and malformed
+or truncated structural Git output fail closed.
 
-The native **Install** action uses the same serialized mutation service as
-direct installation. It clones the branch selected in Package Manager,
-then verifies the root manifest name, Git registration, destination, origin,
-and branch postconditions. A failed clone or validation is rolled back only
-when process termination and cleanup ownership can be proven; ambiguous state
-is retained with recovery instructions instead of being deleted speculatively.
+Submodule installation validates the cloned root manifest, Git registration,
+origin, destination, revision, and branch postconditions. Read-only installation
+uses Unity Package Manager and verifies an exact direct Git manifest entry. For
+both modes, the installed root manifest must match the exact package name,
+version, and dependency-map fingerprint captured from the selected branch before
+mutation. A mismatch rolls back the newly added submodule or removes the newly
+added read-only dependency only when cleanup ownership can be proven. Failed or
+ambiguous cleanup retains state with an explicit warning to inspect the package
+path or `Packages/manifest.json` before retrying.
+
+Read-only-to-submodule conversion creates and verifies the destination checkout
+before removing the manifest dependency. Submodule-to-read-only conversion
+records the dependency before removing the verified worktree and pins the
+current committed revision. Package Manager removal is intercepted so Unity
+cannot recursively delete a verified submodule as a raw embedded directory.
+
+The confirmation preference can suppress only clean routine removal or
+conversion prompts. Dirty, unpushed, changed, or unverified-state decisions are
+never silently approved.
 
 ## Discovery State
 
-The native catalogue is lazy: it starts when the GitHub source needs data. It
-uses one `DiscoveryCoordinator` to walk every 50-item page for the authenticated
-user, loads the organizations visible to that account, then walks every page
-for each organization. Valid-package filtering is always enabled. Repository
-node IDs are sent to GitHub GraphQL in bounded batches, and each confirmed root
-UPM manifest is copied into an immutable catalogue snapshot as soon as its
-validation batch completes. Records are deduplicated by GitHub node ID, falling
-back to case-insensitive owner/name identity when no node ID is available.
+The native catalogue starts lazily when **Sources > GitHub** needs remote data.
+One coordinator walks repository pages for the authenticated user and their
+visible organizations. Repository node IDs are sent to GitHub GraphQL in bounded
+batches, and each confirmed root manifest is published into an immutable
+snapshot as soon as its validation batch completes.
 
-Unchecked, unavailable, malformed, or non-root manifests fail closed and never
-enter the catalogue. **Refresh** disposes the active coordinator and its process
-handles before starting a new snapshot sequence. Missing GitHub CLI or an
-authentication/API failure stops only remote discovery; the installed
-submodule snapshot and management fallback remain usable.
+Records are deduplicated by GitHub node ID, falling back to case-insensitive
+owner/name identity. Unavailable, malformed, non-root, or unchecked manifests
+never enter the catalogue. Missing GitHub CLI or an authentication/API failure
+stops only remote discovery; installed-package snapshots and Git-only direct URL
+installation remain available.
 
-The management workspace reuses `DiscoveryCoordinator` for its interactive
-browser. Search is debounced and sent to GitHub rather than performed over a
-full local account mirror. The coordinator keeps one active page request and
-one newest pending request, so a stale response cannot replace a newer owner,
-search, or page selection. GitHub's search result window is capped at 1,000
-repositories; the UI never offers an unreachable page beyond that limit.
-Rechecking or changing authentication clears account-owned state before loading
-the active identity, so repositories from a previous account cannot remain
-visible. In this workflow, root-manifest validation is selection-driven unless
-**Valid UPM Packages** is enabled, in which case only the current page is
-inspected. Branch listing also remains lazy.
+Search, sorting, visibility filtering, and organization filtering operate on the
+projected records through Package Manager's native controls. Discovery retains
+only the current scan generation, so stale owner, page, or refresh results cannot
+replace newer catalogue state. Branch listing remains lazy.
 
-## Threading
+## Threading and Reload Handoff
 
 Network-heavy CLI work runs on background threads. Completion is published with
-a volatile memory barrier before the editor thread consumes the result. Unity
-API calls and UI mutations remain on the editor thread. Process discovery uses
-platform-neutral .NET operating-system checks so background work does not query
-Unity editor state.
+a memory barrier before the Editor thread consumes it. Unity API calls and UI
+mutations remain on the Editor thread.
 
 While an asynchronous Git mutation writes below `Packages/`, automatic asset
-refresh is temporarily suspended. Completion is polled independently of the
-management-workspace lifecycle, validation and rollback finish first, and
-auto-refresh is restored in a `finally` path before one explicit refresh. This
-prevents a mid-clone domain reload from orphaning the operation.
+refresh is temporarily suspended. Validation and rollback finish before
+auto-refresh is restored in a `finally` path. Successful install, conversion,
+or removal then hands off to Unity Package Manager's resolve lifecycle. Pending
+handoff state survives assembly reload and waits for the expected embedded, Git,
+or removed package state before another mutation begins.
 
-Every mutation has a worker-owned completion outcome: succeeded, failed with a
+Dependency-aware installation persists its operation identity, ordered steps,
+exact manifest expectations, and current phase in session state. Attempted or
+waiting steps are never reissued after a reload; the coordinator resumes by
+inspecting Unity's authoritative registered-package state. Its terminal success
+or failure is retained across reload until a matching Package Manager details
+surface or recovery dialog presents it successfully, then consumed so it is not
+shown twice.
+
+Every operation has a worker-owned completion outcome: succeeded, failed with a
 verified rollback, or failed with repository state requiring inspection. That
-safety outcome finalizes the recovery journal independently of the management
-workspace's notification callback, so closing Package Manager or encountering
-a GUI exception cannot misclassify an already-verified repository result.
+safety result finalizes the recovery journal independently of a Package Manager
+selection change or notification exception.
 
 ## Failure Handling
 
-- CLI failures retain standard error for user-visible diagnostics.
+- CLI failures retain sanitized standard error for user-visible diagnostics.
 - Timeouts cancel the process tree and retain a recovery warning whenever full
   termination cannot be confirmed.
-- Standard output and error are bounded; any stream that cannot be completely
-  drained is marked truncated, and structural parsers discard the partial data.
-- Package addition validates the cloned root and rolls back invalid packages.
-- Failed clones remove safe untracked worktrees and module metadata; ambiguous
-  `.gitmodules` state is preserved and reported instead of being guessed at.
-- Successful `git rm` removes the tracked registration and worktree while
-  retaining the submodule Git object metadata for recovery and safe re-add.
-  Postconditions verify the gitlink, `.gitmodules` registration, and filesystem
-  path instead of misreporting a partially completed tracked mutation.
-- View detach/reattach generations prevent stale initial-load results from
-  applying to a newer host lifecycle.
-- Initial loading publishes Git and installed-package availability before the
-  optional GitHub CLI check. A GitHub-only failure therefore never locks manual
-  Git workflows, while repository mutations cancel or queue behind background
-  readers without overtaking them.
-- Native catalogue refresh retires discovery handles before replacement.
-  Package Manager teardown unsubscribes projection callbacks and releases
-  package-owned transient records; domain reload and Editor shutdown dispose
-  the catalogue. Reflection or cleanup failures are contained and do not
-  replace or bulk-mutate Unity's package database.
-- Closing Package Manager or detaching the management workspace cancels an
-  in-progress GitHub browser authentication command and retains ownership until
-  its process has terminated. A session marker also blocks a second hidden
-  authentication process after domain reload until Unity is restarted.
+- Incomplete bounded output is marked truncated; structural parsers reject it.
+- Failed additions remove only proven untracked artifacts; ambiguous
+  `.gitmodules` or manifest state is preserved.
+- Canonical `git rm` postconditions verify the gitlink, registration, index, and
+  filesystem path while retaining Git object metadata where possible.
+- Host teardown releases owned projections and callbacks. Reflection or cleanup
+  failure is contained and never bulk-mutates Unity's package database.
+- Domain reload and Editor shutdown dispose discovery and dependency-preflight
+  readers without reclassifying a verified mutation outcome.
 
 ## Testing Strategy
 
-EditMode tests cover parsing, package-name and path validation, Git reference
-validation, repository URL safety, Windows path quoting, GitHub clone URL
-selection, discovery paging, search, stale-request supersession, full-account
-catalogue aggregation, immutable publication, organization deduplication, and
-the shared add transaction's rollback outcomes.
+EditMode tests cover parsing, path and package-name validation, Git references,
+repository URL safety, Windows quoting, discovery paging and cancellation,
+immutable catalogue publication, organization and visibility filters, install
+mode defaults, dependency source priority and fail-closed discovery coverage,
+resolution and prompting, exact post-install manifest verification, reload-safe
+completion, conversion eligibility, confirmation policy, and mutation rollback
+outcomes.
 
-The `PackageManagerCompatibility` EditMode category inventories the reflected
-Package Manager types and exact method signatures used by supported Unity
-6000.5 patch releases, then verifies Harmony ownership for every resolved hook.
-The category is intentionally quick to run across patch versions and reports
-all drift found within a contract group together, including the Unity version
-and platform. It can also be run on other Editor generations as a migration
-diagnostic, but those results do not constitute a support claim. Supported
-Editors require the complete native Sources/GitHub page, projection, loading,
-toolbar, and sidebar contracts.
+The `PackageManagerCompatibility` category inventories the reflected Package
+Manager types and exact signatures used by supported Unity 6000.5 patches, then
+verifies Harmony ownership for resolved hooks. It reports contract drift with
+the Unity version and platform. Runs on other Editor generations are migration
+diagnostics and do not constitute a support claim.
 
-Repository CI adds package metadata, documentation-link, Unity-meta, workflow,
-and package-archive sanity checks that do not require a Unity license.
+Repository CI also performs package metadata, documentation-link, Unity-meta,
+workflow, and package-archive checks that do not require a Unity license.

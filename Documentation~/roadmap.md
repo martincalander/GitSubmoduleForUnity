@@ -5,7 +5,7 @@ compatibility, and a native Unity Editor experience over feature count.
 
 ## Current Priorities
 
-- validate the 1.0 editor workflow across Unity 6000.5 patch releases;
+- validate the 1.0 editor workflow across Unity `6000.5.*f1` patch releases;
 - expand Windows, macOS, and Linux CI coverage where Unity licensing permits;
 - improve update-state visibility without performing implicit network work;
 - add focused integration tests around temporary Git repositories;
@@ -16,8 +16,7 @@ compatibility, and a native Unity Editor experience over feature count.
 - package version and commit comparison;
 - explicit batch update with per-package confirmation and failure isolation;
 - dependency visualization for submodule packages;
-- additional Git hosting providers in discovery views;
-- opt-in organization presets and repository filters.
+- additional Git hosting providers in discovery views.
 
 ## Non-Goals
 

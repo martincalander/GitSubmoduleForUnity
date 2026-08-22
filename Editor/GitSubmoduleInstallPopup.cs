@@ -44,6 +44,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         private Button submitButton;
         private GitSubmoduleInstallProbe installProbe;
         private string pendingProbeUrl = string.Empty;
+        private string pendingProbeBranch = string.Empty;
         private string previousAutomaticPackageName = string.Empty;
         private string previousAutomaticBranch = string.Empty;
         private string packageManifestBranch = string.Empty;
@@ -354,6 +355,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             {
                 branchEditedByUser = true;
                 ResetSubmissionState();
+                RequestCurrentBranchProbe();
                 UpdatePresentation();
             });
             root.RegisterCallback<KeyDownEvent>(OnKeyDown, TrickleDown.TrickleDown);
@@ -378,6 +380,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             ResetSubmissionState();
             string url = urlField?.value?.Trim() ?? string.Empty;
             pendingProbeUrl = string.Empty;
+            pendingProbeBranch = string.Empty;
             appliedProbeRevision = -1;
             ClearDiscoveredBranches();
             ClearPreviousAutomaticValues();
@@ -405,19 +408,28 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 EditorApplication.timeSinceStartup >= probeNotBefore)
             {
                 string currentUrl = urlField?.value?.Trim() ?? string.Empty;
+                string currentBranch = branchField?.value?.Trim() ?? string.Empty;
                 string requestedUrl = pendingProbeUrl;
+                string requestedBranch = pendingProbeBranch;
                 pendingProbeUrl = string.Empty;
+                pendingProbeBranch = string.Empty;
                 if (string.Equals(
                         currentUrl,
                         requestedUrl,
                         StringComparison.Ordinal) &&
+                    (string.IsNullOrEmpty(requestedBranch) ||
+                     string.Equals(
+                         currentBranch,
+                         requestedBranch,
+                         StringComparison.Ordinal)) &&
                     GitUtility.IsValidRepositoryUrl(requestedUrl))
                 {
-                    installProbe?.Request(requestedUrl);
+                    installProbe?.Request(requestedUrl, requestedBranch);
                 }
             }
 
             ApplyCurrentProbeSnapshot();
+            RequestCurrentBranchProbe();
             UpdatePresentation();
         }
 
@@ -440,8 +452,23 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                     previousAutomaticPackageName,
                     snapshot.PackageName);
                 previousAutomaticPackageName = snapshot.PackageName;
-                packageManifestBranch = snapshot.DefaultBranch?.Trim() ?? string.Empty;
+                packageManifestBranch = snapshot.InspectedBranch?.Trim() ??
+                                        string.Empty;
                 packageNameField?.SetValueWithoutNotify(resolved);
+            }
+            else if (snapshot.IsComplete)
+            {
+                if (!packageNameEditedByUser &&
+                    string.Equals(
+                        packageNameField?.value,
+                        previousAutomaticPackageName,
+                        StringComparison.Ordinal))
+                {
+                    packageNameField?.SetValueWithoutNotify(string.Empty);
+                }
+
+                previousAutomaticPackageName = string.Empty;
+                packageManifestBranch = string.Empty;
             }
 
             string automaticBranch = GetPreferredAutomaticBranch(
@@ -516,7 +543,37 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             branchEditedByUser = true;
             branchField.SetValueWithoutNotify(branch);
             ResetSubmissionState();
+            RequestCurrentBranchProbe();
             UpdatePresentation();
+        }
+
+        private void RequestCurrentBranchProbe()
+        {
+            string url = urlField?.value?.Trim() ?? string.Empty;
+            string branch = branchField?.value?.Trim() ?? string.Empty;
+            if (!GitUtility.IsValidRepositoryUrl(url) ||
+                !GitUtility.IsValidBranchName(branch) ||
+                string.IsNullOrWhiteSpace(branch))
+            {
+                return;
+            }
+
+            GitSubmoduleInstallProbeSnapshot snapshot = installProbe?.Current;
+            if (snapshot == null ||
+                !string.Equals(
+                    snapshot.Url?.Trim(),
+                    url,
+                    StringComparison.Ordinal) ||
+                !string.Equals(
+                    snapshot.RequestedBranch,
+                    branch,
+                    StringComparison.Ordinal))
+            {
+                pendingProbeUrl = url;
+                pendingProbeBranch = branch;
+                probeNotBefore = EditorApplication.timeSinceStartup +
+                                 ProbeDebounceSeconds;
+            }
         }
 
         private void ClearDiscoveredBranches()
@@ -553,12 +610,28 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 currentUrl,
                 packageNameField.value,
                 branchField.value);
+            bool exactManifestReady = false;
+            string exactManifestError = string.Empty;
+            if (hasCurrentSnapshot && snapshot.IsComplete &&
+                string.IsNullOrWhiteSpace(validationError))
+            {
+                exactManifestReady =
+                    PackageDependencyInstallRequestFactory.TryCreateFromProbe(
+                        snapshot,
+                        currentUrl,
+                        branchField.value,
+                        packageNameField.value,
+                        PackageManagerGitInstallMode.GitSubmodule,
+                        out _,
+                        out exactManifestError);
+            }
             string visibleValidationError = ShouldShowValidationError(
                 currentUrl,
                 validationError)
                 ? validationError
                 : string.Empty;
-            bool canStart = GitSubmoduleAddService.CanStart;
+            bool canStart = !PackageDependencyInstallPipeline.IsBusy &&
+                            exactManifestReady;
             string probeWarning = string.Empty;
             if (hasCurrentSnapshot && snapshot.IsComplete)
             {
@@ -575,7 +648,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 : string.Empty;
             string combinedWarning = CombineMessages(
                 probeWarning,
-                branchManifestWarning);
+                CombineMessages(branchManifestWarning, exactManifestError));
             string submissionIdentity = BuildSubmissionIdentity(
                 currentUrl,
                 packageNameField.value,
@@ -595,7 +668,17 @@ namespace MartinCalander.GitSubmoduleManager.Editor
 
             if (isInstalling)
             {
-                validationHelp.text = "Installing the package as a Git submodule...";
+                PackageDependencyInstallPipelineSnapshot pipeline =
+                    PackageDependencyInstallPipeline.Current;
+                validationHelp.text =
+                    pipeline != null && pipeline.IsBusy &&
+                    string.Equals(
+                        pipeline.PackageName,
+                        packageNameField.value?.Trim(),
+                        StringComparison.Ordinal) &&
+                    !string.IsNullOrWhiteSpace(pipeline.Message)
+                        ? pipeline.Message
+                        : "Installing the package as a Git submodule...";
                 validationHelp.messageType = HelpBoxMessageType.Info;
                 validationHelp.style.display = DisplayStyle.Flex;
             }
@@ -760,11 +843,11 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 return;
             }
 
-            if (!GitSubmoduleAddService.CanStart)
+            if (PackageDependencyInstallPipeline.IsBusy)
             {
                 ShowInlineError(
                     "Cannot Add Git Package",
-                    "Wait for current package scans and repository operations to finish.");
+                    "Wait for the current dependency-aware package install to finish.");
                 return;
             }
 
@@ -803,11 +886,13 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             string startError;
             try
             {
-                started = GitSubmoduleAddService.TryStart(
+                started = PackageDependencyInstallPipeline.TryStart(
                     submittedUrl,
                     submittedBranch,
                     submittedPackageName,
-                    OnAddCompleted,
+                    PackageManagerGitInstallMode.GitSubmodule,
+                    installProbe?.Current,
+                    OnInstallPipelineCompleted,
                     out startError);
             }
             catch (Exception exception)
@@ -883,6 +968,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         {
             EditorApplication.delayCall -= FocusUrlField;
             pendingProbeUrl = string.Empty;
+            pendingProbeBranch = string.Empty;
             installProbe?.Dispose();
             installProbe = null;
             if (ReferenceEquals(activeWindow, this))
@@ -901,7 +987,59 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             activeWindow = this;
         }
 
-        private void OnAddCompleted(GitSubmoduleAddCompletion completion)
+        private void OnInstallPipelineCompleted(
+            PackageDependencyInstallPipelineCompletion completion)
+        {
+            bool hadLivePresentationHost =
+                HasLiveCompletionPresentationHost();
+            if (!hadLivePresentationHost)
+            {
+                // The global pipeline completion subscriber owns refresh,
+                // diagnostics, and retained-result presentation once this
+                // popup has closed or lost its panel.
+                return;
+            }
+
+            bool presentationCompleted = false;
+            try
+            {
+                HandleInstallPipelineCompleted(completion);
+                presentationCompleted = true;
+            }
+            finally
+            {
+                // A live popup callback is the presentation owner. Consuming
+                // its retained coordinator result prevents a later Package
+                // Manager remount from presenting the same completion again.
+                // A closed/destroyed popup can still have a managed callback,
+                // however, and must leave the record available to the global
+                // recovery path just like a callback lost to domain reload.
+                if (ShouldConsumeRetainedCompletion(
+                        hadLivePresentationHost,
+                        presentationCompleted))
+                {
+                    PackageDependencyInstallPipeline.TryConsumeLastCompletion(
+                        completion);
+                }
+            }
+        }
+
+        private bool HasLiveCompletionPresentationHost()
+        {
+            return this != null &&
+                   validationHelp != null &&
+                   rootVisualElement?.panel != null;
+        }
+
+        internal static bool ShouldConsumeRetainedCompletion(
+            bool hadLivePresentationHost,
+            bool presentationCompleted)
+        {
+            return hadLivePresentationHost && presentationCompleted;
+        }
+
+        private void HandleInstallPipelineCompleted(
+            PackageDependencyInstallPipelineCompletion completion)
         {
             if (completion == null || !completion.Success)
             {
@@ -909,7 +1047,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 ShowInlineError(
                     "Could Not Add Git Package",
                     string.IsNullOrWhiteSpace(completion?.Message)
-                        ? "The Git package operation did not complete successfully."
+                        ? "The dependency-aware Git package operation did not complete successfully."
                         : completion.Message);
                 return;
             }
@@ -929,15 +1067,6 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                     "but the early Package Manager snapshot request failed. " +
                     "Unity's package registration event will retry it: " +
                     GitHubUtility.SanitizeUiDiagnostic(exception.Message));
-            }
-
-            if (!string.IsNullOrWhiteSpace(
-                    completion.CommandResult?.CompletionWarning))
-            {
-                EditorUtility.DisplayDialog(
-                    "Git Submodule Added, Package Resolve Pending",
-                    completion.CommandResult.CompletionWarning,
-                    "OK");
             }
 
             if (this != null)

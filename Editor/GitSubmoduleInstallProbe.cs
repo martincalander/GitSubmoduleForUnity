@@ -27,6 +27,8 @@ namespace MartinCalander.GitSubmoduleManager.Editor
     internal sealed class GitSubmoduleInstallProbeSnapshot
     {
         private readonly ReadOnlyCollection<string> branches;
+        private readonly ReadOnlyCollection<PackageManifestDependency>
+            dependencies;
 
         internal GitSubmoduleInstallProbeSnapshot(
             int revision,
@@ -39,7 +41,10 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             string version = "",
             string errorMessage = "",
             string manifestMessage = "",
-            bool requiresEditorRestart = false)
+            bool requiresEditorRestart = false,
+            string requestedBranch = "",
+            string inspectedBranch = "",
+            IEnumerable<PackageManifestDependency> dependencies = null)
         {
             Revision = revision;
             Url = url ?? string.Empty;
@@ -53,6 +58,15 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             ErrorMessage = errorMessage ?? string.Empty;
             ManifestMessage = manifestMessage ?? string.Empty;
             RequiresEditorRestart = requiresEditorRestart;
+            RequestedBranch = requestedBranch?.Trim() ?? string.Empty;
+            InspectedBranch = inspectedBranch?.Trim() ?? string.Empty;
+            this.dependencies = new ReadOnlyCollection<PackageManifestDependency>(
+                (dependencies ?? Array.Empty<PackageManifestDependency>())
+                .Where(dependency => dependency != null)
+                .Select(dependency => new PackageManifestDependency(
+                    dependency.Name,
+                    dependency.Version))
+                .ToArray());
         }
 
         internal int Revision { get; }
@@ -66,6 +80,10 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         internal string ErrorMessage { get; }
         internal string ManifestMessage { get; }
         internal bool RequiresEditorRestart { get; }
+        internal string RequestedBranch { get; }
+        internal string InspectedBranch { get; }
+        internal IReadOnlyList<PackageManifestDependency> Dependencies =>
+            dependencies;
 
         internal bool IsLoading =>
             Status == GitSubmoduleInstallProbeStatus.LoadingRemoteRefs ||
@@ -112,6 +130,9 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         private ProbePhase phase;
         private string activeUrl = string.Empty;
         private string queuedUrl = string.Empty;
+        private string activeRequestedBranch = string.Empty;
+        private string activeManifestBranch = string.Empty;
+        private string queuedRequestedBranch = string.Empty;
         private string temporaryClonePath = string.Empty;
         private List<string> activeBranches = new();
         private string activeDefaultBranch = string.Empty;
@@ -148,36 +169,56 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         /// </summary>
         internal bool Request(string url)
         {
-            if (disposed || !GitUtility.IsValidRepositoryUrl(url))
+            return Request(url, string.Empty);
+        }
+
+        internal bool Request(string url, string branch)
+        {
+            if (disposed ||
+                !GitUtility.IsValidRepositoryUrl(url) ||
+                !GitUtility.IsValidBranchName(branch))
                 return false;
 
             string normalizedUrl = url.Trim();
+            string normalizedBranch = branch?.Trim() ?? string.Empty;
             if (commandHandle != null)
             {
                 if (!discardActiveResult &&
-                    string.Equals(activeUrl, normalizedUrl, StringComparison.Ordinal))
+                    string.Equals(activeUrl, normalizedUrl, StringComparison.Ordinal) &&
+                    string.Equals(
+                        activeRequestedBranch,
+                        normalizedBranch,
+                        StringComparison.Ordinal))
                 {
                     return true;
                 }
 
                 queuedUrl = normalizedUrl;
+                queuedRequestedBranch = normalizedBranch;
                 discardActiveResult = true;
                 Publish(
                     normalizedUrl,
-                    GitSubmoduleInstallProbeStatus.LoadingRemoteRefs);
+                    GitSubmoduleInstallProbeStatus.LoadingRemoteRefs,
+                    requestedBranch: normalizedBranch);
                 return true;
             }
 
             if (string.Equals(Current.Url, normalizedUrl, StringComparison.Ordinal) &&
+                string.Equals(
+                    Current.RequestedBranch,
+                    normalizedBranch,
+                    StringComparison.Ordinal) &&
                 (Current.IsLoading || Current.IsComplete))
             {
                 return true;
             }
 
             queuedUrl = normalizedUrl;
+            queuedRequestedBranch = normalizedBranch;
             Publish(
                 normalizedUrl,
-                GitSubmoduleInstallProbeStatus.LoadingRemoteRefs);
+                GitSubmoduleInstallProbeStatus.LoadingRemoteRefs,
+                requestedBranch: normalizedBranch);
             TryStartQueuedRequest();
             return true;
         }
@@ -284,6 +325,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 return;
 
             queuedUrl = string.Empty;
+            queuedRequestedBranch = string.Empty;
             if (commandHandle != null)
                 discardActiveResult = true;
             else
@@ -299,12 +341,15 @@ namespace MartinCalander.GitSubmoduleManager.Editor
 
             disposed = true;
             queuedUrl = string.Empty;
+            queuedRequestedBranch = string.Empty;
             AsyncCommandHandle retiringHandle = commandHandle;
             string retiringTemporaryClone = temporaryClonePath;
             ReaderLease retiringReaderLease = readerLease;
             commandHandle = null;
             phase = ProbePhase.None;
             activeUrl = string.Empty;
+            activeRequestedBranch = string.Empty;
+            activeManifestBranch = string.Empty;
             activeBranches.Clear();
             activeDefaultBranch = string.Empty;
             temporaryClonePath = string.Empty;
@@ -507,7 +552,11 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 activeUrl,
                 GitSubmoduleInstallProbeStatus.ReadingPackageManifest,
                 activeBranches,
-                activeDefaultBranch);
+                activeDefaultBranch,
+                requestedBranch: activeRequestedBranch,
+                inspectedBranch: string.IsNullOrEmpty(activeRequestedBranch)
+                    ? activeDefaultBranch
+                    : activeRequestedBranch);
 
             try
             {
@@ -525,10 +574,13 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                     "--filter=blob:none",
                     "--no-local"
                 };
-                if (!string.IsNullOrEmpty(activeDefaultBranch))
+                activeManifestBranch = string.IsNullOrEmpty(activeRequestedBranch)
+                    ? activeDefaultBranch
+                    : activeRequestedBranch;
+                if (!string.IsNullOrEmpty(activeManifestBranch))
                 {
                     arguments.Add("--branch");
-                    arguments.Add(activeDefaultBranch);
+                    arguments.Add(activeManifestBranch);
                 }
 
                 arguments.Add("--");
@@ -589,6 +641,8 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             string packageName = string.Empty;
             string displayName = string.Empty;
             string version = string.Empty;
+            IReadOnlyList<PackageManifestDependency> dependencies =
+                Array.Empty<PackageManifestDependency>();
             string manifestMessage = string.Empty;
             if (!TryRequireSuccessfulOutput(
                     result,
@@ -603,17 +657,24 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 manifestMessage =
                     "Root package.json exceeds the command output inspection limit.";
             }
-            else if (!GitUtility.TryReadValidPackageManifestFromJson(
+            else if (!GitUtility.TryReadPackageManifestMetadataFromJson(
                          result.StdOut,
-                         out packageName,
-                         out displayName,
-                         out version,
+                         out PackageManifestMetadata metadata,
                          out string validationError))
             {
                 manifestMessage = "Root package.json is not a valid UPM manifest: " + validationError;
             }
+            else
+            {
+                packageName = metadata.PackageName;
+                displayName = metadata.DisplayName;
+                version = metadata.Version;
+                dependencies = metadata.Dependencies;
+            }
 
             string completedUrl = activeUrl;
+            string completedRequestedBranch = activeRequestedBranch;
+            string completedManifestBranch = activeManifestBranch;
             List<string> completedBranches = activeBranches;
             string completedDefaultBranch = activeDefaultBranch;
             ResetActiveState(cleanTemporaryClone: true);
@@ -626,23 +687,30 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 packageName,
                 displayName,
                 version,
-                manifestMessage: manifestMessage);
+                manifestMessage: manifestMessage,
+                requestedBranch: completedRequestedBranch,
+                inspectedBranch: completedManifestBranch,
+                dependencies: dependencies);
         }
 
         private void FinishFailure(string error)
         {
             string completedUrl = activeUrl;
+            string completedRequestedBranch = activeRequestedBranch;
             ResetActiveState(cleanTemporaryClone: true);
             ReleaseReaderLease();
             Publish(
                 completedUrl,
                 GitSubmoduleInstallProbeStatus.Failed,
-                errorMessage: SanitizeDiagnostic(error));
+                errorMessage: SanitizeDiagnostic(error),
+                requestedBranch: completedRequestedBranch);
         }
 
         private void FinishReadyWithManifestMessage(string message)
         {
             string completedUrl = activeUrl;
+            string completedRequestedBranch = activeRequestedBranch;
+            string completedManifestBranch = activeManifestBranch;
             List<string> completedBranches = activeBranches;
             string completedDefaultBranch = activeDefaultBranch;
             ResetActiveState(cleanTemporaryClone: true);
@@ -652,7 +720,9 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 GitSubmoduleInstallProbeStatus.Ready,
                 completedBranches,
                 completedDefaultBranch,
-                manifestMessage: SanitizeDiagnostic(message));
+                manifestMessage: SanitizeDiagnostic(message),
+                requestedBranch: completedRequestedBranch,
+                inspectedBranch: completedManifestBranch);
         }
 
         private bool TryStartQueuedRequest()
@@ -670,7 +740,9 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             if (AsyncCommandDrainRegistry.RequiresEditorRestart)
             {
                 string failedUrl = queuedUrl;
+                string failedBranch = queuedRequestedBranch;
                 queuedUrl = string.Empty;
+                queuedRequestedBranch = string.Empty;
                 Publish(
                     failedUrl,
                     GitSubmoduleInstallProbeStatus.Failed,
@@ -678,7 +750,8 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                         string.IsNullOrWhiteSpace(AsyncCommandDrainRegistry.StatusMessage)
                             ? "A previous process did not stop safely. Restart the Editor before inspecting another repository."
                             : AsyncCommandDrainRegistry.StatusMessage,
-                    requiresEditorRestart: true);
+                    requiresEditorRestart: true,
+                    requestedBranch: failedBranch);
                 return false;
             }
 
@@ -686,14 +759,18 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 return false;
 
             activeUrl = queuedUrl;
+            activeRequestedBranch = queuedRequestedBranch;
             queuedUrl = string.Empty;
+            queuedRequestedBranch = string.Empty;
             activeBranches = new List<string>();
             activeDefaultBranch = string.Empty;
+            activeManifestBranch = string.Empty;
             temporaryClonePath = string.Empty;
             discardActiveResult = false;
             Publish(
                 activeUrl,
-                GitSubmoduleInstallProbeStatus.LoadingRemoteRefs);
+                GitSubmoduleInstallProbeStatus.LoadingRemoteRefs,
+                requestedBranch: activeRequestedBranch);
             AcquireReaderLease();
 
             try
@@ -737,6 +814,8 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         {
             string clonePath = temporaryClonePath;
             activeUrl = string.Empty;
+            activeRequestedBranch = string.Empty;
+            activeManifestBranch = string.Empty;
             activeBranches = new List<string>();
             activeDefaultBranch = string.Empty;
             temporaryClonePath = string.Empty;
@@ -756,7 +835,10 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             string version = "",
             string errorMessage = "",
             string manifestMessage = "",
-            bool requiresEditorRestart = false)
+            bool requiresEditorRestart = false,
+            string requestedBranch = "",
+            string inspectedBranch = "",
+            IEnumerable<PackageManifestDependency> dependencies = null)
         {
             revision++;
             Current = new GitSubmoduleInstallProbeSnapshot(
@@ -770,7 +852,10 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 version,
                 errorMessage,
                 manifestMessage,
-                requiresEditorRestart);
+                requiresEditorRestart,
+                requestedBranch,
+                inspectedBranch,
+                dependencies);
         }
 
         private static bool TryRequireSuccessfulOutput(

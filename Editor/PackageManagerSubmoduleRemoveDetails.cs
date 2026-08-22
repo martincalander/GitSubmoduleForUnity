@@ -6,8 +6,9 @@ namespace MartinCalander.GitSubmoduleManager.Editor
 {
     /// <summary>
     /// Native Package Manager controls for a verified installed submodule.
-    /// Confirmation and diagnostics stay inline so the workflow also works in
-    /// automated Editors where modal dialogs are unavailable.
+    /// The native action coordinator owns modal confirmation. This view stores
+    /// the exact assessed state passed to the removal service and keeps progress
+    /// and diagnostics selection-bound inside Package Manager.
     /// </summary>
     internal sealed class PackageManagerSubmoduleRemoveDetails : IDisposable
     {
@@ -94,6 +95,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         internal Button CancelButton => cancelButton;
         internal HelpBox Feedback => feedback;
         internal bool IsConfirmationPending => state == RemoveUiState.Confirming;
+        internal bool IsInspecting => state == RemoveUiState.Inspecting;
         internal bool IsRemoving => state == RemoveUiState.Removing;
         internal PackageManagerSubmoduleInfo CurrentInfo => currentInfo;
         internal SubmoduleRemovalAssessment ConfirmedAssessment =>
@@ -176,6 +178,44 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             OnRemoveClicked();
         }
 
+        internal bool TriggerAssessedRemoval(
+            SubmoduleRemovalAssessment assessment,
+            bool discardAssessedLocalWork)
+        {
+            if (isDisposed ||
+                currentInfo == null ||
+                !actionEnabled ||
+                state != RemoveUiState.Inspecting ||
+                assessment == null ||
+                !string.Equals(
+                    GitUtility.NormalizePath(assessment.Path),
+                    GitUtility.NormalizePath(currentInfo.PackagePath),
+                    StringComparison.Ordinal) ||
+                assessment.HasUnverifiedWorktreeContents ||
+                discardAssessedLocalWork !=
+                PackageManagerSubmoduleConfirmationPolicy
+                    .RequiresDiscardConfirmation(assessment))
+            {
+                return false;
+            }
+
+            confirmedAssessment = assessment.CreateSnapshot();
+            discardLocalWork = discardAssessedLocalWork;
+            PackageManagerSubmoduleInfo info = currentInfo;
+            ShowRemoving(
+                $"Removing {info.PackageName} through Git and refreshing Unity...");
+            removeRequested(info);
+            return true;
+        }
+
+        internal void CancelInspection()
+        {
+            if (isDisposed || state != RemoveUiState.Inspecting)
+                return;
+
+            ResetState();
+        }
+
         internal void ShowConfirmation()
         {
             ShowConfirmation(null);
@@ -212,6 +252,8 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             if (isDisposed || currentInfo == null)
                 return;
 
+            confirmedAssessment = null;
+            discardLocalWork = false;
             state = RemoveUiState.Inspecting;
             ShowFeedback(
                 string.IsNullOrWhiteSpace(message)

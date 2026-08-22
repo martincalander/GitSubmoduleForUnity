@@ -191,7 +191,6 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 // Do not race the package tool's own readers or inspect a
                 // repository while one of its mutations is in progress.
                 if (GitOperationService.IsBusy ||
-                    GitSubmoduleManagerView.AreBackgroundLoadsDraining ||
                     EditorApplication.timeSinceStartup < retryNotBefore)
                 {
                     return;

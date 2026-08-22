@@ -1,82 +1,11 @@
 using System.Threading;
 using NUnit.Framework;
-using UnityEngine;
-using GitSubmoduleManagerView = MartinCalander.GitSubmoduleManager.Editor.GitSubmoduleManagerView;
 
 namespace MartinCalander.GitSubmoduleManager.Editor.Tests
 {
     [Parallelizable(ParallelScope.None)]
     public sealed class GitSubmoduleManagerLifecycleGateTests
     {
-        [Test]
-        public void GitHubAuthentication_BlocksGitHubInteractionsButNotRepositoryActions()
-        {
-            bool repositoryBusy = GitSubmoduleManagerView.IsRepositoryOperationBusyState(
-                operationExecutionBusy: false,
-                deferredMutationPending: false);
-            bool gitHubBusy = GitSubmoduleManagerView.IsGitHubInteractionBusyState(
-                repositoryBusy,
-                authenticationInProgress: true);
-
-            Assert.That(repositoryBusy, Is.False,
-                "GitHub authentication must not disable Git-only package operations.");
-            Assert.That(gitHubBusy, Is.True,
-                "GitHub and authentication actions must remain mutually exclusive.");
-        }
-
-        [TestCase(false, false, false, false)]
-        [TestCase(true, false, false, true)]
-        [TestCase(false, true, false, true)]
-        [TestCase(false, false, true, true)]
-        [TestCase(true, true, true, true)]
-        public void SharedGitHubAuthenticationGate_CoversEveryCrossWindowLifecycleState(
-            bool activeOrAwaitingProcessing,
-            bool retiredOrStopping,
-            bool restartRequired,
-            bool expected)
-        {
-            Assert.That(
-                GitSubmoduleManagerView.IsSharedGitHubAuthenticationGateState(
-                    activeOrAwaitingProcessing,
-                    retiredOrStopping,
-                    restartRequired),
-                Is.EqualTo(expected));
-        }
-
-        [TestCase(true, false, false, false, true)]
-        [TestCase(false, false, false, false, false)]
-        [TestCase(true, true, false, false, false)]
-        [TestCase(true, false, true, false, false)]
-        [TestCase(true, false, false, true, false)]
-        public void GitHubAuthenticationStart_WaitsForSharedStateAndBackgroundReaders(
-            bool ghAvailable,
-            bool repositoryOperationBusy,
-            bool sharedAuthenticationBlocked,
-            bool backgroundReadersActive,
-            bool expected)
-        {
-            Assert.That(
-                GitSubmoduleManagerView.CanStartGitHubAuthentication(
-                    ghAvailable,
-                    repositoryOperationBusy,
-                    sharedAuthenticationBlocked,
-                    backgroundReadersActive),
-                Is.EqualTo(expected));
-        }
-
-        [Test]
-        public void GitHubAuthenticationStart_WaitsForAnyActiveGitHubCliCommand()
-        {
-            Assert.That(
-                GitSubmoduleManagerView.CanStartGitHubAuthentication(
-                    ghAvailable: true,
-                    repositoryOperationBusy: false,
-                    sharedAuthenticationBlocked: false,
-                    backgroundReadersActive: false,
-                    gitHubCommandActive: true),
-                Is.False);
-        }
-
         [TestCase(false, false, true)]
         [TestCase(true, false, false)]
         [TestCase(false, true, false)]
@@ -105,15 +34,18 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
             bool stopped = false;
             try
             {
-                CliCommandRunner.CurrentRunner = new BlockingGitHubRunner(started, release);
+                CliCommandRunner.CurrentRunner =
+                    new BlockingGitHubRunner(started, release);
                 handle = CliCommandRunner.RunAsync(
                     "gh",
                     new[] { "api", "user" },
                     ".");
 
-                Assert.That(started.Wait(2000), Is.True, "The fake gh command did not start.");
+                Assert.That(started.Wait(2000), Is.True);
                 Assert.That(CliCommandRunner.HasActiveGitHubCommands, Is.True);
-                Assert.That(CliCommandRunner.TryReserveGitHubAuthentication(), Is.False);
+                Assert.That(
+                    CliCommandRunner.TryReserveGitHubAuthentication(),
+                    Is.False);
             }
             finally
             {
@@ -132,7 +64,9 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
         {
             IgnoreWhenLivePackageManagerDiscoveryOwnsGitHubCommands();
 
-            Assert.That(CliCommandRunner.TryReserveGitHubAuthentication(), Is.True);
+            Assert.That(
+                CliCommandRunner.TryReserveGitHubAuthentication(),
+                Is.True);
             try
             {
                 CommandResult blocked = CliCommandRunner.Run(
@@ -159,46 +93,6 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
             }
         }
 
-        private static void IgnoreWhenLivePackageManagerDiscoveryOwnsGitHubCommands()
-        {
-            if (PackageManagerGitHubDiscovery.IsStarted ||
-                CliCommandRunner.HasActiveGitHubCommands ||
-                CliCommandRunner.IsGitHubAuthenticationReserved ||
-                CliCommandRunner.GitHubCommandRequiresEditorRestart ||
-                AsyncCommandDrainRegistry.IsDraining)
-            {
-                Assert.Ignore(
-                    "A live Package Manager GitHub discovery session owns the shared command gate.");
-            }
-        }
-
-        [TestCase(false, true)]
-        [TestCase(true, false)]
-        public void InitialLoader_AlwaysRunsGitStageButDefersGitHubDuringSharedAuthentication(
-            bool sharedAuthenticationBlocked,
-            bool shouldRunGitHubStage)
-        {
-            Assert.That(
-                GitSubmoduleManagerView.ShouldRunInitialGitHubStage(sharedAuthenticationBlocked),
-                Is.EqualTo(shouldRunGitHubStage));
-        }
-
-        [TestCase(true, false, true)]
-        [TestCase(false, true, true)]
-        [TestCase(true, true, true)]
-        [TestCase(false, false, false)]
-        public void RepositoryOperationGate_PreservesWorkerMutualExclusion(
-            bool operationExecutionBusy,
-            bool deferredMutationPending,
-            bool expected)
-        {
-            Assert.That(
-                GitSubmoduleManagerView.IsRepositoryOperationBusyState(
-                    operationExecutionBusy,
-                    deferredMutationPending),
-                Is.EqualTo(expected));
-        }
-
         [TestCase(false, false, false, false, false)]
         [TestCase(true, false, false, false, true)]
         [TestCase(false, true, false, false, true)]
@@ -221,33 +115,17 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                 Is.EqualTo(expected));
         }
 
-        [Test]
-        public void DeferredWindowAction_RequiresAnEnabledLiveOwner()
+        private static void IgnoreWhenLivePackageManagerDiscoveryOwnsGitHubCommands()
         {
-            var owner = new Texture2D(1, 1)
+            if (PackageManagerGitHubDiscovery.IsStarted ||
+                CliCommandRunner.HasActiveGitHubCommands ||
+                CliCommandRunner.IsGitHubAuthenticationReserved ||
+                CliCommandRunner.GitHubCommandRequiresEditorRestart ||
+                AsyncCommandDrainRegistry.IsDraining)
             {
-                hideFlags = HideFlags.HideAndDontSave
-            };
-            try
-            {
-                Assert.That(
-                    GitSubmoduleManagerView.CanEnterDeferredWindowAction(owner, windowEnabled: true),
-                    Is.True);
-                Assert.That(
-                    GitSubmoduleManagerView.CanEnterDeferredWindowAction(owner, windowEnabled: false),
-                    Is.False,
-                    "OnDisable must invalidate callbacks before Unity destroys the window object.");
-
-                Object.DestroyImmediate(owner);
-                Assert.That(
-                    GitSubmoduleManagerView.CanEnterDeferredWindowAction(owner, windowEnabled: true),
-                    Is.False,
-                    "Unity-destroyed owners must never enter delayed repository work.");
-            }
-            finally
-            {
-                if (owner != null)
-                    Object.DestroyImmediate(owner);
+                Assert.Ignore(
+                    "A live Package Manager GitHub discovery session owns the " +
+                    "shared command gate.");
             }
         }
 
@@ -277,6 +155,5 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                 };
             }
         }
-
     }
 }

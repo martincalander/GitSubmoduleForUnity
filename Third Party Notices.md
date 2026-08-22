@@ -44,7 +44,8 @@ SOFTWARE.
 - License: [Creative Commons Attribution 3.0 Unported](https://creativecommons.org/licenses/by/3.0/)
 - Use: the official full-color Git icon for package artwork and one-color
   variants recolored to Unity's built-in dark- and light-skin icon values for
-  the embedded Package Manager view, Sources row, and source presentation
+  the standalone Welcome window, Package Manager Sources row, and source
+  presentation
 
 ## External Tools
 
@@ -67,7 +68,8 @@ SOFTWARE.
 
 - Package: `com.unity.modules.imgui`
 - License: Unity Companion License
-- Role: rendering the embedded Git Submodule Manager view
+- Role: rendering Git Submodule Manager Preferences and the standalone Welcome
+  window
 
 The Unity module is provided by the Unity Editor installation and is not
 redistributed by this repository.

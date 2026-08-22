@@ -28,9 +28,13 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
         }
 
         [Test]
-        public void Snapshot_CopiesBranchesIntoAReadOnlyCollection()
+        public void Snapshot_CopiesBranchesAndDependenciesIntoReadOnlyCollections()
         {
             var source = new List<string> { "main", "release" };
+            var dependencies = new List<PackageManifestDependency>
+            {
+                new PackageManifestDependency("com.example.dependency", "2.0.0")
+            };
             var snapshot = new GitSubmoduleInstallProbeSnapshot(
                 7,
                 "https://example.com/package.git",
@@ -39,14 +43,24 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                 "main",
                 "com.example.package",
                 "Example Package",
-                "1.2.3");
+                "1.2.3",
+                requestedBranch: "main",
+                inspectedBranch: "main",
+                dependencies: dependencies);
 
             source[0] = "mutated";
+            dependencies.Clear();
 
             Assert.That(snapshot.Revision, Is.EqualTo(7));
             Assert.That(snapshot.Branches, Is.EqualTo(new[] { "main", "release" }));
             Assert.That(snapshot.DefaultBranch, Is.EqualTo("main"));
             Assert.That(snapshot.PackageName, Is.EqualTo("com.example.package"));
+            Assert.That(snapshot.RequestedBranch, Is.EqualTo("main"));
+            Assert.That(snapshot.InspectedBranch, Is.EqualTo("main"));
+            Assert.That(snapshot.Dependencies, Has.Count.EqualTo(1));
+            Assert.That(
+                snapshot.Dependencies[0].Name,
+                Is.EqualTo("com.example.dependency"));
             Assert.That(snapshot.IsComplete, Is.True);
             Assert.Throws<NotSupportedException>(() =>
                 ((IList<string>)snapshot.Branches).Add("not-allowed"));
@@ -211,7 +225,8 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                 {
                     return Success(
                         "{\"name\":\"com.example.package\",\"version\":\"1.2.3\"," +
-                        "\"displayName\":\"Example Package\"}");
+                        "\"displayName\":\"Example Package\",\"dependencies\":{" +
+                        "\"com.example.dependency\":\"2.0.0\"}}");
                 }
 
                 return Failure("Unexpected command.");
@@ -230,6 +245,11 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
             Assert.That(snapshot.PackageName, Is.EqualTo("com.example.package"));
             Assert.That(snapshot.DisplayName, Is.EqualTo("Example Package"));
             Assert.That(snapshot.Version, Is.EqualTo("1.2.3"));
+            Assert.That(snapshot.InspectedBranch, Is.EqualTo("main"));
+            Assert.That(snapshot.Dependencies, Has.Count.EqualTo(1));
+            Assert.That(
+                snapshot.Dependencies[0].Name,
+                Is.EqualTo("com.example.dependency"));
             Assert.That(snapshot.ErrorMessage, Is.Empty);
             Assert.That(snapshot.ManifestMessage, Is.Empty);
 
@@ -256,6 +276,50 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
             Assert.That(
                 runner.Calls.SelectMany(call => call.ArgumentList ?? Array.Empty<string>()),
                 Does.Contain("cat-file"));
+        }
+
+        [Test]
+        public void RequestedBranch_BindsCloneAndManifestToThatBranch()
+        {
+            var runner = new RecordingRunner(spec =>
+            {
+                if (HasArgument(spec, "ls-remote"))
+                {
+                    return Success(
+                        "ref: refs/heads/agents/verdaccio\tHEAD\n" +
+                        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\tHEAD\n" +
+                        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\trefs/heads/agents/verdaccio\n" +
+                        "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\trefs/heads/main\n");
+                }
+
+                if (HasArgument(spec, "clone"))
+                    return Success(string.Empty);
+                if (HasArgument(spec, "cat-file"))
+                {
+                    return Success(
+                        "{\"name\":\"com.example.package\",\"version\":\"1.0.0\"}");
+                }
+
+                return Failure("Unexpected command.");
+            });
+            CliCommandRunner.CurrentRunner = runner;
+
+            Assert.That(
+                probe.Request(
+                    "https://example.com/owner/package.git",
+                    "main"),
+                Is.True);
+            WaitForCompletion(probe);
+
+            GitSubmoduleInstallProbeSnapshot snapshot = probe.Current;
+            Assert.That(snapshot.DefaultBranch, Is.EqualTo("agents/verdaccio"));
+            Assert.That(snapshot.RequestedBranch, Is.EqualTo("main"));
+            Assert.That(snapshot.InspectedBranch, Is.EqualTo("main"));
+            CommandSpec clone = runner.Calls.Single(call =>
+                HasArgument(call, "clone"));
+            int branchIndex = clone.ArgumentList.ToList().IndexOf("--branch");
+            Assert.That(branchIndex, Is.GreaterThanOrEqualTo(0));
+            Assert.That(clone.ArgumentList[branchIndex + 1], Is.EqualTo("main"));
         }
 
         [Test]

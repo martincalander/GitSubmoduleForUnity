@@ -1,21 +1,17 @@
 using System;
 using System.IO;
+using System.Text;
 using UnityEditor;
 using UnityEngine;
 using UnityEngine.Scripting.APIUpdating;
 
 namespace MartinCalander.GitSubmoduleManager.Editor
 {
-    internal enum GitSubmoduleManagerStartupTab
+    internal enum GitSubmoduleManagerDefaultVisibility
     {
-        InProject,
-        GitHub
-    }
-
-    internal enum GitSubmoduleManagerDefaultGitHubFilter
-    {
-        AllRepositories,
-        ValidUpmPackages
+        All,
+        Public,
+        Private
     }
 
     [MovedFrom(
@@ -32,10 +28,13 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             "UserSettings/GitSubmoduleManagerSettings.asset";
         internal const string LegacySettingsFilePath =
             "UserSettings/GitPackageManagerSettings.asset";
-        internal const int DefaultRefreshIntervalMinutes = 5;
-        internal const int MinimumRefreshIntervalMinutes = 1;
-        internal const int MaximumRefreshIntervalMinutes = 60;
-
+        internal const bool SafeDefaultSuppressRoutineSubmoduleRemovalConfirmations = false;
+        internal const bool SafeDefaultInstallDependenciesWithoutPrompt = false;
+        internal const GitSubmoduleManagerDefaultVisibility SafeDefaultGitHubVisibility =
+            GitSubmoduleManagerDefaultVisibility.All;
+        internal const string SafeDefaultGitHubOrganization = "";
+        internal const PackageManagerGitInstallMode SafeDefaultInstallMode =
+            PackageManagerGitInstallMode.GitSubmodule;
         private static bool settingsMigrationAttempted;
 
         internal static GitSubmoduleManagerUserSettings Instance
@@ -50,26 +49,38 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         [SerializeField]
         private bool welcomeShown;
 
+        // Negative, false-by-default switches preserve the safest behavior for
+        // existing settings assets that predate these fields.
         [SerializeField]
-        private bool refreshInProjectWhenRevisited = true;
+        private bool suppressRoutineSubmoduleRemovalConfirmations =
+            SafeDefaultSuppressRoutineSubmoduleRemovalConfirmations;
 
         [SerializeField]
-        private int refreshIntervalMinutes = DefaultRefreshIntervalMinutes;
+        private bool installDependenciesWithoutPrompt =
+            SafeDefaultInstallDependenciesWithoutPrompt;
 
         [SerializeField]
-        private GitSubmoduleManagerStartupTab startupTab = GitSubmoduleManagerStartupTab.InProject;
+        private GitSubmoduleManagerDefaultVisibility defaultGitHubVisibility =
+            SafeDefaultGitHubVisibility;
 
         [SerializeField]
-        private GitSubmoduleManagerDefaultGitHubFilter defaultGitHubFilter =
-            GitSubmoduleManagerDefaultGitHubFilter.AllRepositories;
+        private string defaultGitHubOrganization = SafeDefaultGitHubOrganization;
+
+        [SerializeField]
+        private PackageManagerGitInstallMode defaultInstallMode =
+            SafeDefaultInstallMode;
 
         internal bool HasShownWelcome => welcomeShown;
-        internal bool RefreshInProjectWhenRevisited => refreshInProjectWhenRevisited;
-        internal int RefreshIntervalMinutes => ClampRefreshIntervalMinutes(refreshIntervalMinutes);
-        internal double RefreshIntervalSeconds => RefreshIntervalMinutes * 60.0;
-        internal GitSubmoduleManagerStartupTab StartupTab => NormalizeStartupTab(startupTab);
-        internal GitSubmoduleManagerDefaultGitHubFilter DefaultGitHubFilter =>
-            NormalizeDefaultGitHubFilter(defaultGitHubFilter);
+        internal bool SuppressRoutineSubmoduleRemovalConfirmations =>
+            suppressRoutineSubmoduleRemovalConfirmations;
+        internal bool InstallDependenciesWithoutPrompt =>
+            installDependenciesWithoutPrompt;
+        internal GitSubmoduleManagerDefaultVisibility DefaultGitHubVisibility =>
+            NormalizeDefaultGitHubVisibility(defaultGitHubVisibility);
+        internal string DefaultGitHubOrganization =>
+            NormalizeDefaultGitHubOrganization(defaultGitHubOrganization);
+        internal PackageManagerGitInstallMode DefaultInstallMode =>
+            NormalizeDefaultInstallMode(defaultInstallMode);
 
         internal static bool ShouldShowWelcome(bool hasShownWelcome, bool shownThisSession)
         {
@@ -147,62 +158,98 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             }
         }
 
-        internal static int ClampRefreshIntervalMinutes(int minutes)
+        internal static GitSubmoduleManagerDefaultVisibility NormalizeDefaultGitHubVisibility(
+            GitSubmoduleManagerDefaultVisibility value)
         {
-            return Mathf.Clamp(
-                minutes,
-                MinimumRefreshIntervalMinutes,
-                MaximumRefreshIntervalMinutes);
+            return value == GitSubmoduleManagerDefaultVisibility.All ||
+                   value == GitSubmoduleManagerDefaultVisibility.Public ||
+                   value == GitSubmoduleManagerDefaultVisibility.Private
+                ? value
+                : GitSubmoduleManagerDefaultVisibility.All;
         }
 
-        internal static GitSubmoduleManagerStartupTab NormalizeStartupTab(
-            GitSubmoduleManagerStartupTab value)
+        internal static string NormalizeDefaultGitHubOrganization(string value)
         {
-            return value == GitSubmoduleManagerStartupTab.InProject ||
-                   value == GitSubmoduleManagerStartupTab.GitHub
-                ? value
-                : GitSubmoduleManagerStartupTab.InProject;
+            string normalized = value?.Trim() ?? string.Empty;
+            const string filterPrefix = "Organization - ";
+            if (normalized.StartsWith(
+                    filterPrefix,
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                normalized = normalized.Substring(filterPrefix.Length).Trim();
+            }
+
+            // GitHub organization logins use the same conservative character
+            // set as account names. Store the login rather than a presentation
+            // label so localization can never make the preference unusable.
+            var builder = new StringBuilder(Math.Min(normalized.Length, 39));
+            for (int index = 0; index < normalized.Length && builder.Length < 39; index++)
+            {
+                char character = normalized[index];
+                if ((character >= 'a' && character <= 'z') ||
+                    (character >= 'A' && character <= 'Z') ||
+                    (character >= '0' && character <= '9') ||
+                    character == '-')
+                {
+                    builder.Append(character);
+                }
+            }
+
+            return builder.ToString().Trim('-');
         }
 
-        internal static GitSubmoduleManagerDefaultGitHubFilter NormalizeDefaultGitHubFilter(
-            GitSubmoduleManagerDefaultGitHubFilter value)
+        internal static PackageManagerGitInstallMode NormalizeDefaultInstallMode(
+            PackageManagerGitInstallMode value)
         {
-            return value == GitSubmoduleManagerDefaultGitHubFilter.AllRepositories ||
-                   value == GitSubmoduleManagerDefaultGitHubFilter.ValidUpmPackages
+            return value == PackageManagerGitInstallMode.GitSubmodule ||
+                   value == PackageManagerGitInstallMode.ReadOnlyPackage
                 ? value
-                : GitSubmoduleManagerDefaultGitHubFilter.AllRepositories;
+                : PackageManagerGitInstallMode.GitSubmodule;
         }
 
         internal bool TryUpdatePreferences(
-            bool refreshWhenRevisited,
-            int intervalMinutes,
-            GitSubmoduleManagerStartupTab newStartupTab,
-            GitSubmoduleManagerDefaultGitHubFilter newDefaultGitHubFilter,
+            bool suppressRoutineConfirmations,
+            bool autoInstallDependencies,
+            GitSubmoduleManagerDefaultVisibility newDefaultVisibility,
+            string newDefaultOrganization,
+            PackageManagerGitInstallMode newDefaultInstallMode,
             out string error)
         {
             error = string.Empty;
-            int normalizedInterval = ClampRefreshIntervalMinutes(intervalMinutes);
-            GitSubmoduleManagerStartupTab normalizedStartupTab = NormalizeStartupTab(newStartupTab);
-            GitSubmoduleManagerDefaultGitHubFilter normalizedFilter =
-                NormalizeDefaultGitHubFilter(newDefaultGitHubFilter);
+            GitSubmoduleManagerDefaultVisibility normalizedVisibility =
+                NormalizeDefaultGitHubVisibility(newDefaultVisibility);
+            string normalizedOrganization =
+                NormalizeDefaultGitHubOrganization(newDefaultOrganization);
+            PackageManagerGitInstallMode normalizedInstallMode =
+                NormalizeDefaultInstallMode(newDefaultInstallMode);
 
-            if (refreshInProjectWhenRevisited == refreshWhenRevisited &&
-                refreshIntervalMinutes == normalizedInterval &&
-                startupTab == normalizedStartupTab &&
-                defaultGitHubFilter == normalizedFilter)
+            if (suppressRoutineSubmoduleRemovalConfirmations ==
+                    suppressRoutineConfirmations &&
+                installDependenciesWithoutPrompt == autoInstallDependencies &&
+                defaultGitHubVisibility == normalizedVisibility &&
+                string.Equals(
+                    defaultGitHubOrganization,
+                    normalizedOrganization,
+                    StringComparison.Ordinal) &&
+                defaultInstallMode == normalizedInstallMode)
             {
                 return true;
             }
 
-            bool previousRefreshWhenRevisited = refreshInProjectWhenRevisited;
-            int previousInterval = refreshIntervalMinutes;
-            GitSubmoduleManagerStartupTab previousStartupTab = startupTab;
-            GitSubmoduleManagerDefaultGitHubFilter previousFilter = defaultGitHubFilter;
+            bool previousSuppressConfirmations =
+                suppressRoutineSubmoduleRemovalConfirmations;
+            bool previousAutoInstallDependencies = installDependenciesWithoutPrompt;
+            GitSubmoduleManagerDefaultVisibility previousVisibility =
+                defaultGitHubVisibility;
+            string previousOrganization = defaultGitHubOrganization;
+            PackageManagerGitInstallMode previousInstallMode = defaultInstallMode;
 
-            refreshInProjectWhenRevisited = refreshWhenRevisited;
-            refreshIntervalMinutes = normalizedInterval;
-            startupTab = normalizedStartupTab;
-            defaultGitHubFilter = normalizedFilter;
+            suppressRoutineSubmoduleRemovalConfirmations =
+                suppressRoutineConfirmations;
+            installDependenciesWithoutPrompt = autoInstallDependencies;
+            defaultGitHubVisibility = normalizedVisibility;
+            defaultGitHubOrganization = normalizedOrganization;
+            defaultInstallMode = normalizedInstallMode;
             try
             {
                 Save(true);
@@ -210,10 +257,12 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             }
             catch (System.Exception exception)
             {
-                refreshInProjectWhenRevisited = previousRefreshWhenRevisited;
-                refreshIntervalMinutes = previousInterval;
-                startupTab = previousStartupTab;
-                defaultGitHubFilter = previousFilter;
+                suppressRoutineSubmoduleRemovalConfirmations =
+                    previousSuppressConfirmations;
+                installDependenciesWithoutPrompt = previousAutoInstallDependencies;
+                defaultGitHubVisibility = previousVisibility;
+                defaultGitHubOrganization = previousOrganization;
+                defaultInstallMode = previousInstallMode;
                 error = BuildSaveError(exception);
                 return false;
             }

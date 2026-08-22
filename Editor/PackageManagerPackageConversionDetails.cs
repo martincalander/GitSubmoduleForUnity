@@ -49,8 +49,8 @@ namespace MartinCalander.GitSubmoduleManager.Editor
 
     /// <summary>
     /// Adds one conversion action to Unity's native Package Manager details
-    /// toolbar. Confirmation and diagnostics remain inline so no modal state can
-    /// outlive a recycled package selection.
+    /// toolbar. The coordinator owns destructive modal confirmation while this
+    /// view stores the exact assessed state and keeps progress selection-bound.
     /// </summary>
     internal sealed class PackageManagerPackageConversionDetails : IDisposable
     {
@@ -145,6 +145,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             currentTarget;
         internal bool IsConfirmationPending =>
             state == ConversionUiState.Confirming;
+        internal bool IsInspecting => state == ConversionUiState.Inspecting;
         internal bool IsConverting => state == ConversionUiState.Converting;
         internal bool IsCompleted => state == ConversionUiState.Completed;
         internal bool IsActionEnabled => actionEnabled;
@@ -245,6 +246,49 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             OnConvertClicked();
         }
 
+        internal bool TriggerAssessedConversion(
+            PackageManagerPackageConversionTarget target,
+            SubmoduleRemovalAssessment assessment,
+            bool discardAssessedLocalWork)
+        {
+            if (!MatchesCurrentTarget(target) ||
+                !actionEnabled ||
+                state != ConversionUiState.Inspecting ||
+                target.Direction !=
+                GitPackageConversionDirection.SubmoduleToReadOnly ||
+                assessment == null ||
+                !string.Equals(
+                    GitUtility.NormalizePath(assessment.Path),
+                    GitUtility.NormalizePath(target.PackagePath),
+                    StringComparison.Ordinal) ||
+                assessment.HasUnverifiedWorktreeContents ||
+                discardAssessedLocalWork !=
+                PackageManagerSubmoduleConfirmationPolicy
+                    .RequiresDiscardConfirmation(assessment))
+            {
+                return false;
+            }
+
+            confirmedAssessment = assessment.CreateSnapshot();
+            discardLocalWork = discardAssessedLocalWork;
+            confirmationIdentity = currentIdentity;
+            SetProgress(BuildProgressMessage(target));
+            conversionRequested(target);
+            return true;
+        }
+
+        internal void CancelInspection(
+            PackageManagerPackageConversionTarget target)
+        {
+            if (!MatchesCurrentTarget(target) ||
+                state != ConversionUiState.Inspecting)
+            {
+                return;
+            }
+
+            ResetState();
+        }
+
         internal void CancelConfirmation()
         {
             if (isDisposed || state != ConversionUiState.Confirming)
@@ -306,6 +350,9 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             if (!MatchesCurrentTarget(target))
                 return false;
 
+            confirmedAssessment = null;
+            discardLocalWork = false;
+            confirmationIdentity = string.Empty;
             state = ConversionUiState.Inspecting;
             ShowFeedback(
                 string.IsNullOrWhiteSpace(message)

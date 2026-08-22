@@ -4,7 +4,7 @@
 
 ### Unity
 
-Unity 6000.5.x final releases (`6000.5.*f1`) are supported. The package manifest
+Unity `6000.5.*f1` final releases are supported. The package manifest
 declares `6000.5.0f1` as its minimum Editor version. All package assemblies are
 editor-only.
 
@@ -17,9 +17,8 @@ git --version
 ```
 
 Official downloads are available at [git-scm.com](https://git-scm.com/downloads).
-If Git is missing, the management workspace offers platform-appropriate
-installation help. On supported macOS and Windows setups it can run the
-displayed native installer command only after you explicitly approve it.
+If Git is missing, the standalone Welcome window links to the official download
+page. Install it outside Unity, then choose **Check Again**.
 
 ### GitHub CLI
 
@@ -33,53 +32,51 @@ gh api user --hostname github.com --jq .login
 ```
 
 Install it from [cli.github.com](https://cli.github.com/).
-The editor provides the same opt-in assistance when GitHub CLI is missing.
-Linux install commands remain in your terminal so administrator prompts are
-visible. When GitHub CLI is installed but unauthenticated, the welcome page and
-GitHub dependency card can start its device login. Unity opens GitHub's device
-page, GitHub CLI copies the one-time code to the clipboard, and the editor makes
-a fresh authenticated `gh api user` request before enabling discovery. If
-clipboard access fails, cancel the in-editor flow and run the displayed command
-in a visible terminal after cancellation finishes so the code remains visible.
-If Unity cannot confirm the authentication process stopped, restart Unity before
-retrying. One-click login requires GitHub CLI
-2.79.0 or newer. The approval dialog also discloses that its non-interactive
-flow selects HTTPS as GitHub CLI's host-wide Git protocol; the terminal fallback
-leaves that choice interactive.
+When GitHub CLI is missing, the Welcome window opens its official install guide.
+When it is installed but unauthenticated, the window provides a copyable
+`gh auth login` command and the authentication guide. Complete authentication
+in a visible terminal, then choose **Check Again**. Git Submodule Manager never
+accepts or stores a GitHub token.
 
 ## First Open
 
-On Unity 6000.5.x, open **Window > Package Manager**
-and select **GitHub** under **Sources**. The native package list incrementally
+On Unity `6000.5.*f1`, open **Window > Package Management > Package Manager** and
+select **GitHub** under **Sources**. The native package list incrementally
 adds valid UPM packages discovered from every repository page owned by the
 authenticated user and their visible organizations, alongside installed GitHub
 submodules. Native search, sorting, selection, and details work across the
 combined list. Select a discovered package, use **Repository** to review its
-website, select a branch (the repository default is preselected), and choose
-**Install**. Choose **Refresh** to rescan.
+website, select a branch and either **Git Submodule** or **Read-Only Package**,
+and choose **Install**. Choose **Refresh** to rescan.
 
 If GitHub CLI is missing or authentication fails, installed GitHub submodules
-remain visible and the management workspace remains available for direct URL
-installation and installed-package operations.
+remain visible, and direct URL installation remains available from Package
+Manager's **+ > Install package as Git Submodule...** command.
 
-Open **Window > Package Management > Git Submodule Manager** for the full
-management, discovery, add, initialize, update, retarget, and remove workspace.
-If a Unity 6000.5 patch changes an internal native-page contract, that menu uses
-the guarded workspace embedded in Package Manager, including its authenticated
-discovery workflow.
+The first activation of **Sources > GitHub** shows a small standalone Welcome
+window that checks Git, GitHub CLI, and GitHub authentication for the current
+user. Its shown flag is stored per user and project under Unity's ignored
+`UserSettings/` directory. Reopen it with **Show Welcome** under Unity's
+**Preferences > Git Submodule Manager** page.
 
-The first management-workspace open shows a one-time welcome page that checks
-Git, GitHub CLI, and GitHub authentication for the current user. Its shown flag
-is stored per user and project under Unity's ignored `UserSettings/` directory.
-Open it again from **Welcome & Setup...** in the management workspace's menu.
+That Preferences page also provides **Open Sources > GitHub** and stores the
+following per-user defaults and safety choices:
 
-The same per-user file stores the Git Submodule Manager options shown under
-Unity's **Preferences > Git Submodule Manager** page. That page also provides an
-**Open Welcome & Setup** button.
+- initial repository visibility (**All Repositories** by default) and
+  organization filters (blank for all owners by default);
+- initial discovered-package install mode (**Git Submodule** by default);
+- whether a complete, unambiguous missing-dependency plan may proceed without
+  another prompt;
+- whether the second confirmation may be skipped for a clean, routine
+  submodule removal or conversion.
+
+Both confirmation-suppression choices are off by default. Dirty, unpushed,
+changed, or unverified-work warnings are safety checks and are never suppressed.
 
 ## Add the Package with UPM
 
-Use **Window > Package Manager > + > Add package from git URL…**:
+Use **Window > Package Management > Package Manager > + > Install package from
+git URL...**:
 
 ```text
 https://github.com/martincalander/GitSubmoduleManager.git
@@ -105,9 +102,8 @@ For an existing clone:
 git submodule update --init --recursive
 ```
 
-The management workspace never initializes all submodules automatically.
-Uninitialized packages are shown explicitly and can be initialized one at a
-time.
+Git Submodule Manager never initializes all project submodules automatically.
+Use the explicit Git command above after cloning a team project.
 
 ## Compatibility
 
@@ -115,7 +111,7 @@ The supported Editor line is Unity `6000.5.*f1`. Unity package manifests express
 minimum versions rather than wildcard or maximum ranges, so `package.json` uses
 `unity: 6000.5` with `unityRelease: 0f1` to declare the minimum
 `6000.5.0f1`; this support statement limits the currently validated line to
-Unity 6000.5 final releases.
+Unity `6000.5.*f1` final releases.
 
 | Platform | CLI discovery locations |
 | --- | --- |
@@ -135,7 +131,10 @@ development.
 
 ## Upgrade or Remove
 
-Manage Git Submodule Manager itself from Unity's Package Manager. Review
+Manage Git Submodule Manager itself from Unity's Package Manager. When an
+installed package is a verified submodule, its native **Manage** menu provides
+**Convert to Read-Only Package** and **Uninstall Submodule**. Eligible direct
+read-only Git dependencies provide **Convert to Submodule**. Review
 [CHANGELOG.md](../CHANGELOG.md) before changing versions.
 
 ### Migrating from Git Package Manager
@@ -166,10 +165,11 @@ and `.gitmodules` path from
 references from `MartinCalander.GitPackageManager.Editor` to
 `MartinCalander.GitSubmoduleManager.Editor`, and source namespaces from
 `MartinCalander.GitPackageManager.Editor` to
-`MartinCalander.GitSubmoduleManager.Editor`. The public
-`GitSubmoduleManagerWindow` type remains only as a compatibility redirect to
-the Package Manager integration; new integrations should use the package menu
-instead of depending on the window type.
+`MartinCalander.GitSubmoduleManager.Editor`.
+
+The former public management-window redirect and package menu were removed.
+Current workflows use Unity's native Package Manager surface; integrations
+must not depend on the deleted window type.
 
 Serialized editor types carry Unity migration metadata. Per-user preferences
 are copied non-destructively to `UserSettings/GitSubmoduleManagerSettings.asset`,

@@ -1106,7 +1106,8 @@ namespace MartinCalander.GitSubmoduleManager.Editor
 
         private void ResetInstallModeSelection()
         {
-            selectedInstallMode = PackageManagerGitInstallMode.GitSubmodule;
+            selectedInstallMode = GitSubmoduleManagerUserSettings.Instance
+                .DefaultInstallMode;
             installModeField.SetValueWithoutNotify(
                 GetInstallModeDisplayName(selectedInstallMode));
         }
