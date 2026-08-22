@@ -160,6 +160,14 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                     out PackageManagerGitHubRepository mappedRepository),
                 Is.True);
             Assert.That(mappedRepository, Is.SameAs(immutableRepository));
+            Assert.That(
+                PackageManagerGitHubNativePresentationPatch
+                    .TryGetPackageRepositoryPrivacy(
+                        projectedPackage,
+                        CreateSnapshot(immutableRepository),
+                        out bool projectedIsPrivate),
+                Is.True);
+            Assert.That(projectedIsPrivate, Is.True);
             AssertRepositoryMetadata(mappedRepository);
             Assert.That(
                 PackageManagerSubmoduleNativePage.GetGroupName(projectedPackage),

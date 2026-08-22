@@ -26,6 +26,8 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             "UnityEditor.PackageManager.UI.Internal.PageManager";
         internal const string ServicesContainerTypeName =
             "UnityEditor.PackageManager.UI.Internal.ServicesContainer";
+        internal const string BasePageTypeName =
+            "UnityEditor.PackageManager.UI.Internal.BasePage";
         internal const string SidebarTypeName =
             "UnityEditor.PackageManager.UI.Internal.Sidebar";
         internal const string SidebarExtensionRowsUpdateMethodName =
@@ -38,6 +40,15 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         private const string MyAssetsPageId = "MyAssets";
         private const string AddExtensionPageMethodName = "AddExtensionPage";
         private const string GetPageMethodName = "GetPage";
+        private const string UpdateSupportedLabelsMethodName =
+            "UpdateSupportedLabels";
+
+        private static readonly IReadOnlyList<string> SupportedVisibilityLabels =
+            Array.AsReadOnly(new[]
+            {
+                PackageManagerSubmodulePresentation.PublicRepositoryTagLabel,
+                PackageManagerSubmodulePresentation.PrivateRepositoryTagLabel
+            });
 
         private const BindingFlags AnyInstance =
             BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
@@ -62,6 +73,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                    FindSidebarExtensionRowsUpdateMethod(sidebarType) != null &&
                    typeof(VisualElement).IsAssignableFrom(sidebarRowType) &&
                    HasRequiredArgsFields(argsType) &&
+                   GetUpdateSupportedLabelsMethod() != null &&
                    PackageManagerGitHubNativePresentationPatch
                        .HasRequiredDiscoveryLifecycleContract();
         }
@@ -120,7 +132,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 // proves that the current window lifecycle is registered.
                 page = FindRegisteredPage(pageManager);
                 if (page != null)
-                    return true;
+                    return TryConfigureVisibilityFilters(page);
 
                 if (!TryCreateExtensionPageArgs(out object args))
                     return false;
@@ -134,7 +146,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 addPage.Invoke(pageManager, new[] { args });
                 page = FindRegisteredPage(pageManager) ??
                        FindPageById(pageManager, ExtensionPageId);
-                return page != null;
+                return page != null && TryConfigureVisibilityFilters(page);
             }
             catch
             {
@@ -196,6 +208,85 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         {
             return GetFieldValue(packageManagerRoot, "m_PageManager") ??
                    GetPropertyValue(packageManagerRoot, "pageManager");
+        }
+
+        internal static IReadOnlyList<string> GetSupportedVisibilityLabels()
+        {
+            return SupportedVisibilityLabels;
+        }
+
+        internal static MethodInfo GetUpdateSupportedLabelsMethod()
+        {
+            Type basePageType = FindLoadedType(BasePageTypeName);
+            MethodInfo method = basePageType?.GetMethod(
+                UpdateSupportedLabelsMethodName,
+                AnyInstance,
+                null,
+                new[] { typeof(IReadOnlyList<string>), typeof(bool) },
+                null);
+            return method != null &&
+                   !method.IsStatic &&
+                   method.ReturnType == typeof(bool)
+                ? method
+                : null;
+        }
+
+        internal static bool TryConfigureVisibilityFilters(object page)
+        {
+            if (page == null ||
+                !string.Equals(
+                    GetPropertyValue(page, "id") as string,
+                    ExtensionPageId,
+                    StringComparison.Ordinal))
+            {
+                return false;
+            }
+
+            try
+            {
+                MethodInfo filterTarget =
+                    PackageManagerGitHubNativePresentationPatch
+                        .GetPageVisibilityFilterTarget();
+                MethodInfo filterPostfix =
+                    PackageManagerGitHubNativePresentationPatch
+                        .GetPageVisibilityFilterPostfix();
+                if (filterTarget == null || filterPostfix == null)
+                {
+                    return false;
+                }
+
+                bool isFilterPatched =
+                    PackageManagerGitHubNativePresentationPatch.IsPatchApplied(
+                        filterTarget,
+                        filterPostfix);
+                if (!isFilterPatched)
+                {
+                    isFilterPatched =
+                        PackageManagerGitHubNativePresentationPatch.TryPatch() &&
+                        PackageManagerGitHubNativePresentationPatch.IsPatchApplied(
+                            filterTarget,
+                            filterPostfix);
+                }
+                if (!isFilterPatched)
+                    return false;
+
+                MethodInfo updateSupportedLabels =
+                    GetUpdateSupportedLabelsMethod();
+                if (updateSupportedLabels == null ||
+                    !updateSupportedLabels.DeclaringType.IsInstanceOfType(page))
+                {
+                    return false;
+                }
+
+                updateSupportedLabels.Invoke(
+                    page,
+                    new object[] { SupportedVisibilityLabels, true });
+                return true;
+            }
+            catch
+            {
+                return false;
+            }
         }
 
         internal static bool TryRegisterForRoot(

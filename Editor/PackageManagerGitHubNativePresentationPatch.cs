@@ -9,9 +9,9 @@ using UnityEngine;
 namespace MartinCalander.GitSubmoduleManager.Editor
 {
     /// <summary>
-    /// Optional Unity-6 native details and refresh hooks for discovered package
-    /// placeholders. These are kept separate from installed-submodule labeling
-    /// so older Package Manager versions can omit them independently.
+    /// Optional Unity-6 native details, refresh, and filter hooks for discovered
+    /// package placeholders. These are kept separate from installed-submodule
+    /// labeling so older Package Manager versions can omit them independently.
     /// </summary>
     [InitializeOnLoad]
     internal static class PackageManagerGitHubNativePresentationPatch
@@ -42,6 +42,8 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             "UnityEditor.PackageManager.UI.Internal.IPackageVersion";
         internal const string PageInterfaceTypeName =
             "UnityEditor.PackageManager.UI.Internal.IPage";
+        internal const string SimplePageWithPackagesTypeName =
+            "UnityEditor.PackageManager.UI.Internal.SimplePageWithPackages";
 
         private const BindingFlags AnyInstance =
             BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
@@ -124,6 +126,16 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 {
                     foundTarget = true;
                     PatchPostfixIfNeeded(target, GetPageLoadingPostfix());
+                }
+
+                MethodInfo visibilityFilterTarget =
+                    GetPageVisibilityFilterTarget();
+                if (visibilityFilterTarget != null)
+                {
+                    foundTarget = true;
+                    PatchPostfixIfNeeded(
+                        visibilityFilterTarget,
+                        GetPageVisibilityFilterPostfix());
                 }
 
                 patchRequested = !foundTarget;
@@ -236,6 +248,90 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 PageInterfaceTypeName);
         }
 
+        internal static MethodInfo GetPageVisibilityFilterTarget()
+        {
+            Type type = PackageManagerSubmoduleHarmonyPatch.FindLoadedType(
+                SimplePageWithPackagesTypeName);
+            MethodInfo method = type?.GetMethod(
+                "MatchesSearchTextAndFilter",
+                AnyInstance,
+                null,
+                new[] { typeof(string) },
+                null);
+            return method != null &&
+                   method.DeclaringType == type &&
+                   !method.IsStatic &&
+                   method.ReturnType == typeof(bool)
+                ? method
+                : null;
+        }
+
+        internal static FieldInfo GetPagePackageDatabaseField()
+        {
+            Type type = PackageManagerSubmoduleHarmonyPatch.FindLoadedType(
+                SimplePageWithPackagesTypeName);
+            for (Type current = type; current != null; current = current.BaseType)
+            {
+                FieldInfo field = current.GetField(
+                    "m_PackageDatabase",
+                    AnyInstance | BindingFlags.DeclaredOnly);
+                if (field != null && !field.IsStatic)
+                    return field;
+            }
+
+            return null;
+        }
+
+        internal static MethodInfo GetPagePackageLookupMethod()
+        {
+            Type packageDatabaseType = GetPagePackageDatabaseField()?.FieldType;
+            MethodInfo method = packageDatabaseType?.GetMethod(
+                "GetPackage",
+                AnyInstance,
+                null,
+                new[] { typeof(string) },
+                null);
+            return method != null &&
+                   !method.IsStatic &&
+                   method.ReturnType != typeof(void)
+                ? method
+                : null;
+        }
+
+        internal static PropertyInfo GetPageFiltersProperty()
+        {
+            Type basePageType = PackageManagerSubmoduleHarmonyPatch.FindLoadedType(
+                PackageManagerSubmoduleNativePage.BasePageTypeName);
+            PropertyInfo property = basePageType?.GetProperty("filters", AnyInstance);
+            return property != null &&
+                   property.CanRead &&
+                   property.GetIndexParameters().Length == 0
+                ? property
+                : null;
+        }
+
+        internal static PropertyInfo GetPageFilterLabelsProperty()
+        {
+            Type filtersType = GetPageFiltersProperty()?.PropertyType;
+            PropertyInfo property = filtersType?.GetProperty("labels", AnyInstance);
+            return property != null &&
+                   property.CanRead &&
+                   property.GetIndexParameters().Length == 0 &&
+                   typeof(IReadOnlyList<string>).IsAssignableFrom(
+                       property.PropertyType)
+                ? property
+                : null;
+        }
+
+        internal static bool HasPageVisibilityFilterContract()
+        {
+            return GetPageVisibilityFilterTarget() != null &&
+                   GetPagePackageDatabaseField() != null &&
+                   GetPagePackageLookupMethod() != null &&
+                   GetPageFiltersProperty() != null &&
+                   GetPageFilterLabelsProperty() != null;
+        }
+
         internal static MethodInfo GetTechnicalNamePostfix()
         {
             return typeof(PackageManagerGitHubNativePresentationPatch).GetMethod(
@@ -289,6 +385,13 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         {
             return typeof(PackageManagerGitHubNativePresentationPatch).GetMethod(
                 nameof(PageLoadingPostfix),
+                AnyStatic);
+        }
+
+        internal static MethodInfo GetPageVisibilityFilterPostfix()
+        {
+            return typeof(PackageManagerGitHubNativePresentationPatch).GetMethod(
+                nameof(PageVisibilityFilterPostfix),
                 AnyStatic);
         }
 
@@ -397,11 +500,80 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                        StringComparison.Ordinal);
         }
 
+        internal static bool MatchesRepositoryVisibility(
+            bool? isPrivate,
+            IReadOnlyList<string> selectedLabels)
+        {
+            bool publicSelected = false;
+            bool privateSelected = false;
+            if (selectedLabels != null)
+            {
+                for (int index = 0; index < selectedLabels.Count; index++)
+                {
+                    string label = selectedLabels[index];
+                    publicSelected |= string.Equals(
+                        label,
+                        PackageManagerSubmodulePresentation.PublicRepositoryTagLabel,
+                        StringComparison.Ordinal);
+                    privateSelected |= string.Equals(
+                        label,
+                        PackageManagerSubmodulePresentation.PrivateRepositoryTagLabel,
+                        StringComparison.Ordinal);
+                }
+            }
+
+            if (!publicSelected && !privateSelected)
+                return true;
+            if (!isPrivate.HasValue)
+                return false;
+            return isPrivate.Value ? privateSelected : publicSelected;
+        }
+
+        internal static bool TryGetPackageRepositoryPrivacy(
+            object package,
+            PackageManagerGitHubDiscoverySnapshot discoverySnapshot,
+            out bool isPrivate)
+        {
+            isPrivate = false;
+            if (package == null)
+                return false;
+
+            if (PackageManagerGitHubPackageProjection.TryGetRepository(
+                    package,
+                    out PackageManagerGitHubRepository repository))
+            {
+                isPrivate = repository.IsPrivate;
+                return true;
+            }
+
+            object primaryVersion =
+                PackageManagerSubmoduleNativePage.GetPrimaryVersion(package);
+            if (PackageManagerSubmodulePresentation.TryGetPresentation(
+                    primaryVersion,
+                    out PackageManagerSubmoduleInfo submoduleInfo) &&
+                PackageManagerSubmodulePresentation.TryGetRepositoryPrivacy(
+                    submoduleInfo,
+                    discoverySnapshot,
+                    out isPrivate))
+            {
+                return true;
+            }
+
+            return PackageManagerReadOnlyGitPackage.TryGetInfo(
+                       package,
+                       out PackageManagerReadOnlyGitInfo readOnlyInfo) &&
+                   PackageManagerSubmodulePresentation.TryGetRepositoryPrivacy(
+                       readOnlyInfo.RepositoryUrl,
+                       discoverySnapshot,
+                       out isPrivate);
+        }
+
         internal static bool HasRequiredDiscoveryLifecycleContract()
         {
             return GetPageRefreshTargets().Count > 0 &&
                    GetPageActivationTargets().Count > 0 &&
                    GetPageLoadingTargets().Count > 0 &&
+                   HasPageVisibilityFilterContract() &&
                    GetPackageStatusUpdateMethod() != null &&
                    GetPackageStatusBarProperty() != null;
         }
@@ -703,12 +875,90 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             }
         }
 
+        private static void PageVisibilityFilterPostfix(
+            object __instance,
+            string __0,
+            ref bool __result)
+        {
+            try
+            {
+                // Unity remains authoritative for search and its built-in status
+                // predicates. Our visibility facet can only narrow a native match.
+                if (!__result || !IsGitHubPage(__instance) ||
+                    !TryGetSelectedLabels(
+                        __instance,
+                        out IReadOnlyList<string> selectedLabels) ||
+                    MatchesRepositoryVisibility(null, selectedLabels))
+                {
+                    return;
+                }
+
+                if (!TryGetPagePackage(__instance, __0, out object package))
+                    return;
+
+                bool? isPrivate = TryGetPackageRepositoryPrivacy(
+                    package,
+                    PackageManagerGitHubDiscovery.Current,
+                    out bool resolvedPrivacy)
+                    ? resolvedPrivacy
+                    : null;
+                __result = MatchesRepositoryVisibility(
+                    isPrivate,
+                    selectedLabels);
+            }
+            catch
+            {
+                // Reflection drift must never hide packages outside our verified
+                // visibility predicate or interfere with another Package Manager page.
+            }
+        }
+
         private static bool IsGitHubPage(object page)
         {
             return string.Equals(
                 GetPageId(page),
                 PackageManagerSubmoduleNativePage.ExtensionPageId,
                 StringComparison.Ordinal);
+        }
+
+        private static bool TryGetSelectedLabels(
+            object page,
+            out IReadOnlyList<string> selectedLabels)
+        {
+            selectedLabels = null;
+            PropertyInfo filtersProperty = GetPageFiltersProperty();
+            PropertyInfo labelsProperty = GetPageFilterLabelsProperty();
+            if (filtersProperty == null || labelsProperty == null)
+                return false;
+
+            object filters = filtersProperty.GetValue(page, null);
+            object labels = labelsProperty.GetValue(filters, null);
+            if (!(labels is IEnumerable<string> enumerable))
+                return false;
+
+            selectedLabels = new List<string>(enumerable);
+            return true;
+        }
+
+        private static bool TryGetPagePackage(
+            object page,
+            string packageUniqueId,
+            out object package)
+        {
+            package = null;
+            if (page == null || string.IsNullOrEmpty(packageUniqueId))
+                return false;
+
+            FieldInfo packageDatabaseField = GetPagePackageDatabaseField();
+            MethodInfo getPackage = GetPagePackageLookupMethod();
+            object packageDatabase = packageDatabaseField?.GetValue(page);
+            if (packageDatabase == null || getPackage == null)
+                return false;
+
+            package = getPackage.Invoke(
+                packageDatabase,
+                new object[] { packageUniqueId });
+            return package != null;
         }
 
         private static string GetPageId(object page)

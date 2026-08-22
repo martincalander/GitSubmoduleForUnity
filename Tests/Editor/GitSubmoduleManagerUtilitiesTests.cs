@@ -1682,6 +1682,22 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
             Assert.That(ReadField(args, "getGroupName"), Is.InstanceOf<Delegate>());
             Assert.That(ReadField(args, "supportedSortOptions") as Array,
                 Has.Length.EqualTo(2));
+            Assert.That(
+                PackageManagerSubmoduleNativePage.GetSupportedVisibilityLabels(),
+                Is.EqualTo(new[] { "Public", "Private" }));
+            MethodInfo updateSupportedLabels =
+                PackageManagerSubmoduleNativePage
+                    .GetUpdateSupportedLabelsMethod();
+            Assert.That(updateSupportedLabels, Is.Not.Null);
+            Assert.That(updateSupportedLabels.ReturnType, Is.EqualTo(typeof(bool)));
+            Assert.That(
+                updateSupportedLabels.GetParameters()
+                    .Select(parameter => parameter.ParameterType),
+                Is.EqualTo(new[]
+                {
+                    typeof(IReadOnlyList<string>),
+                    typeof(bool)
+                }));
         }
 
         [Test]

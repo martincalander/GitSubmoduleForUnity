@@ -1098,11 +1098,20 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                 PackageManagerGitHubNativePresentationPatch
                     .GetPageLoadingPostfix()
                     .GetParameters();
+            ParameterInfo[] visibilityFilterParameters =
+                PackageManagerGitHubNativePresentationPatch
+                    .GetPageVisibilityFilterPostfix()
+                    .GetParameters();
             Assert.That(activationParameters.Select(parameter => parameter.Name),
                 Is.EqualTo(new[] { "__0" }));
             Assert.That(loadingParameters.Select(parameter => parameter.Name),
                 Is.EqualTo(new[] { "__0", "__result" }));
             Assert.That(loadingParameters[1].ParameterType,
+                Is.EqualTo(typeof(bool).MakeByRefType()));
+            Assert.That(
+                visibilityFilterParameters.Select(parameter => parameter.Name),
+                Is.EqualTo(new[] { "__instance", "__0", "__result" }));
+            Assert.That(visibilityFilterParameters[2].ParameterType,
                 Is.EqualTo(typeof(bool).MakeByRefType()));
         }
 
@@ -1158,6 +1167,9 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                 PackageManagerGitHubNativePresentationPatch.GetPageActivationTargets();
             IReadOnlyList<MethodInfo> loadingTargets =
                 PackageManagerGitHubNativePresentationPatch.GetPageLoadingTargets();
+            MethodInfo visibilityFilterTarget =
+                PackageManagerGitHubNativePresentationPatch
+                    .GetPageVisibilityFilterTarget();
 
             Assert.That(technicalTargets, Is.Not.Empty);
             Assert.That(authorTargets, Is.Not.Empty);
@@ -1167,6 +1179,11 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
             Assert.That(refreshTargets, Is.Not.Empty);
             Assert.That(activationTargets, Is.Not.Empty);
             Assert.That(loadingTargets, Is.Not.Empty);
+            Assert.That(visibilityFilterTarget, Is.Not.Null);
+            Assert.That(
+                PackageManagerGitHubNativePresentationPatch
+                    .HasPageVisibilityFilterContract(),
+                Is.True);
             Assert.That(
                 PackageManagerGitHubNativePresentationPatch
                     .HasRequiredDiscoveryLifecycleContract(),
@@ -1253,6 +1270,96 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                             .GetPageLoadingPostfix()),
                     Is.True);
             }
+
+            Assert.That(
+                PackageManagerGitHubNativePresentationPatch.IsPatchApplied(
+                    visibilityFilterTarget,
+                    PackageManagerGitHubNativePresentationPatch
+                        .GetPageVisibilityFilterPostfix()),
+                Is.True);
+        }
+
+        [Test]
+        public void NativeVisibilityFilter_UsesPublicPrivateMultiSelectSemantics()
+        {
+            string publicLabel =
+                PackageManagerSubmodulePresentation.PublicRepositoryTagLabel;
+            string privateLabel =
+                PackageManagerSubmodulePresentation.PrivateRepositoryTagLabel;
+
+            Assert.That(
+                PackageManagerGitHubNativePresentationPatch
+                    .MatchesRepositoryVisibility(null, Array.Empty<string>()),
+                Is.True,
+                "No filter must retain repositories whose privacy is not known yet.");
+            Assert.That(
+                PackageManagerGitHubNativePresentationPatch
+                    .MatchesRepositoryVisibility(false, new[] { publicLabel }),
+                Is.True);
+            Assert.That(
+                PackageManagerGitHubNativePresentationPatch
+                    .MatchesRepositoryVisibility(true, new[] { publicLabel }),
+                Is.False);
+            Assert.That(
+                PackageManagerGitHubNativePresentationPatch
+                    .MatchesRepositoryVisibility(true, new[] { privateLabel }),
+                Is.True);
+            Assert.That(
+                PackageManagerGitHubNativePresentationPatch
+                    .MatchesRepositoryVisibility(false, new[] { privateLabel }),
+                Is.False);
+            Assert.That(
+                PackageManagerGitHubNativePresentationPatch
+                    .MatchesRepositoryVisibility(
+                        false,
+                        new[] { publicLabel, privateLabel }),
+                Is.True);
+            Assert.That(
+                PackageManagerGitHubNativePresentationPatch
+                    .MatchesRepositoryVisibility(
+                        true,
+                        new[] { publicLabel, privateLabel }),
+                Is.True);
+            Assert.That(
+                PackageManagerGitHubNativePresentationPatch
+                    .MatchesRepositoryVisibility(null, new[] { publicLabel }),
+                Is.False,
+                "A selected visibility must not guess the privacy of an unknown repository.");
+        }
+
+        [Test]
+        public void NativeVisibilityFilterPostfix_DoesNotTouchOtherPages()
+        {
+            object[] arguments =
+            {
+                new FakePage { id = "UnityRegistry" },
+                "com.example.package",
+                true
+            };
+
+            PackageManagerGitHubNativePresentationPatch
+                .GetPageVisibilityFilterPostfix()
+                .Invoke(null, arguments);
+
+            Assert.That(arguments[2], Is.True);
+        }
+
+        [TestCase("https://github.com/OWNER/repository.git", true)]
+        [TestCase("git@github.com:owner/repository.git", true)]
+        [TestCase("https://github.com/owner/another-repository.git", false)]
+        public void RepositoryPrivacyLookup_MatchesAnyGitHubUrlForm(
+            string repositoryUrl,
+            bool expected)
+        {
+            bool resolved = PackageManagerSubmodulePresentation
+                .TryGetRepositoryPrivacy(
+                    repositoryUrl,
+                    CreateDiscoverySnapshot("owner", "repository", true),
+                    out bool isPrivate);
+
+            Assert.That(resolved, Is.EqualTo(expected));
+            if (expected)
+                Assert.That(isPrivate, Is.True);
         }
 
         [TestCase("UnityRegistry", false, false, false)]

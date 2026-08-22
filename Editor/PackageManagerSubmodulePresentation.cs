@@ -331,12 +331,27 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             PackageManagerGitHubDiscoverySnapshot discoverySnapshot,
             out bool isPrivate)
         {
+            if (info == null || !info.IsGitHub)
+            {
+                isPrivate = false;
+                return false;
+            }
+
+            return TryGetRepositoryPrivacy(
+                info.RepositoryUrl,
+                discoverySnapshot,
+                out isPrivate);
+        }
+
+        internal static bool TryGetRepositoryPrivacy(
+            string repositoryUrl,
+            PackageManagerGitHubDiscoverySnapshot discoverySnapshot,
+            out bool isPrivate)
+        {
             isPrivate = false;
-            if (info == null ||
-                !info.IsGitHub ||
-                discoverySnapshot?.Repositories == null ||
+            if (discoverySnapshot?.Repositories == null ||
                 !GitHubUtility.TryParseGitHubRepo(
-                    info.RepositoryUrl,
+                    repositoryUrl,
                     out string owner,
                     out string repository))
             {

@@ -436,6 +436,9 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
             IReadOnlyList<MethodInfo> loadingTargets =
                 PackageManagerGitHubNativePresentationPatch
                     .GetPageLoadingTargets();
+            MethodInfo visibilityFilterTarget =
+                PackageManagerGitHubNativePresentationPatch
+                    .GetPageVisibilityFilterTarget();
             Type technicalNameType =
                 PackageManagerSubmoduleHarmonyPatch.FindLoadedType(
                     PackageManagerGitHubNativePresentationPatch
@@ -448,6 +451,14 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
             report.Observe("Page refresh hooks", DescribeMethods(refreshTargets));
             report.Observe("Page activation hooks", DescribeMethods(activationTargets));
             report.Observe("Page loading hooks", DescribeMethods(loadingTargets));
+            report.Observe(
+                "GitHub visibility filter hook",
+                DescribeMethod(visibilityFilterTarget));
+            report.Observe(
+                "Supported-label updater",
+                DescribeMethod(
+                    PackageManagerSubmoduleNativePage
+                        .GetUpdateSupportedLabelsMethod()));
             report.Observe(
                 "Status update",
                 DescribeMethod(
@@ -475,6 +486,16 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                     "PageRefreshHandler.OnActivePageChanged(IPage) is missing.");
                 report.Require(loadingTargets.Count > 0,
                     "PageRefreshHandler.IsRefreshInProgress(IPage) is missing.");
+                report.Require(
+                    PackageManagerGitHubNativePresentationPatch
+                        .HasPageVisibilityFilterContract(),
+                    "The GitHub page visibility filter contract is incomplete; " +
+                    "the toolbar must not expose inert filters.");
+                report.Require(
+                    PackageManagerSubmoduleNativePage
+                        .GetUpdateSupportedLabelsMethod() != null,
+                    "BasePage.UpdateSupportedLabels(IReadOnlyList<string>, bool) " +
+                    "is missing.");
                 report.Require(
                     PackageManagerGitHubNativePresentationPatch
                         .HasRequiredDiscoveryLifecycleContract(),
@@ -510,6 +531,11 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                     loadingTargets,
                     PackageManagerGitHubNativePresentationPatch
                         .GetPageLoadingPostfix());
+                RequireOwnedPostfixes(
+                    report,
+                    new[] { visibilityFilterTarget },
+                    PackageManagerGitHubNativePresentationPatch
+                        .GetPageVisibilityFilterPostfix());
 
                 GitSubmoduleManagerPackageManagerHost.TryPatch(out _);
                 report.Require(
@@ -567,6 +593,13 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                 report,
                 PackageManagerGitHubNativePresentationPatch
                     .GetPageLoadingPostfix(),
+                "__0",
+                "__result");
+            RequireParameterNames(
+                report,
+                PackageManagerGitHubNativePresentationPatch
+                    .GetPageVisibilityFilterPostfix(),
+                "__instance",
                 "__0",
                 "__result");
 
