@@ -1553,6 +1553,30 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
         }
 
         [Test]
+        public void PackageManagerNativePage_InstalledGitHubOwnerComesFromSubmoduleRemote()
+        {
+            var info = new PackageManagerSubmoduleInfo(
+                "com.example.package",
+                "Packages/com.example.package",
+                "/project/Packages/com.example.package",
+                "git@github.com:martincalander/example-package.git",
+                true);
+
+            Assert.That(
+                PackageManagerSubmoduleNativePage.GetGitHubRepositoryOwner(info),
+                Is.EqualTo("martincalander"));
+            Assert.That(
+                PackageManagerSubmoduleNativePage.GetGitHubRepositoryOwner(
+                    new PackageManagerSubmoduleInfo(
+                        "com.example.package",
+                        "Packages/com.example.package",
+                        "/project/Packages/com.example.package",
+                        "ssh://git@git.example.com/team/example-package.git",
+                        false)),
+                Is.Empty);
+        }
+
+        [Test]
         public void PackageManagerNativePage_RuntimeHooksAreRegisteredWhenSupported()
         {
             Assert.That(GitSubmoduleManagerPackageManagerHost.TryPatch(), Is.True);

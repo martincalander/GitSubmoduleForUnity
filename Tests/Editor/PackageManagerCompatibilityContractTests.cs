@@ -226,6 +226,162 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
         }
 
         [Test]
+        public void RemoveCustomAction_UsesExactOwnedFailSafePrefix()
+        {
+            var report = new CompatibilityReport(
+                "embedded-package removal interception");
+            Type actionType = PackageManagerSubmoduleHarmonyPatch.FindLoadedType(
+                PackageManagerSubmoduleHarmonyPatch.RemoveCustomActionTypeName);
+            MethodInfo target = PackageManagerSubmoduleHarmonyPatch
+                .GetRemoveCustomActionTargetMethod();
+            MethodInfo prefix = PackageManagerSubmoduleHarmonyPatch
+                .GetRemoveCustomActionPrefixMethod();
+            Type dispatcherType = PackageManagerSubmoduleHarmonyPatch.FindLoadedType(
+                PackageManagerSubmoduleHarmonyPatch
+                    .PackageOperationDispatcherTypeName);
+            MethodInfo lowerTarget = PackageManagerSubmoduleHarmonyPatch
+                .GetPackageOperationDispatcherRemoveEmbeddedTargetMethod();
+            MethodInfo lowerPrefix = PackageManagerSubmoduleHarmonyPatch
+                .GetPackageOperationDispatcherRemoveEmbeddedPrefixMethod();
+
+            report.Observe(
+                "RemoveCustomAction",
+                actionType == null ? "unresolved" : actionType.FullName);
+            report.Observe(
+                "TriggerActionImplementation",
+                DescribeMethod(target));
+            report.Observe(
+                "PackageOperationDispatcher.RemoveEmbedded",
+                DescribeMethod(lowerTarget));
+            report.Require(
+                actionType != null,
+                "Missing required type " +
+                PackageManagerSubmoduleHarmonyPatch.RemoveCustomActionTypeName +
+                "; Unity could delete an embedded submodule without cleaning " +
+                "its parent-repository metadata.");
+            report.Require(
+                target != null,
+                "RemoveCustomAction exists, but the exact " +
+                "bool TriggerActionImplementation(IPackageVersion) override is " +
+                "unavailable.");
+            report.Require(
+                prefix != null,
+                "The submodule removal Harmony prefix could not be resolved.");
+            if (prefix != null)
+            {
+                ParameterInfo[] parameters = prefix.GetParameters();
+                report.Require(
+                    prefix.ReturnType == typeof(bool) &&
+                    parameters.Length == 2 &&
+                    parameters[0].ParameterType == typeof(object) &&
+                    parameters[1].ParameterType == typeof(bool).MakeByRefType(),
+                    "The RemoveCustomAction prefix must return whether Unity " +
+                    "should run and expose its bool result by reference.");
+            }
+            report.Require(
+                dispatcherType != null,
+                "Missing required lower-level type " +
+                PackageManagerSubmoduleHarmonyPatch
+                    .PackageOperationDispatcherTypeName + ".");
+            report.Require(
+                lowerTarget != null,
+                "PackageOperationDispatcher exists, but the exact " +
+                "void RemoveEmbedded(IPackage) method is unavailable.");
+            report.Require(
+                lowerPrefix != null,
+                "The lower-level embedded-package deletion guard could not be " +
+                "resolved.");
+            if (lowerPrefix != null)
+            {
+                ParameterInfo[] parameters = lowerPrefix.GetParameters();
+                report.Require(
+                    lowerPrefix.ReturnType == typeof(bool) &&
+                    parameters.Length == 1 &&
+                    parameters[0].ParameterType == typeof(object),
+                    "The PackageOperationDispatcher prefix must return whether " +
+                    "Unity should run and accept the IPackage argument.");
+            }
+
+            if (target != null)
+            {
+                ParameterInfo[] parameters = target.GetParameters();
+                report.Require(
+                    target.DeclaringType == actionType &&
+                    target.ReturnType == typeof(bool) &&
+                    parameters.Length == 1 &&
+                    string.Equals(
+                        parameters[0].ParameterType.FullName,
+                        PackageManagerSubmoduleHarmonyPatch
+                            .PackageVersionInterfaceTypeName,
+                        StringComparison.Ordinal),
+                    "Unexpected embedded-package removal signature: " +
+                    DescribeMethod(target) + ".");
+
+                bool presentationPatched =
+                    PackageManagerSubmoduleHarmonyPatch.TryPatch();
+                report.Require(
+                    presentationPatched,
+                    "Package Manager Harmony registration failed: " +
+                    EmptyAsUnknown(
+                        PackageManagerSubmoduleHarmonyPatch.LastPatchError));
+                report.Require(
+                    PackageManagerSubmoduleHarmonyPatch
+                        .IsRemoveCustomActionPatchApplied(),
+                    "RemoveCustomAction.TriggerActionImplementation lacks the " +
+                    "prefix owned by " +
+                    PackageManagerSubmoduleHarmonyPatch.HarmonyId + ".");
+            }
+
+            if (lowerTarget != null)
+            {
+                ParameterInfo[] parameters = lowerTarget.GetParameters();
+                report.Require(
+                    lowerTarget.DeclaringType == dispatcherType &&
+                    lowerTarget.ReturnType == typeof(void) &&
+                    parameters.Length == 1 &&
+                    string.Equals(
+                        parameters[0].ParameterType.FullName,
+                        PackageManagerSubmoduleHarmonyPatch
+                            .PackageInterfaceTypeName,
+                        StringComparison.Ordinal),
+                    "Unexpected lower-level embedded-package removal signature: " +
+                    DescribeMethod(lowerTarget) + ".");
+                report.Require(
+                    PackageManagerSubmoduleHarmonyPatch
+                        .IsPackageOperationDispatcherRemoveEmbeddedPatchApplied(),
+                    "PackageOperationDispatcher.RemoveEmbedded lacks the " +
+                    "submodule fail-safe prefix owned by " +
+                    PackageManagerSubmoduleHarmonyPatch.HarmonyId + ".");
+            }
+
+            Complete(report);
+        }
+
+        [Test]
+        public void RemoveCustomActionPrefix_NullPackageVersion_FailsOpen()
+        {
+            MethodInfo prefix = PackageManagerSubmoduleHarmonyPatch
+                .GetRemoveCustomActionPrefixMethod();
+            Assert.That(prefix, Is.Not.Null);
+
+            object[] arguments = { null, false };
+            bool runOriginal = (bool)prefix.Invoke(null, arguments);
+
+            Assert.That(runOriginal, Is.True,
+                "A non-submodule Package Manager action must remain native.");
+            Assert.That(arguments[1], Is.False,
+                "Failing open must not manufacture a handled action result.");
+
+            MethodInfo lowerPrefix = PackageManagerSubmoduleHarmonyPatch
+                .GetPackageOperationDispatcherRemoveEmbeddedPrefixMethod();
+            Assert.That(lowerPrefix, Is.Not.Null);
+            Assert.That(
+                (bool)lowerPrefix.Invoke(null, new object[] { null }),
+                Is.True,
+                "An unrecognized embedded package must remain native.");
+        }
+
+        [Test]
         public void NativeGitHubPageContract_IsCompleteOnSupportingEditors()
         {
             var report = new CompatibilityReport("native Sources/GitHub seams");
@@ -378,6 +534,17 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                 PackageManagerSubmoduleHarmonyPatch
                     .GetPackageToolbarRefreshPostfixMethod(),
                 "__instance",
+                "__0");
+            RequireParameterNames(
+                report,
+                PackageManagerSubmoduleHarmonyPatch
+                    .GetRemoveCustomActionPrefixMethod(),
+                "__0",
+                "__result");
+            RequireParameterNames(
+                report,
+                PackageManagerSubmoduleHarmonyPatch
+                    .GetPackageOperationDispatcherRemoveEmbeddedPrefixMethod(),
                 "__0");
             RequireParameterNames(
                 report,

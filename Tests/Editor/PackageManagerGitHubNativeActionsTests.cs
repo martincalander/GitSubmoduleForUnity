@@ -842,6 +842,164 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                 Is.EqualTo(before));
         }
 
+        [Test]
+        public void RemoveDetails_UsesInlineConfirmationBeforeStartingGit()
+        {
+            var root = new VisualElement();
+            var primaryActions = new VisualElement();
+            var detailsHeader = new VisualElement();
+            var detailsLinks = new VisualElement
+            {
+                name = PackageManagerGitHubDetails.NativeDetailsLinksContainerName
+            };
+            var helpBoxes = new VisualElement
+            {
+                name = PackageManagerGitHubDetails.NativeHelpBoxContainerName
+            };
+            root.Add(primaryActions);
+            detailsHeader.Add(detailsLinks);
+            detailsHeader.Add(helpBoxes);
+            root.Add(detailsHeader);
+
+            int removeCount = 0;
+            Assert.That(
+                PackageManagerSubmoduleRemoveDetails.TryCreate(
+                    primaryActions,
+                    detailsLinks,
+                    _ => removeCount++,
+                    out PackageManagerSubmoduleRemoveDetails details),
+                Is.True);
+            using (details)
+            {
+                var info = new PackageManagerSubmoduleInfo(
+                    "com.example.package",
+                    "Packages/com.example.package",
+                    "/project/Packages/com.example.package",
+                    "https://github.com/example/package.git",
+                    true);
+                details.Refresh(info);
+                details.SetRemoveState(true, "Ready");
+
+                // Native PackageAction requests can be broadcast to more than
+                // one Package Manager host. Mirroring confirmation must remain
+                // idempotent and must never start the Git operation itself.
+                details.ShowConfirmation();
+                details.ShowConfirmation();
+
+                Assert.That(details.IsConfirmationPending, Is.True);
+                Assert.That(removeCount, Is.Zero);
+                Assert.That(
+                    details.RemoveButton.text,
+                    Is.EqualTo(L10n.Tr(
+                        PackageManagerSubmoduleRemoveDetails.ConfirmRemoveText)));
+                Assert.That(
+                    details.Feedback.messageType,
+                    Is.EqualTo(HelpBoxMessageType.Warning));
+                Assert.That(details.Feedback.text, Does.Contain("local-only work"));
+
+                details.TriggerRemove();
+
+                Assert.That(removeCount, Is.EqualTo(1));
+                Assert.That(details.IsRemoving, Is.True);
+                Assert.That(details.RemoveButton.enabledSelf, Is.False);
+            }
+        }
+
+        [UnityTest]
+        public IEnumerator RemoveDetails_CancelAndErrorsRemainInlineAndSanitized()
+        {
+            var root = new VisualElement();
+            var primaryActions = new VisualElement();
+            var detailsHeader = new VisualElement();
+            var detailsLinks = new VisualElement
+            {
+                name = PackageManagerGitHubDetails.NativeDetailsLinksContainerName
+            };
+            var helpBoxes = new VisualElement
+            {
+                name = PackageManagerGitHubDetails.NativeHelpBoxContainerName
+            };
+            root.Add(primaryActions);
+            detailsHeader.Add(detailsLinks);
+            detailsHeader.Add(helpBoxes);
+            root.Add(detailsHeader);
+
+            PackageManagerSubmoduleRemoveDetails details = null;
+            var host = ScriptableObject.CreateInstance<NativeActionsHostWindow>();
+            try
+            {
+                Assert.That(
+                    PackageManagerSubmoduleRemoveDetails.TryCreate(
+                        primaryActions,
+                        detailsLinks,
+                        _ => Assert.Fail("Removal should not start."),
+                        out details),
+                    Is.True);
+                host.position = new Rect(100f, 100f, 500f, 200f);
+                host.Show();
+                host.rootVisualElement.Add(root);
+                yield return null;
+
+                details.Refresh(new PackageManagerSubmoduleInfo(
+                    "com.example.package",
+                    "Packages/com.example.package",
+                    "/project/Packages/com.example.package",
+                    "git@github.com:example/package.git",
+                    true));
+                details.SetRemoveState(true, "Ready");
+                details.TriggerRemove();
+                SendNavigationSubmit(details.CancelButton);
+
+                Assert.That(details.IsConfirmationPending, Is.False);
+                Assert.That(
+                    details.RemoveButton.text,
+                    Is.EqualTo(L10n.Tr(
+                        PackageManagerSubmoduleRemoveDetails.RemoveText)));
+
+                details.ShowError(
+                    "Removal blocked for https://user:secret@example.com/repo.git");
+
+                Assert.That(
+                    details.Feedback.messageType,
+                    Is.EqualTo(HelpBoxMessageType.Error));
+                Assert.That(details.Feedback.text, Does.Not.Contain("secret"));
+                Assert.That(details.Feedback.text, Does.Not.Contain("user:"));
+                Assert.That(
+                    details.RemoveButton.text,
+                    Is.EqualTo(L10n.Tr(
+                        PackageManagerSubmoduleRemoveDetails.RetryRemoveText)));
+            }
+            finally
+            {
+                details?.Dispose();
+                if (host != null)
+                    host.Close();
+            }
+        }
+
+        [Test]
+        public void RemoveService_RequiresExactPackageIdentityAndPath()
+        {
+            Assert.That(
+                GitSubmoduleRemoveService.ValidateInput(
+                    new PackageManagerSubmoduleInfo(
+                        "com.example.package",
+                        "Packages/com.example.package",
+                        "/project/Packages/com.example.package",
+                        "https://github.com/example/package.git",
+                        true)),
+                Is.Empty);
+            Assert.That(
+                GitSubmoduleRemoveService.ValidateInput(
+                    new PackageManagerSubmoduleInfo(
+                        "com.example.package",
+                        "Packages/com.example.different",
+                        "/project/Packages/com.example.different",
+                        "https://github.com/example/package.git",
+                        true)),
+                Does.Contain("identity"));
+        }
+
         private static PackageManagerGitHubDetails CreateDetails(
             VisualElement primaryActions,
             VisualElement detailsLinks)

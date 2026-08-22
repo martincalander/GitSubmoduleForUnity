@@ -913,28 +913,19 @@ namespace MartinCalander.GitSubmoduleManager.Editor
 
             try
             {
+                // Git verification is the install success boundary. Package
+                // registration and script compilation may finish only after a
+                // domain reload; the InitializeOnLoad registeredPackages hook
+                // owns that later reconciliation.
                 PackageManagerSubmoduleSnapshot.Refresh();
-                bool reconciled = PackageManagerGitHubPackageProjection.Reconcile(
-                    PackageManagerGitHubDiscovery.Current);
-                PackageManagerSubmoduleHarmonyPatch.RefreshOpenPackageManagerWindows();
-                if (!reconciled)
-                {
-                    isInstalling = false;
-                    ShowInlineError(
-                        "Package Manager Refresh Failed",
-                        "The package was added, but Package Manager could not " +
-                        "update its package list. Use Refresh to retry.");
-                    return;
-                }
             }
             catch (Exception exception)
             {
-                isInstalling = false;
-                ShowInlineError(
-                    "Package Manager Refresh Failed",
-                    "The package was added, but Package Manager could not refresh: " +
-                        exception.Message);
-                return;
+                Debug.LogWarning(
+                    "[Git Submodule Manager] The Git submodule was installed, " +
+                    "but the early Package Manager snapshot request failed. " +
+                    "Unity's package registration event will retry it: " +
+                    GitHubUtility.SanitizeUiDiagnostic(exception.Message));
             }
 
             if (this != null)

@@ -196,8 +196,10 @@ a GUI exception cannot misclassify an already-verified repository result.
 - Package addition validates the cloned root and rolls back invalid packages.
 - Failed clones remove safe untracked worktrees and module metadata; ambiguous
   `.gitmodules` state is preserved and reported instead of being guessed at.
-- Local metadata cleanup after a successful `git rm` is best-effort and warns
-  rather than misreporting the already-completed tracked mutation.
+- Successful `git rm` removes the tracked registration and worktree while
+  retaining the submodule Git object metadata for recovery and safe re-add.
+  Postconditions verify the gitlink, `.gitmodules` registration, and filesystem
+  path instead of misreporting a partially completed tracked mutation.
 - View detach/reattach generations prevent stale initial-load results from
   applying to a newer host lifecycle.
 - Initial loading publishes Git and installed-package availability before the

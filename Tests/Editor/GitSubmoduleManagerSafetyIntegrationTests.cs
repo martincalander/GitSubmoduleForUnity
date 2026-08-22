@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Runtime.InteropServices;
+using System.Text;
 using System.Threading;
 using NUnit.Framework;
 using GitSubmoduleManagerView = MartinCalander.GitSubmoduleManager.Editor.GitSubmoduleManagerView;
@@ -656,6 +657,171 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                 Git(parentRoot, "ls-files --error-unmatch -- \"" + PackagePath + "\"").IsSuccess,
                 Is.False);
             Assert.That(File.ReadAllText(Path.Combine(parentRoot, ".gitmodules")), Does.Not.Contain(PackagePath));
+        }
+
+        [Test]
+        public void Remove_AddThenRemoveBeforeCommitRestoresCleanParent()
+        {
+            string cleanParent = CreateCleanParent("add-then-remove-parent");
+            RedirectProjectRoot(cleanParent);
+            Assert.That(
+                GitUtility.TryAddSubmodule(sourceRoot, PackagePath, string.Empty, out string addError),
+                Is.True,
+                addError);
+            Assert.That(
+                Git(cleanParent, "status --porcelain=v2 --untracked-files=all -- .gitmodules \"" + PackagePath + "\"").StdOut,
+                Is.Not.Empty);
+
+            bool removed = GitUtility.TryRemoveSubmodule(PackagePath, out string error);
+
+            Assert.That(removed, Is.True, error);
+            Assert.That(Directory.Exists(Path.Combine(cleanParent, PackagePath)), Is.False);
+            Assert.That(File.Exists(Path.Combine(cleanParent, ".gitmodules")), Is.False);
+            Assert.That(
+                Git(cleanParent, "status --porcelain=v2 --untracked-files=all -- .gitmodules \"" + PackagePath + "\"").StdOut,
+                Is.Empty);
+        }
+
+        [Test]
+        public void Remove_RepairsStagedAddAfterWorktreeWasDeleted()
+        {
+            string cleanParent = CreateCleanParent("missing-staged-add-parent");
+            RedirectProjectRoot(cleanParent);
+            Assert.That(
+                GitUtility.TryAddSubmodule(sourceRoot, PackagePath, string.Empty, out string addError),
+                Is.True,
+                addError);
+            Directory.Delete(Path.Combine(cleanParent, PackagePath), true);
+            string statusBefore = Git(
+                cleanParent,
+                "status --porcelain=v2 --untracked-files=all -- .gitmodules \"" + PackagePath + "\"").StdOut;
+            Assert.That(statusBefore, Does.Contain("1 AD"));
+
+            bool removed = GitUtility.TryRemoveSubmodule(PackagePath, out string error);
+
+            Assert.That(removed, Is.True, error);
+            Assert.That(File.Exists(Path.Combine(cleanParent, ".gitmodules")), Is.False);
+            Assert.That(
+                Git(cleanParent, "status --porcelain=v2 --untracked-files=all -- .gitmodules \"" + PackagePath + "\"").StdOut,
+                Is.Empty);
+        }
+
+        [Test]
+        public void Remove_WithStagedOnlyUnrelatedGitmodulesChange_PreservesIt()
+        {
+            string gitmodulesPath = Path.Combine(parentRoot, ".gitmodules");
+            const string marker = "# staged-unrelated-marker\n";
+            File.AppendAllText(gitmodulesPath, marker);
+            ExpectGit(parentRoot, "add -- .gitmodules");
+
+            bool removed = GitUtility.TryRemoveSubmodule(PackagePath, out string error);
+
+            Assert.That(removed, Is.True, error);
+            Assert.That(File.ReadAllText(gitmodulesPath), Does.Contain(marker.Trim()));
+            string stagedGitmodules = ExpectGit(parentRoot, "show :.gitmodules").StdOut;
+            Assert.That(stagedGitmodules, Does.Contain(marker.Trim()));
+            Assert.That(stagedGitmodules, Does.Not.Contain(PackagePath));
+            Assert.That(
+                Git(parentRoot, "ls-files --error-unmatch -- \"" + PackagePath + "\"").IsSuccess,
+                Is.False);
+        }
+
+        [Test]
+        public void Remove_TargetFirstBomCrLfGitmodules_PreservesPrefixCommentsAndOtherSectionBytes()
+        {
+            string gitmodulesPath = Path.Combine(parentRoot, ".gitmodules");
+            string targetSection = File.ReadAllText(gitmodulesPath)
+                .Replace("\r\n", "\n")
+                .Replace("\r", "\n")
+                .Replace("\n", "\r\n");
+            const string preservedSuffix =
+                "# preserved comment\r\n" +
+                "[submodule \"Packages/com.example.other-package\"]\r\n" +
+                "\tpath = Packages/com.example.other-package\r\n" +
+                "\turl = https://example.invalid/other-package.git\r\n";
+            byte[] source = EncodeUtf8WithBom(targetSection + preservedSuffix);
+            Assert.That(source[0], Is.EqualTo(0xef));
+            Assert.That(source[1], Is.EqualTo(0xbb));
+            Assert.That(source[2], Is.EqualTo(0xbf));
+            File.WriteAllBytes(gitmodulesPath, source);
+            ExpectGit(parentRoot, "add -- .gitmodules");
+            byte[] expected = EncodeUtf8WithBom(preservedSuffix);
+            byte[] gitProducedContents = null;
+            ICommandRunner inner = CliCommandRunner.CurrentRunner;
+            CliCommandRunner.CurrentRunner = new SingleCommandMutationRunner(
+                inner,
+                spec => (spec.Arguments ?? string.Empty).StartsWith(
+                    "rm ",
+                    StringComparison.Ordinal),
+                (_, __) => gitProducedContents = File.Exists(gitmodulesPath)
+                    ? File.ReadAllBytes(gitmodulesPath)
+                    : Array.Empty<byte>());
+
+            bool removed = GitUtility.TryRemoveSubmodule(PackagePath, out string error);
+
+            Assert.That(gitProducedContents, Is.Not.Null, "The post-rm capture did not run.");
+            CollectionAssert.AreEqual(
+                source,
+                gitProducedContents,
+                "Git should leave a BOM-prefixed .gitmodules unchanged after removing the gitlink.");
+            Assert.That(removed, Is.True, error);
+            CollectionAssert.AreEqual(expected, File.ReadAllBytes(gitmodulesPath));
+            Assert.That(Git(parentRoot, "diff --quiet -- .gitmodules").IsSuccess, Is.True);
+        }
+
+        [Test]
+        public void Remove_MissingWorktreeRefusesNonGitlinkIndexEntry()
+        {
+            string cleanParent = CreateCleanParent("missing-non-gitlink-parent");
+            string packageEntry = Path.Combine(cleanParent, PackagePath);
+            Directory.CreateDirectory(Path.GetDirectoryName(packageEntry));
+            File.WriteAllText(packageEntry, "ordinary tracked file\n");
+            File.WriteAllText(
+                Path.Combine(cleanParent, ".gitmodules"),
+                "[submodule \"" + PackagePath + "\"]\n" +
+                "\tpath = " + PackagePath + "\n" +
+                "\turl = " + sourceRoot + "\n");
+            ExpectGit(cleanParent, "add -- .gitmodules \"" + PackagePath + "\"");
+            File.Delete(packageEntry);
+            RedirectProjectRoot(cleanParent);
+            string indexBefore = ExpectGit(cleanParent, "ls-files --stage -- \"" + PackagePath + "\"").StdOut;
+
+            bool removed = GitUtility.TryRemoveSubmodule(PackagePath, out string error);
+
+            Assert.That(removed, Is.False);
+            Assert.That(error, Does.Contain("valid submodule gitlink"));
+            Assert.That(
+                ExpectGit(cleanParent, "ls-files --stage -- \"" + PackagePath + "\"").StdOut,
+                Is.EqualTo(indexBefore));
+            Assert.That(File.ReadAllText(Path.Combine(cleanParent, ".gitmodules")), Does.Contain(PackagePath));
+        }
+
+        [Test]
+        public void Remove_MissingWorktreeRefusesAmbiguousGitmodulesRegistration()
+        {
+            string cleanParent = CreateCleanParent("missing-ambiguous-registration-parent");
+            RedirectProjectRoot(cleanParent);
+            Assert.That(
+                GitUtility.TryAddSubmodule(sourceRoot, PackagePath, string.Empty, out string addError),
+                Is.True,
+                addError);
+            Directory.Delete(Path.Combine(cleanParent, PackagePath), true);
+            File.AppendAllText(
+                Path.Combine(cleanParent, ".gitmodules"),
+                "\n[submodule \"ambiguous-package\"]\n" +
+                "\tpath = " + PackagePath + "\n" +
+                "\turl = " + sourceRoot + "\n");
+            ExpectGit(cleanParent, "add -- .gitmodules");
+            string gitmodulesBefore = File.ReadAllText(Path.Combine(cleanParent, ".gitmodules"));
+
+            bool removed = GitUtility.TryRemoveSubmodule(PackagePath, out string error);
+
+            Assert.That(removed, Is.False);
+            Assert.That(error, Does.Contain("more than one submodule"));
+            Assert.That(File.ReadAllText(Path.Combine(cleanParent, ".gitmodules")), Is.EqualTo(gitmodulesBefore));
+            Assert.That(
+                Git(cleanParent, "ls-files --stage -- \"" + PackagePath + "\"").StdOut,
+                Does.StartWith("160000 "));
         }
 
         [Test]
@@ -1570,6 +1736,70 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
             Assert.That(Directory.Exists(worktree), Is.True);
         }
 
+        [Test]
+        public void Remove_ConcurrentGitmodulesEditAfterGitRm_IsPreservedAndStopsRestoration()
+        {
+            string gitmodulesPath = Path.Combine(parentRoot, ".gitmodules");
+            const string marker = "# concurrent post-rm edit\n";
+            ICommandRunner inner = CliCommandRunner.CurrentRunner;
+            CliCommandRunner.CurrentRunner = new SingleCommandMutationRunner(
+                inner,
+                spec => (spec.Arguments ?? string.Empty).StartsWith("rm ", StringComparison.Ordinal),
+                (_, __) => File.AppendAllText(gitmodulesPath, marker));
+
+            bool removed = GitUtility.TryRemoveSubmodule(
+                PackagePath,
+                out string error,
+                out GitOperationCompletionOutcome outcome);
+
+            Assert.That(removed, Is.False);
+            Assert.That(outcome, Is.EqualTo(GitOperationCompletionOutcome.FailedUnsafe));
+            Assert.That(error, Does.Contain("concurrent"));
+            Assert.That(File.ReadAllText(gitmodulesPath), Does.Contain(marker.Trim()));
+        }
+
+        [Test]
+        public void Remove_GitmodulesReplacementBetweenVerificationAndCleanup_IsQuarantined()
+        {
+            string cleanParent = CreateCleanParent("gitmodules-cleanup-race-parent");
+            RedirectProjectRoot(cleanParent);
+            Assert.That(
+                GitUtility.TryAddSubmodule(sourceRoot, PackagePath, string.Empty, out string addError),
+                Is.True,
+                addError);
+            const string marker = "concurrent replacement bytes\n";
+            using (GitUtility.OverrideBeforeGitModulesCleanupMoveForTests(path =>
+                   {
+                       if (File.Exists(path))
+                           File.Delete(path);
+                       File.WriteAllText(path, marker);
+                   }))
+            {
+                bool removed = GitUtility.TryRemoveSubmodule(
+                    PackagePath,
+                    out string error,
+                    out GitOperationCompletionOutcome outcome);
+
+                Assert.That(removed, Is.False);
+                Assert.That(outcome, Is.EqualTo(GitOperationCompletionOutcome.FailedUnsafe));
+                Assert.That(error, Does.Contain("preserved at"));
+            }
+
+            string recoveryDirectory = Path.Combine(
+                cleanParent,
+                "Library",
+                "GitSubmoduleManager",
+                "Recovery",
+                "GitModulesCleanup");
+            string[] preservedFiles = Directory.GetFiles(
+                recoveryDirectory,
+                "*.gitmodules",
+                SearchOption.TopDirectoryOnly);
+            Assert.That(preservedFiles, Has.Length.EqualTo(1));
+            Assert.That(File.ReadAllText(preservedFiles[0]), Is.EqualTo(marker));
+            Assert.That(File.Exists(Path.Combine(cleanParent, ".gitmodules")), Is.False);
+        }
+
         private sealed class SingleCommandMutationRunner : ICommandRunner
         {
             private readonly ICommandRunner inner;
@@ -1605,6 +1835,17 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
             ExpectGit(path, "init");
             ExpectGit(path, "config user.name \"Git Submodule Manager Tests\"");
             ExpectGit(path, "config user.email \"tests@example.invalid\"");
+        }
+
+        private static byte[] EncodeUtf8WithBom(string value)
+        {
+            var encoding = new UTF8Encoding(true);
+            byte[] preamble = encoding.GetPreamble();
+            byte[] contents = encoding.GetBytes(value ?? string.Empty);
+            var result = new byte[preamble.Length + contents.Length];
+            Buffer.BlockCopy(preamble, 0, result, 0, preamble.Length);
+            Buffer.BlockCopy(contents, 0, result, preamble.Length, contents.Length);
+            return result;
         }
 
         private string CreateCleanParent(string directoryName)

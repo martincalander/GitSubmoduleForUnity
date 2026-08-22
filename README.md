@@ -53,6 +53,9 @@ standard and visible to normal Git tooling.
   pages. Inside **Sources > GitHub**, installed and discovered repositories use
   their **Public** or **Private** badge instead. GitHub-hosted installed packages
   show the **GitHub** source with the Git icon.
+- Routes Package Manager removal of installed submodules through guarded
+  `git rm` with inline confirmation, preserving local work and keeping the
+  parent gitlink and `.gitmodules` registration consistent.
 - Keeps the full installed-package management, GitHub discovery, add, update,
   retarget, and remove workspace at **Window > Package Management > Git
   Submodule Manager**.

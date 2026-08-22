@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Reflection;
 using UnityEditor;
 using UnityEngine;
@@ -78,6 +79,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                         ReferenceEquals(current.DetailsLinksContainer, detailsLinks))
                     {
                         current.Details.EnsurePrimaryControlsMounted();
+                        current.RemoveDetails.EnsureControlsMounted();
                         RefreshForToolbar(toolbar, GetFieldValue(toolbar, "m_Package"));
                         return true;
                     }
@@ -110,6 +112,20 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                     return false;
                 }
 
+                PackageManagerSubmoduleRemoveDetails removeDetails = null;
+                if (!PackageManagerSubmoduleRemoveDetails.TryCreate(
+                        primaryActions,
+                        detailsLinks,
+                        info => OnRemoveRequested(
+                            toolbar,
+                            removeDetails,
+                            info),
+                        out removeDetails))
+                {
+                    details.Dispose();
+                    return false;
+                }
+
                 EventCallback<DetachFromPanelEvent> detached = _ =>
                     ReleaseForRoot(root);
                 var entry = new NativeActionEntry(
@@ -118,6 +134,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                     primaryActions,
                     detailsLinks,
                     details,
+                    removeDetails,
                     detached);
                 EntriesByRoot[root] = entry;
                 EntriesByToolbar[toolbar] = entry;
@@ -161,6 +178,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             }
 
             entry.Details.Dispose();
+            entry.RemoveDetails.Dispose();
         }
 
         internal static void RefreshForToolbar(object toolbar, object package)
@@ -197,6 +215,43 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                     PackageManagerGitHubPackageProjection.TryGetRepository(
                         package,
                         out repository);
+                object primaryVersion =
+                    PackageManagerSubmoduleNativePage.GetPrimaryVersion(package);
+                bool isInstalledSubmodule =
+                    PackageManagerSubmodulePresentation.TryGetPresentation(
+                        primaryVersion,
+                        out PackageManagerSubmoduleInfo submoduleInfo);
+
+                if (isInstalledSubmodule)
+                {
+                    entry.Details.Refresh(null);
+                    entry.Details.SetInstallState(false, false, string.Empty);
+                    entry.RemoveDetails.Refresh(submoduleInfo);
+                    string removeValidationError =
+                        GitSubmoduleRemoveService.ValidateInput(submoduleInfo);
+                    bool removeEnabled =
+                        string.IsNullOrWhiteSpace(removeValidationError) &&
+                        GitSubmoduleRemoveService.CanStart;
+                    string removeTooltip = removeEnabled
+                        ? "Remove this installed package through Git so its " +
+                          "submodule registration and worktree stay consistent."
+                        : string.IsNullOrWhiteSpace(removeValidationError)
+                            ? GitSubmoduleRemoveService.BuildUnavailableMessage()
+                            : removeValidationError;
+                    entry.RemoveDetails.SetRemoveState(
+                        removeEnabled,
+                        removeTooltip);
+                    if (entry.RemoveDetails.IsRemoving && GitOperationService.IsBusy)
+                    {
+                        entry.RemoveDetails.ShowRemoving(
+                            "Removing the Git submodule and refreshing Unity...");
+                    }
+                    return;
+                }
+
+                entry.RemoveDetails.Refresh(null);
+                entry.RemoveDetails.SetRemoveState(false, string.Empty);
+
                 if (!isProjectedRepository)
                 {
                     entry.Details.Refresh(null);
@@ -257,7 +312,129 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             {
                 entry.Details.Refresh(null);
                 entry.Details.SetInstallState(false, false, string.Empty);
+                entry.RemoveDetails.Refresh(null);
+                entry.RemoveDetails.SetRemoveState(false, string.Empty);
             }
+        }
+
+        /// <summary>
+        /// Harmony entry point for Unity's embedded-package Remove action. True
+        /// means the request was claimed and Unity's recursive directory delete
+        /// must be skipped; actionResult is returned to Unity's PackageAction.
+        /// </summary>
+        internal static bool TryHandleRemoveCustomAction(
+            object packageVersion,
+            out bool actionResult)
+        {
+            actionResult = false;
+            if (PackageManagerSubmodulePresentation.TryGetPresentation(
+                    packageVersion,
+                    out PackageManagerSubmoduleInfo info))
+            {
+                bool matchedEntry = false;
+                bool confirmationAvailable = false;
+                foreach (NativeActionEntry entry in EntriesByToolbar.Values)
+                {
+                    if (entry?.Toolbar == null || entry.RemoveDetails == null)
+                        continue;
+
+                    object selectedVersion = GetFieldValue(entry.Toolbar, "m_Version");
+                    if (!ReferenceEquals(selectedVersion, packageVersion) &&
+                        !SameSubmodule(entry.RemoveDetails.CurrentInfo, info))
+                    {
+                        continue;
+                    }
+
+                    matchedEntry = true;
+                    entry.RemoveDetails.Refresh(info);
+                    string validationError =
+                        GitSubmoduleRemoveService.ValidateInput(info);
+                    bool enabled =
+                        string.IsNullOrWhiteSpace(validationError) &&
+                        GitSubmoduleRemoveService.CanStart;
+                    string disabledMessage = string.IsNullOrWhiteSpace(validationError)
+                        ? GitSubmoduleRemoveService.BuildUnavailableMessage()
+                        : validationError;
+                    entry.RemoveDetails.SetRemoveState(
+                        enabled,
+                        enabled
+                            ? "Remove this installed package through Git."
+                            : disabledMessage);
+                    if (!enabled)
+                    {
+                        entry.RemoveDetails.ShowError(disabledMessage);
+                        continue;
+                    }
+
+                    // PackageAction does not expose the toolbar/window that
+                    // originated the request, and IPackageVersion instances can
+                    // be shared by multiple Package Manager windows. Mirror the
+                    // confirmation to every matching native host so the clicked
+                    // window can never appear inert because dictionary order
+                    // selected another window.
+                    entry.RemoveDetails.ShowConfirmation();
+                    confirmationAvailable = true;
+                }
+
+                if (matchedEntry)
+                {
+                    actionResult = confirmationAvailable;
+                    return true;
+                }
+
+                // A proven submodule must never fall through to Unity's raw
+                // embedded-directory deletion merely because its visual tree was
+                // recycled. Rebuild the window and leave the package intact.
+                Debug.LogWarning(
+                    "[Git Submodule Manager] Package Manager could not mount the " +
+                    "safe submodule removal controls. The package was preserved; " +
+                    "refresh Package Manager and retry.");
+                PackageManagerSubmoduleHarmonyPatch.RefreshOpenPackageManagerWindows();
+                return true;
+            }
+
+            // During the initial asynchronous snapshot, conservatively preserve
+            // direct Packages/<name> embedded packages. Once ready, an ordinary
+            // non-submodule is allowed to use Unity's native removal unchanged.
+            if (!PackageManagerSubmoduleSnapshot.IsReady &&
+                IsDirectInstalledPackagePath(packageVersion))
+            {
+                PackageManagerSubmoduleSnapshot.Refresh();
+                Debug.LogWarning(
+                    "[Git Submodule Manager] Submodule detection is still loading. " +
+                    "The package was preserved; retry Remove after Package Manager refreshes.");
+                return true;
+            }
+
+            return false;
+        }
+
+        internal static bool ShouldBlockNativeEmbeddedRemoval(string packageName)
+        {
+            if (string.IsNullOrWhiteSpace(packageName))
+                return false;
+
+            string normalizedName = packageName.Trim();
+            if (PackageManagerSubmoduleSnapshot.TryGet(
+                    normalizedName,
+                    string.Empty,
+                    true,
+                    out _))
+            {
+                return true;
+            }
+
+            if (PackageManagerSubmoduleSnapshot.IsReady ||
+                !GitUtility.IsValidUpmPackageName(normalizedName))
+            {
+                return false;
+            }
+
+            // Fail closed only during the short initial scan. This prevents a
+            // lower-level embedded removal from bypassing the interactive
+            // action guard before submodule identity is available.
+            PackageManagerSubmoduleSnapshot.Refresh();
+            return true;
         }
 
         internal static bool HasSupportedLiveContract()
@@ -412,6 +589,218 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             }
 
             return null;
+        }
+
+        private static void OnRemoveRequested(
+            VisualElement toolbar,
+            PackageManagerSubmoduleRemoveDetails sourceDetails,
+            PackageManagerSubmoduleInfo requestedInfo)
+        {
+            PackageManagerSubmoduleRemoveDetails feedbackTarget = sourceDetails;
+            try
+            {
+                if (toolbar == null || requestedInfo == null ||
+                    !EntriesByToolbar.TryGetValue(
+                        toolbar,
+                        out NativeActionEntry entry))
+                {
+                    ReportRemoveError(
+                        feedbackTarget,
+                        "Package Manager refreshed before the removal request " +
+                        "could be handled. Select the package and retry.");
+                    return;
+                }
+
+                feedbackTarget = entry.RemoveDetails;
+                object selectedPackage = GetFieldValue(toolbar, "m_Package");
+                object selectedVersion =
+                    PackageManagerSubmoduleNativePage.GetPrimaryVersion(
+                        selectedPackage);
+                if (!PackageManagerSubmodulePresentation.TryGetPresentation(
+                        selectedVersion,
+                        out PackageManagerSubmoduleInfo selectedInfo) ||
+                    !SameSubmodule(requestedInfo, selectedInfo) ||
+                    !SameSubmodule(entry.RemoveDetails.CurrentInfo, selectedInfo))
+                {
+                    ReportRemoveError(
+                        feedbackTarget,
+                        "The selected package changed before removal could start. " +
+                        "Select the installed submodule and retry.");
+                    RefreshAllEntries();
+                    return;
+                }
+
+                if (!GitSubmoduleRemoveService.TryStart(
+                        selectedInfo,
+                        completion => OnRemoveCompleted(
+                            feedbackTarget,
+                            selectedInfo,
+                            completion),
+                        out string startError))
+                {
+                    ReportRemoveError(
+                        feedbackTarget,
+                        string.IsNullOrWhiteSpace(startError)
+                            ? "The Git submodule removal could not be started."
+                            : startError);
+                    RefreshAllEntries();
+                    return;
+                }
+
+                ShowRemovingForSubmodule(selectedInfo);
+            }
+            catch (Exception exception)
+            {
+                ReportRemoveError(
+                    feedbackTarget,
+                    "The Git submodule removal could not be started: " +
+                    exception.Message);
+                RefreshAllEntries();
+            }
+        }
+
+        private static void ShowRemovingForSubmodule(
+            PackageManagerSubmoduleInfo info)
+        {
+            if (info == null)
+                return;
+
+            foreach (NativeActionEntry entry in EntriesByToolbar.Values)
+            {
+                PackageManagerSubmoduleRemoveDetails details =
+                    entry?.RemoveDetails;
+                if (details == null ||
+                    !SameSubmodule(details.CurrentInfo, info))
+                {
+                    continue;
+                }
+
+                details.ShowRemoving(
+                    $"Removing {info.PackageName} through Git and refreshing Unity...");
+            }
+        }
+
+        private static void OnRemoveCompleted(
+            PackageManagerSubmoduleRemoveDetails preferredDetails,
+            PackageManagerSubmoduleInfo info,
+            GitSubmoduleRemoveCompletion completion)
+        {
+            if (completion == null || !completion.Success)
+            {
+                ReportRemoveErrorForSubmodule(
+                    preferredDetails,
+                    info,
+                    string.IsNullOrWhiteSpace(completion?.Message)
+                        ? "The Git submodule was preserved because removal did " +
+                          "not complete safely."
+                        : completion.Message);
+                return;
+            }
+
+            try
+            {
+                PackageManagerSubmoduleSnapshot.Refresh();
+            }
+            catch (Exception exception)
+            {
+                Debug.LogWarning(
+                    "[Git Submodule Manager] The Git submodule was removed, " +
+                    "but the early Package Manager snapshot request failed. " +
+                    "Unity's package registration event will retry it: " +
+                    GitHubUtility.SanitizeUiDiagnostic(exception.Message));
+            }
+
+            string packageName = info?.PackageName ?? "the package";
+            ApplyRemoveStateForSubmodule(
+                preferredDetails,
+                info,
+                details => details.ShowCompleted(
+                    $"Removed {packageName} through Git. Unity is refreshing " +
+                    "Package Manager; review and commit the parent repository changes."));
+        }
+
+        private static void ReportRemoveErrorForSubmodule(
+            PackageManagerSubmoduleRemoveDetails preferredDetails,
+            PackageManagerSubmoduleInfo info,
+            string message)
+        {
+            string safeMessage = GitHubUtility.SanitizeUiDiagnostic(message);
+            if (string.IsNullOrWhiteSpace(safeMessage))
+                safeMessage = "The Git submodule could not be removed safely.";
+
+            ApplyRemoveStateForSubmodule(
+                preferredDetails,
+                info,
+                details => details.ShowError(safeMessage));
+            Debug.LogWarning("[Git Submodule Manager] " + safeMessage);
+        }
+
+        private static void ApplyRemoveStateForSubmodule(
+            PackageManagerSubmoduleRemoveDetails preferredDetails,
+            PackageManagerSubmoduleInfo info,
+            Action<PackageManagerSubmoduleRemoveDetails> apply)
+        {
+            if (apply == null)
+                return;
+
+            bool preferredHandled = false;
+            foreach (NativeActionEntry entry in EntriesByToolbar.Values)
+            {
+                PackageManagerSubmoduleRemoveDetails details =
+                    entry?.RemoveDetails;
+                if (details == null ||
+                    !SameSubmodule(details.CurrentInfo, info))
+                {
+                    continue;
+                }
+
+                try
+                {
+                    apply(details);
+                    preferredHandled |= ReferenceEquals(details, preferredDetails);
+                }
+                catch
+                {
+                    // Continue updating other Package Manager windows when one
+                    // visual tree is recycled during the terminal callback.
+                }
+            }
+
+            if (preferredDetails == null ||
+                preferredHandled ||
+                !SameSubmodule(preferredDetails.CurrentInfo, info))
+                return;
+
+            try
+            {
+                apply(preferredDetails);
+            }
+            catch
+            {
+                // The details hierarchy was recycled; other matching windows
+                // and the sanitized console diagnostic remain available.
+            }
+        }
+
+        private static void ReportRemoveError(
+            PackageManagerSubmoduleRemoveDetails details,
+            string message)
+        {
+            string safeMessage = GitHubUtility.SanitizeUiDiagnostic(message);
+            if (string.IsNullOrWhiteSpace(safeMessage))
+                safeMessage = "The Git submodule could not be removed safely.";
+
+            try
+            {
+                details?.ShowError(safeMessage);
+            }
+            catch
+            {
+                // The details hierarchy may have been recycled. The console
+                // diagnostic remains available and the package stays intact.
+            }
+
+            Debug.LogWarning("[Git Submodule Manager] " + safeMessage);
         }
 
         private static void OnInstallRequested(
@@ -631,42 +1020,26 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 return;
             }
 
-            string terminalErrorTitle = string.Empty;
-            string terminalErrorMessage = string.Empty;
             try
             {
+                // A verified Git add is already a successful install. Unity can
+                // register the embedded package, compile its scripts, and reload
+                // the domain after this callback returns. The durable
+                // registeredPackages/snapshot hooks reconcile the projection in
+                // that new domain, so an immediate projection result must never
+                // turn the successful Git operation into a UI error.
                 PackageManagerSubmoduleSnapshot.Refresh();
-                bool reconciled = PackageManagerGitHubPackageProjection.Reconcile(
-                    PackageManagerGitHubDiscovery.Current);
-                PackageManagerSubmoduleHarmonyPatch.RefreshOpenPackageManagerWindows();
-                if (!reconciled)
-                {
-                    terminalErrorTitle = "Package Manager Refresh Failed";
-                    terminalErrorMessage =
-                        "The package was installed, but Package Manager could not " +
-                        "update its GitHub package list. Use Refresh to retry.";
-                }
             }
             catch (Exception exception)
             {
-                terminalErrorTitle = "Package Manager Refresh Failed";
-                terminalErrorMessage =
-                    "The package was installed, but Package Manager could not refresh: " +
-                    exception.Message;
+                Debug.LogWarning(
+                    "[Git Submodule Manager] The Git submodule was installed, " +
+                    "but the early Package Manager snapshot request failed. " +
+                    "Unity's package registration event will retry it: " +
+                    GitHubUtility.SanitizeUiDiagnostic(exception.Message));
             }
 
             RefreshAllEntries();
-            if (!string.IsNullOrEmpty(terminalErrorMessage))
-            {
-                ReportInstallErrorForRepository(
-                    preferredDetails,
-                    repositoryIdentity,
-                    activeInstallIdentity,
-                    terminalErrorTitle,
-                    terminalErrorMessage);
-                return;
-            }
-
             foreach (PackageManagerGitHubDetails details in
                      FindDetailsForInstall(
                          preferredDetails,
@@ -674,7 +1047,8 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                          activeInstallIdentity))
             {
                 details.ShowInstallCompleted(
-                    "Git submodule installed. Package Manager is up to date.");
+                    "Git submodule installed. Unity is importing and compiling " +
+                    "the package; Package Manager will update automatically.");
             }
         }
 
@@ -760,6 +1134,48 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             }
 
             return null;
+        }
+
+        private static bool SameSubmodule(
+            PackageManagerSubmoduleInfo left,
+            PackageManagerSubmoduleInfo right)
+        {
+            return left != null &&
+                   right != null &&
+                   string.Equals(
+                       left.PackageName?.Trim(),
+                       right.PackageName?.Trim(),
+                       StringComparison.Ordinal) &&
+                   string.Equals(
+                       GitUtility.NormalizePath(left.PackagePath),
+                       GitUtility.NormalizePath(right.PackagePath),
+                       StringComparison.Ordinal);
+        }
+
+        private static bool IsDirectInstalledPackagePath(object packageVersion)
+        {
+            if (!PackageManagerSubmodulePresentation.TryGetVersionIdentity(
+                    packageVersion,
+                    out string packageName,
+                    out string localPath,
+                    out bool isInstalled) ||
+                !isInstalled ||
+                !GitUtility.IsValidUpmPackageName(packageName))
+            {
+                return false;
+            }
+
+            string expectedPath = PackageManagerSubmoduleSnapshotData.NormalizeFullPath(
+                Path.Combine(
+                    GitUtility.ProjectRoot,
+                    GitSubmoduleAddService.GetPackagePath(packageName)));
+            string actualPath =
+                PackageManagerSubmoduleSnapshotData.NormalizeFullPath(localPath);
+            StringComparison comparison = Path.DirectorySeparatorChar == '\\'
+                ? StringComparison.OrdinalIgnoreCase
+                : StringComparison.Ordinal;
+            return !string.IsNullOrEmpty(expectedPath) &&
+                   string.Equals(expectedPath, actualPath, comparison);
         }
 
         private static List<PackageManagerGitHubDetails> FindDetailsForInstall(
@@ -902,6 +1318,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 VisualElement primaryActionsContainer,
                 VisualElement detailsLinksContainer,
                 PackageManagerGitHubDetails details,
+                PackageManagerSubmoduleRemoveDetails removeDetails,
                 EventCallback<DetachFromPanelEvent> detachedCallback)
             {
                 Root = root;
@@ -909,6 +1326,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 PrimaryActionsContainer = primaryActionsContainer;
                 DetailsLinksContainer = detailsLinksContainer;
                 Details = details;
+                RemoveDetails = removeDetails;
                 DetachedCallback = detachedCallback;
             }
 
@@ -917,6 +1335,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             internal VisualElement PrimaryActionsContainer { get; }
             internal VisualElement DetailsLinksContainer { get; }
             internal PackageManagerGitHubDetails Details { get; }
+            internal PackageManagerSubmoduleRemoveDetails RemoveDetails { get; }
             internal EventCallback<DetachFromPanelEvent> DetachedCallback { get; }
         }
 

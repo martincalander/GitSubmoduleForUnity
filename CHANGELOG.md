@@ -40,6 +40,9 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   layouts.
 - Editor-only Harmony 2.4.1 integration with guarded hooks for supported Unity
   Package Manager internals.
+- Guarded Package Manager removal for installed submodules, with inline
+  confirmation, canonical Git cleanup, missing-worktree repair, and protection
+  against Unity's raw embedded-package directory deletion.
 - Public project documentation, contribution templates, security guidance, and
   UPM manual.
 - Repository sanity checks and tagged-release packaging workflows.

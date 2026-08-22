@@ -329,6 +329,19 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             }
 
             object primaryVersion = GetPrimaryVersion(package);
+            if (PackageManagerSubmodulePresentation.TryGetPresentation(
+                    primaryVersion,
+                    out PackageManagerSubmoduleInfo submoduleInfo))
+            {
+                string repositoryOwner = GetGitHubRepositoryOwner(submoduleInfo);
+                if (!string.IsNullOrWhiteSpace(repositoryOwner))
+                {
+                    return string.Format(
+                        L10n.Tr("Organization - {0}"),
+                        repositoryOwner);
+                }
+            }
+
             object author = GetPropertyValue(primaryVersion, "author");
             string authorName = GetPropertyValue(author, "name") as string;
             return string.IsNullOrWhiteSpace(authorName)
@@ -336,6 +349,22 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 : string.Format(
                     L10n.Tr("Organization - {0}"),
                     authorName.Trim());
+        }
+
+        internal static string GetGitHubRepositoryOwner(
+            PackageManagerSubmoduleInfo submoduleInfo)
+        {
+            if (submoduleInfo == null ||
+                !submoduleInfo.IsGitHub ||
+                !GitHubUtility.TryParseGitHubRepo(
+                    submoduleInfo.RepositoryUrl,
+                    out string repositoryOwner,
+                    out _))
+            {
+                return string.Empty;
+            }
+
+            return repositoryOwner?.Trim() ?? string.Empty;
         }
 
         internal static Type FindLoadedType(string fullName)

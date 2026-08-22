@@ -9,6 +9,9 @@ selection, and package details. Select an uninstalled discovery result, review
 its **Repository** link, select a branch (the repository default is preselected),
 and choose **Install**. Review the inline trust warning, then choose **Confirm
 Install**; the same details pane reports progress and any recoverable error.
+Installed submodules expose **Remove Submodule** in the same native details
+area. Removal uses an inline confirmation and Git's tracked removal rather than
+Unity's embedded-package directory deletion.
 **Refresh** rescans the project and GitHub.
 
 Open **Window > Package Management > Git Submodule Manager** for the complete
@@ -118,9 +121,12 @@ offers to update the worktree.
 
 ### Remove
 
-Removal is confirmed before the tool deinitializes the submodule and removes its
-tracked package path. Review the parent repository's staged changes before
-committing.
+Removal is confirmed before the tool runs Git's canonical tracked removal for
+the submodule registration and package worktree. Modified, untracked, ignored,
+conflicted, and local-only work blocks removal unless it is explicitly reviewed
+in the full management workspace. Git object metadata is retained for recovery
+and a safe re-add. Review the parent repository's staged changes before
+committing; a committed submodule removal is expected to leave staged changes.
 
 ## GitHub Discovery
 

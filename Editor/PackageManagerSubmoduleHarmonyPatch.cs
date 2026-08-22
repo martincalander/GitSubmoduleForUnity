@@ -24,12 +24,19 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             "UnityEditor.PackageManager.UI.Internal.SourceInfoCard";
         internal const string PackageToolbarTypeName =
             "UnityEditor.PackageManager.UI.Internal.PackageToolbar";
+        internal const string RemoveCustomActionTypeName =
+            "UnityEditor.PackageManager.UI.Internal.RemoveCustomAction";
+        internal const string PackageOperationDispatcherTypeName =
+            "UnityEditor.PackageManager.UI.Internal.PackageOperationDispatcher";
         internal const string PackageInterfaceTypeName =
             "UnityEditor.PackageManager.UI.Internal.IPackage";
         internal const string PackageManagerWindowTypeName =
             "UnityEditor.PackageManager.UI.PackageManagerWindow";
         internal const string RefreshMethodName = "Refresh";
         internal const string LegacyCreateTagLabelMethodName = "CreateTagLabel";
+        internal const string TriggerActionImplementationMethodName =
+            "TriggerActionImplementation";
+        internal const string RemoveEmbeddedMethodName = "RemoveEmbedded";
         internal const string PackageManagerRootFieldName = "m_Root";
         internal const string PageManagerFieldName = "m_PageManager";
         internal const string PageManagerPropertyName = "pageManager";
@@ -92,6 +99,24 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 MethodInfo toolbarPostfix = GetPackageToolbarRefreshPostfixMethod();
                 foreach (MethodInfo toolbarTarget in GetPackageToolbarTargetMethods())
                     PatchPostfixIfNeeded(toolbarTarget, toolbarPostfix);
+
+                MethodInfo removeCustomActionTarget =
+                    GetRemoveCustomActionTargetMethod();
+                if (removeCustomActionTarget != null)
+                {
+                    PatchPrefixIfNeeded(
+                        removeCustomActionTarget,
+                        GetRemoveCustomActionPrefixMethod());
+                }
+
+                MethodInfo removeEmbeddedTarget =
+                    GetPackageOperationDispatcherRemoveEmbeddedTargetMethod();
+                if (removeEmbeddedTarget != null)
+                {
+                    PatchPrefixIfNeeded(
+                        removeEmbeddedTarget,
+                        GetPackageOperationDispatcherRemoveEmbeddedPrefixMethod());
+                }
 
                 bool tagPatchApplied = IsAnyTagPatchApplied();
                 if (tagPatchApplied)
@@ -179,6 +204,54 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             return methods;
         }
 
+        internal static MethodInfo GetRemoveCustomActionTargetMethod()
+        {
+            Type actionType = FindLoadedType(RemoveCustomActionTypeName);
+            if (actionType == null)
+                return null;
+
+            foreach (MethodInfo method in actionType.GetMethods(
+                         AnyInstance | BindingFlags.DeclaredOnly))
+            {
+                ParameterInfo[] parameters = method.GetParameters();
+                if (method.Name == TriggerActionImplementationMethodName &&
+                    !method.IsStatic &&
+                    method.ReturnType == typeof(bool) &&
+                    parameters.Length == 1 &&
+                    IsPackageVersionParameter(parameters[0]))
+                {
+                    return method;
+                }
+            }
+
+            return null;
+        }
+
+        internal static MethodInfo
+            GetPackageOperationDispatcherRemoveEmbeddedTargetMethod()
+        {
+            Type dispatcherType = FindLoadedType(PackageOperationDispatcherTypeName);
+            if (dispatcherType == null)
+                return null;
+
+            foreach (MethodInfo method in dispatcherType.GetMethods(
+                         AnyInstance | BindingFlags.DeclaredOnly))
+            {
+                ParameterInfo[] parameters = method.GetParameters();
+                if (method.Name == RemoveEmbeddedMethodName &&
+                    !method.IsStatic &&
+                    method.ReturnType == typeof(void) &&
+                    parameters.Length == 1 &&
+                    parameters[0].ParameterType.FullName ==
+                    PackageInterfaceTypeName)
+                {
+                    return method;
+                }
+            }
+
+            return null;
+        }
+
         internal static Type FindLoadedType(string fullName)
         {
             if (string.IsNullOrWhiteSpace(fullName))
@@ -229,6 +302,21 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 AnyStatic);
         }
 
+        internal static MethodInfo GetRemoveCustomActionPrefixMethod()
+        {
+            return typeof(PackageManagerSubmoduleHarmonyPatch).GetMethod(
+                nameof(RemoveCustomActionPrefix),
+                AnyStatic);
+        }
+
+        internal static MethodInfo
+            GetPackageOperationDispatcherRemoveEmbeddedPrefixMethod()
+        {
+            return typeof(PackageManagerSubmoduleHarmonyPatch).GetMethod(
+                nameof(PackageOperationDispatcherRemoveEmbeddedPrefix),
+                AnyStatic);
+        }
+
         internal static bool IsAnyTagPatchApplied()
         {
             MethodInfo refreshPostfix = GetTagRefreshPostfixMethod();
@@ -265,6 +353,21 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             return false;
         }
 
+        internal static bool IsRemoveCustomActionPatchApplied()
+        {
+            return IsPrefixApplied(
+                GetRemoveCustomActionTargetMethod(),
+                GetRemoveCustomActionPrefixMethod());
+        }
+
+        internal static bool
+            IsPackageOperationDispatcherRemoveEmbeddedPatchApplied()
+        {
+            return IsPrefixApplied(
+                GetPackageOperationDispatcherRemoveEmbeddedTargetMethod(),
+                GetPackageOperationDispatcherRemoveEmbeddedPrefixMethod());
+        }
+
         internal static bool IsPatchApplied(MethodBase target, MethodInfo postfix)
         {
             if (target == null || postfix == null)
@@ -279,6 +382,31 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 foreach (Patch patch in patchInfo.Postfixes)
                 {
                     if (patch.owner == HarmonyId && patch.PatchMethod == postfix)
+                        return true;
+                }
+            }
+            catch
+            {
+                return false;
+            }
+
+            return false;
+        }
+
+        internal static bool IsPrefixApplied(MethodBase target, MethodInfo prefix)
+        {
+            if (target == null || prefix == null)
+                return false;
+
+            try
+            {
+                Patches patchInfo = Harmony.GetPatchInfo(target);
+                if (patchInfo == null)
+                    return false;
+
+                foreach (Patch patch in patchInfo.Prefixes)
+                {
+                    if (patch.owner == HarmonyId && patch.PatchMethod == prefix)
                         return true;
                 }
             }
@@ -527,6 +655,14 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 return;
 
             harmony.Patch(target, postfix: new HarmonyMethod(postfix));
+        }
+
+        private static void PatchPrefixIfNeeded(MethodInfo target, MethodInfo prefix)
+        {
+            if (target == null || prefix == null || IsPrefixApplied(target, prefix))
+                return;
+
+            harmony.Patch(target, prefix: new HarmonyMethod(prefix));
         }
 
         private static void TagRefreshPostfix(object __instance, object __0)
@@ -933,6 +1069,67 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             catch
             {
                 // Fail open so Unity's built-in toolbar remains authoritative.
+            }
+        }
+
+        private static bool RemoveCustomActionPrefix(object __0, ref bool __result)
+        {
+            try
+            {
+                if (!PackageManagerGitHubNativeActions.TryHandleRemoveCustomAction(
+                        __0,
+                        out bool actionResult))
+                {
+                    return true;
+                }
+
+                __result = actionResult;
+                return false;
+            }
+            catch
+            {
+                // A changed or unrelated Package Manager contract stays native.
+                // Known submodules fail closed so Unity cannot delete their
+                // checkout without updating the parent repository metadata.
+                try
+                {
+                    if (PackageManagerSubmodulePresentation.TryGetPresentation(
+                            __0,
+                            out _))
+                    {
+                        __result = false;
+                        return false;
+                    }
+                }
+                catch
+                {
+                    // Fall through only when this is not recognizably a submodule.
+                }
+
+                return true;
+            }
+        }
+
+        private static bool PackageOperationDispatcherRemoveEmbeddedPrefix(
+            object __0)
+        {
+            try
+            {
+                object versions = GetPropertyValue(__0, "versions");
+                object installedVersion = GetPropertyValue(versions, "installed");
+                if (installedVersion == null)
+                    return true;
+
+                string packageName = GetPropertyValue(__0, "name") as string;
+                return !PackageManagerGitHubNativeActions
+                    .ShouldBlockNativeEmbeddedRemoval(packageName);
+            }
+            catch
+            {
+                // The interactive RemoveCustomAction prefix handles loading and
+                // diagnostics. This lower-level guard blocks only a proven
+                // snapshot match and otherwise preserves Unity's native behavior.
+                return true;
             }
         }
 

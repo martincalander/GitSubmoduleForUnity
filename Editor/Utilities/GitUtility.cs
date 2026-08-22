@@ -27,6 +27,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         internal bool HasConflicts;
         internal bool HasLocalOnlyCommits;
         internal bool HasParentChanges;
+        internal bool HasOnlyParentGitlinkChanges;
         internal bool HasUnverifiedWorktreeContents;
         internal int LocalOnlyCommitCount;
         internal string HeadCommit = string.Empty;
@@ -37,7 +38,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             !HasWorkingTreeChanges &&
             !HasConflicts &&
             !HasLocalOnlyCommits &&
-            !HasParentChanges;
+            (!HasParentChanges || HasOnlyParentGitlinkChanges);
 
         internal string BuildWarning()
         {
@@ -50,7 +51,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 risks.Add("files in a package directory that is not an initialized submodule worktree");
             if (HasLocalOnlyCommits)
                 risks.Add($"{Math.Max(1, LocalOnlyCommitCount)} commit(s) not present on any remote");
-            if (HasParentChanges)
+            if (HasParentChanges && !HasOnlyParentGitlinkChanges)
                 risks.Add("an uncommitted or staged submodule revision in the parent repository");
 
             return risks.Count == 0
@@ -79,6 +80,14 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         internal byte[] GitModulesContents = Array.Empty<byte>();
     }
 
+    internal sealed class RemoveSubmoduleGitModulesPlan
+    {
+        internal bool ExistedInHead;
+        internal byte[] ExpectedContents = Array.Empty<byte>();
+        internal byte[] ExpectedGitProducedContents = Array.Empty<byte>();
+        internal string ExpectedGitProducedBlobId = string.Empty;
+    }
+
     internal static class GitUtility
     {
         private const int MaxPackageJsonLength = 1024 * 1024;
@@ -104,6 +113,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         private static string cachedProjectRoot;
         private static string projectRootOverride;
         private static string gitExecutableOverride;
+        private static Action<string> beforeGitModulesCleanupMoveForTests;
         [ThreadStatic] private static bool commandTerminationUnconfirmed;
 
         internal static string ProjectRoot
@@ -145,6 +155,13 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 ? null
                 : Path.GetFullPath(projectRoot);
             return new DisposableAction(() => projectRootOverride = previous);
+        }
+
+        internal static IDisposable OverrideBeforeGitModulesCleanupMoveForTests(Action<string> action)
+        {
+            Action<string> previous = beforeGitModulesCleanupMoveForTests;
+            beforeGitModulesCleanupMoveForTests = action;
+            return new DisposableAction(() => beforeGitModulesCleanupMoveForTests = previous);
         }
 
         internal static bool IsValidPackageName(string packageName)
@@ -1174,7 +1191,13 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             }
 
             cancellationToken.ThrowIfCancellationRequested();
-            if (!TryEnsureParentMutationStateIsSafe(out error, cancellationToken))
+            if (!TryEnsureParentRemovalMutationStateIsSafe(out error, cancellationToken))
+                return false;
+
+            if (!TryValidateRemovalRegistrationAndGitlink(
+                    normalizedPath,
+                    out error,
+                    cancellationToken))
                 return false;
 
             var parentStatus = RunGit(
@@ -1195,11 +1218,32 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 return false;
 
             assessment.HasParentChanges = !string.IsNullOrWhiteSpace(parentStatus.StdOut);
+            // The status query is scoped to the exact package path, and the
+            // index entry above was proven to be a single stage-0 gitlink.
+            // Removing that pointer does not discard package work; the child
+            // worktree checks below remain responsible for protecting it.
+            assessment.HasOnlyParentGitlinkChanges = assessment.HasParentChanges;
             assessment.ParentStatus = parentStatus.StdOut ?? string.Empty;
 
             string packagePath = Path.Combine(ProjectRoot, normalizedPath);
             if (!Directory.Exists(packagePath))
+            {
+                if (!TryInspectFileSystemEntryPresence(
+                        packagePath,
+                        out bool entryExists,
+                        out error,
+                        cancellationToken))
+                    return false;
+
+                if (entryExists)
+                {
+                    assessment.HasWorkingTreeChanges = true;
+                    assessment.HasUnverifiedWorktreeContents = true;
+                    assessment.WorktreeStatus = "An unverified filesystem entry exists at the package path.\n";
+                }
+
                 return true;
+            }
 
             if (!TryInspectExactSubmoduleWorktree(
                     normalizedPath,
@@ -1393,7 +1437,37 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             }
 
             cancellationToken.ThrowIfCancellationRequested();
-            string force = discardLocalWork ? "-f " : string.Empty;
+            if (!TryAssessSubmoduleRemoval(
+                    normalizedPath,
+                    out SubmoduleRemovalAssessment finalAssessment,
+                    out error,
+                    cancellationToken))
+                return false;
+
+            if (!RemovalAssessmentMatches(assessment, finalAssessment))
+            {
+                error =
+                    "The package or parent repository changed immediately before removal. " +
+                    "Nothing was removed; review the current state and retry.";
+                return false;
+            }
+
+            assessment = finalAssessment;
+
+            if (!TryPrepareGitModulesRemoval(
+                    normalizedPath,
+                    out RemoveSubmoduleGitModulesPlan gitModulesPlan,
+                    out error,
+                    cancellationToken))
+                return false;
+
+            // A staged or unstaged gitlink revision makes plain `git rm`
+            // refuse even after the child worktree has been proven safe. Force
+            // only the parent-index removal in that case; dirty, untracked,
+            // ignored, and local-only child work still require explicit discard.
+            string force = discardLocalWork || assessment.HasOnlyParentGitlinkChanges
+                ? "-f "
+                : string.Empty;
             outcome = GitOperationCompletionOutcome.FailedUnsafe;
             var rmResult = RunGit(
                 $"rm {force}-- {Quote(normalizedPath)}",
@@ -1405,6 +1479,15 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 error = BuildCommandError(
                     "Git did not complete the removal. No manual metadata deletion was attempted; inspect the repository before retrying",
                     rmResult);
+                return false;
+            }
+
+            cancellationToken.ThrowIfCancellationRequested();
+            if (!TryApplyGitModulesRemoval(gitModulesPlan, out error, cancellationToken))
+            {
+                error =
+                    "The parent gitlink was removed, but .gitmodules could not be restored without changing unrelated content. " +
+                    error;
                 return false;
             }
 
@@ -1474,6 +1557,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                    expected.HasConflicts == current.HasConflicts &&
                    expected.HasLocalOnlyCommits == current.HasLocalOnlyCommits &&
                    expected.HasParentChanges == current.HasParentChanges &&
+                   expected.HasOnlyParentGitlinkChanges == current.HasOnlyParentGitlinkChanges &&
                    expected.HasUnverifiedWorktreeContents == current.HasUnverifiedWorktreeContents &&
                    expected.LocalOnlyCommitCount == current.LocalOnlyCommitCount &&
                    string.Equals(expected.HeadCommit, current.HeadCommit, StringComparison.OrdinalIgnoreCase) &&
@@ -2270,6 +2354,27 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             out string error,
             CancellationToken cancellationToken)
         {
+            if (!TryInspectFileSystemEntryPresence(
+                    path,
+                    out bool entryExists,
+                    out error,
+                    cancellationToken))
+                return false;
+
+            if (!entryExists)
+                return true;
+
+            error = "A filesystem entry remains at the managed package path.";
+            return false;
+        }
+
+        private static bool TryInspectFileSystemEntryPresence(
+            string path,
+            out bool entryExists,
+            out string error,
+            CancellationToken cancellationToken)
+        {
+            entryExists = false;
             error = string.Empty;
             try
             {
@@ -2288,8 +2393,8 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                     if (!string.Equals(Path.GetFullPath(entry), fullPath, comparison))
                         continue;
 
-                    error = "A filesystem entry remains at the managed package path.";
-                    return false;
+                    entryExists = true;
+                    return true;
                 }
 
                 return true;
@@ -3987,6 +4092,27 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             out string error,
             CancellationToken cancellationToken = default(CancellationToken))
         {
+            return TryEnsureParentMutationStateIsSafe(
+                false,
+                out error,
+                cancellationToken);
+        }
+
+        private static bool TryEnsureParentRemovalMutationStateIsSafe(
+            out string error,
+            CancellationToken cancellationToken = default(CancellationToken))
+        {
+            return TryEnsureParentMutationStateIsSafe(
+                true,
+                out error,
+                cancellationToken);
+        }
+
+        private static bool TryEnsureParentMutationStateIsSafe(
+            bool allowStagedGitModulesChanges,
+            out string error,
+            CancellationToken cancellationToken)
+        {
             error = string.Empty;
 
             cancellationToken.ThrowIfCancellationRequested();
@@ -4003,12 +4129,15 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                     cancellationToken))
                 return false;
 
-            if (!TryRunQuietCheck(
-                    "diff --cached --quiet -- .gitmodules",
-                    "The staged copy of .gitmodules has unrelated changes. Commit or stash them before changing submodules.",
-                    out error,
-                    cancellationToken))
-                return false;
+            if (!allowStagedGitModulesChanges)
+            {
+                if (!TryRunQuietCheck(
+                        "diff --cached --quiet -- .gitmodules",
+                        "The staged copy of .gitmodules has unrelated changes. Commit or stash them before changing submodules.",
+                        out error,
+                        cancellationToken))
+                    return false;
+            }
 
             var conflictResult = RunGit(
                 "diff --name-only --diff-filter=U",
@@ -4068,6 +4197,867 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             }
 
             return true;
+        }
+
+        private static bool TryValidateRemovalRegistrationAndGitlink(
+            string normalizedPath,
+            out string error,
+            CancellationToken cancellationToken)
+        {
+            error = string.Empty;
+            if (!TryFindSubmoduleNameForPath(
+                    normalizedPath,
+                    out string submoduleName,
+                    out bool isRegistered,
+                    out error,
+                    cancellationToken))
+                return false;
+
+            if (!isRegistered || string.IsNullOrWhiteSpace(submoduleName))
+            {
+                error =
+                    ".gitmodules does not contain a unique registration for the package path. " +
+                    "Nothing was removed from the parent index.";
+                return false;
+            }
+
+            var indexResult = RunGit(
+                $"ls-files --stage -- {Quote(normalizedPath)}",
+                ProjectRoot,
+                5000,
+                cancellationToken);
+            if (!TryParseGitlink(indexResult, normalizedPath, out _, out error))
+                return false;
+
+            return true;
+        }
+
+        private static bool TryPrepareGitModulesRemoval(
+            string normalizedPath,
+            out RemoveSubmoduleGitModulesPlan plan,
+            out string error,
+            CancellationToken cancellationToken)
+        {
+            plan = null;
+            error = string.Empty;
+            if (!TryFindSubmoduleNameForPath(
+                    normalizedPath,
+                    out string submoduleName,
+                    out bool isRegistered,
+                    out error,
+                    cancellationToken) ||
+                !isRegistered ||
+                string.IsNullOrWhiteSpace(submoduleName))
+            {
+                if (string.IsNullOrWhiteSpace(error))
+                    error = ".gitmodules no longer contains the uniquely verified package registration.";
+                return false;
+            }
+
+            byte[] currentContents;
+            try
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                currentContents = File.ReadAllBytes(Path.Combine(ProjectRoot, ".gitmodules"));
+                cancellationToken.ThrowIfCancellationRequested();
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                error = $"Failed to capture .gitmodules before removal: {ex.Message}";
+                return false;
+            }
+
+            if (!TryRemoveSubmoduleSectionContents(
+                    currentContents,
+                    submoduleName,
+                    out byte[] expectedContents,
+                    out error))
+                return false;
+
+            if (!TryComputeGitProducedGitModulesState(
+                    currentContents,
+                    submoduleName,
+                    out byte[] expectedGitProducedContents,
+                    out string expectedGitProducedBlobId,
+                    out error,
+                    cancellationToken))
+                return false;
+
+            var headEntryResult = RunGit(
+                "ls-tree --full-tree --name-only HEAD -- .gitmodules",
+                ProjectRoot,
+                5000,
+                cancellationToken);
+            if (!TryRequireCompleteStructuralOutput(
+                    headEntryResult,
+                    ".gitmodules HEAD-state inspection",
+                    out error))
+                return false;
+            if (!headEntryResult.IsSuccess)
+            {
+                error = BuildCommandError("Failed to inspect .gitmodules in HEAD", headEntryResult);
+                return false;
+            }
+
+            string headEntry = (headEntryResult.StdOut ?? string.Empty).Trim();
+            if (!string.IsNullOrEmpty(headEntry) &&
+                !string.Equals(headEntry, ".gitmodules", StringComparison.Ordinal))
+            {
+                error = "Git returned an unexpected .gitmodules entry while preparing removal.";
+                return false;
+            }
+
+            plan = new RemoveSubmoduleGitModulesPlan
+            {
+                ExistedInHead = string.Equals(headEntry, ".gitmodules", StringComparison.Ordinal),
+                ExpectedContents = expectedContents,
+                ExpectedGitProducedContents = expectedGitProducedContents,
+                ExpectedGitProducedBlobId = expectedGitProducedBlobId
+            };
+            return true;
+        }
+
+        private static bool TryApplyGitModulesRemoval(
+            RemoveSubmoduleGitModulesPlan plan,
+            out string error,
+            CancellationToken cancellationToken)
+        {
+            error = string.Empty;
+            if (plan == null || plan.ExpectedContents == null)
+            {
+                error = "The verified .gitmodules removal plan is missing.";
+                return false;
+            }
+
+            if (!TryVerifyGitProducedGitModulesState(
+                    plan,
+                    out FileStream lockedWorktreeStream,
+                    out error,
+                    cancellationToken))
+                return false;
+
+            string gitModulesPath = Path.Combine(ProjectRoot, ".gitmodules");
+            try
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                if (plan.ExpectedContents.Length == 0 && !plan.ExistedInHead)
+                {
+                    lockedWorktreeStream?.Dispose();
+                    lockedWorktreeStream = null;
+                    if (!TryQuarantineGitModulesCleanupEntry(
+                            plan,
+                            out error,
+                            cancellationToken))
+                        return false;
+
+                    if (!TryVerifyGitProducedGitModulesIndexState(
+                            plan,
+                            out error,
+                            cancellationToken))
+                        return false;
+
+                    if (!TryVerifyFileSystemEntryAbsent(
+                            gitModulesPath,
+                            out error,
+                            cancellationToken))
+                    {
+                        error =
+                            ".gitmodules reappeared immediately before index cleanup. " +
+                            "The concurrent filesystem entry was preserved and automatic restoration stopped. " +
+                            error;
+                        return false;
+                    }
+
+                    var resetResult = RunGit(
+                        "reset -- .gitmodules",
+                        ProjectRoot,
+                        CliCommandRunner.DefaultTimeoutMs,
+                        cancellationToken);
+                    if (!resetResult.IsSuccess)
+                    {
+                        error = BuildCommandError("Failed to remove the newly-created empty .gitmodules entry", resetResult);
+                        return false;
+                    }
+
+                    var trackedResult = RunGit(
+                        "ls-files --error-unmatch -- .gitmodules",
+                        ProjectRoot,
+                        5000,
+                        cancellationToken);
+                    if (trackedResult.IsSuccess || trackedResult.ExitCode != 1)
+                    {
+                        error = trackedResult.IsSuccess
+                            ? "The newly-created empty .gitmodules entry remains in the parent index."
+                            : BuildCommandError("Failed to verify .gitmodules index cleanup", trackedResult);
+                        return false;
+                    }
+
+                    return TryVerifyFileSystemEntryAbsent(gitModulesPath, out error, cancellationToken);
+                }
+
+                if (lockedWorktreeStream != null)
+                {
+                    WriteBytesToLockedStream(lockedWorktreeStream, plan.ExpectedContents);
+                    lockedWorktreeStream.Dispose();
+                    lockedWorktreeStream = null;
+                }
+                else
+                {
+                    using (var stream = new FileStream(
+                               gitModulesPath,
+                               FileMode.CreateNew,
+                               FileAccess.Write,
+                               FileShare.None))
+                    {
+                        WriteBytesToLockedStream(stream, plan.ExpectedContents);
+                    }
+                }
+
+                if (!TryVerifyGitProducedGitModulesIndexState(
+                        plan,
+                        out error,
+                        cancellationToken))
+                    return false;
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                error = $"Failed to restore the verified .gitmodules contents: {ex.Message}";
+                return false;
+            }
+            finally
+            {
+                lockedWorktreeStream?.Dispose();
+            }
+
+            cancellationToken.ThrowIfCancellationRequested();
+            var addResult = RunGit(
+                "add -- .gitmodules",
+                ProjectRoot,
+                CliCommandRunner.DefaultTimeoutMs,
+                cancellationToken);
+            if (!addResult.IsSuccess)
+            {
+                error = BuildCommandError("Failed to stage the verified .gitmodules contents", addResult);
+                return false;
+            }
+
+            try
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                if (!File.ReadAllBytes(gitModulesPath).SequenceEqual(plan.ExpectedContents))
+                {
+                    error = ".gitmodules changed while its verified removal result was being staged.";
+                    return false;
+                }
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                error = $"Failed to verify the restored .gitmodules contents: {ex.Message}";
+                return false;
+            }
+
+            return TryRunQuietCheck(
+                "diff --quiet -- .gitmodules",
+                "The staged and working copies of .gitmodules differ after removal.",
+                out error,
+                cancellationToken);
+        }
+
+        private static void WriteBytesToLockedStream(FileStream stream, byte[] contents)
+        {
+            stream.Position = 0;
+            stream.SetLength(0);
+            byte[] value = contents ?? Array.Empty<byte>();
+            stream.Write(value, 0, value.Length);
+            stream.Flush(true);
+        }
+
+        private static bool TryQuarantineGitModulesCleanupEntry(
+            RemoveSubmoduleGitModulesPlan plan,
+            out string error,
+            CancellationToken cancellationToken)
+        {
+            error = string.Empty;
+            string gitModulesPath = Path.Combine(ProjectRoot, ".gitmodules");
+            string preservedDestination = string.Empty;
+            try
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                beforeGitModulesCleanupMoveForTests?.Invoke(gitModulesPath);
+                cancellationToken.ThrowIfCancellationRequested();
+
+                if (!TryInspectFileSystemEntryPresence(
+                        gitModulesPath,
+                        out bool entryExists,
+                        out error,
+                        cancellationToken))
+                    return false;
+
+                if (!entryExists)
+                {
+                    if (plan.ExpectedGitProducedContents.Length == 0)
+                        return true;
+
+                    error = ".gitmodules disappeared before its verified cleanup state could be quarantined.";
+                    return false;
+                }
+
+                if (!File.Exists(gitModulesPath) || Directory.Exists(gitModulesPath))
+                {
+                    error =
+                        ".gitmodules changed to an unsupported filesystem entry during cleanup. " +
+                        "The entry was preserved at its original path.";
+                    return false;
+                }
+
+                FileAttributes attributes = File.GetAttributes(gitModulesPath);
+                if ((attributes & FileAttributes.ReparsePoint) != 0)
+                {
+                    error =
+                        ".gitmodules changed to a symbolic link or reparse point during cleanup. " +
+                        "The entry was preserved at its original path.";
+                    return false;
+                }
+
+                string recoveryDirectory = Path.Combine(
+                    ResolveRecoveryRoot(ProjectRoot),
+                    "GitModulesCleanup");
+                string destination = Path.Combine(
+                    recoveryDirectory,
+                    $"{DateTime.UtcNow:yyyyMMdd-HHmmssfff}-{Guid.NewGuid():N}.gitmodules");
+                if (!TryValidateProjectOwnedPath(destination, out error))
+                    return false;
+
+                Directory.CreateDirectory(recoveryDirectory);
+                if (!TryValidateProjectOwnedPath(destination, out error))
+                    return false;
+
+                File.Move(gitModulesPath, destination);
+                preservedDestination = destination;
+
+                byte[] movedContents;
+                using (var movedStream = new FileStream(
+                           destination,
+                           FileMode.Open,
+                           FileAccess.Read,
+                           FileShare.None))
+                {
+                    if (!TryReadLockedStreamBytes(movedStream, out movedContents, out error))
+                    {
+                        error += $" The moved entry was preserved at {destination}.";
+                        return false;
+                    }
+                }
+
+                if (!movedContents.SequenceEqual(plan.ExpectedGitProducedContents))
+                {
+                    error =
+                        ".gitmodules was replaced or edited during cleanup. " +
+                        $"The concurrent data was preserved at {destination}; automatic index cleanup stopped.";
+                    return false;
+                }
+
+                // Keep even the verified Git-produced (normally empty) entry in
+                // Library. Avoiding deletion means a writer that already held
+                // the moved inode can never have later bytes unlinked.
+                return true;
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                error = $"Failed to quarantine .gitmodules safely during cleanup: {ex.Message}";
+                if (!string.IsNullOrEmpty(preservedDestination))
+                    error += $" The moved entry remains preserved at {preservedDestination}.";
+                return false;
+            }
+        }
+
+        private static bool TryComputeGitProducedGitModulesState(
+            byte[] currentContents,
+            string submoduleName,
+            out byte[] expectedContents,
+            out string expectedBlobId,
+            out string error,
+            CancellationToken cancellationToken)
+        {
+            expectedContents = Array.Empty<byte>();
+            expectedBlobId = string.Empty;
+            error = string.Empty;
+            string temporaryPath = string.Empty;
+            bool succeeded = false;
+            try
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                string temporaryDirectory = Path.Combine(
+                    ProjectRoot,
+                    "Library",
+                    "GitSubmoduleManager",
+                    "TemporaryGitModules");
+                temporaryPath = Path.Combine(
+                    temporaryDirectory,
+                    Guid.NewGuid().ToString("N") + ".gitmodules");
+                if (!TryValidateProjectOwnedPath(temporaryPath, out error))
+                    return false;
+
+                Directory.CreateDirectory(temporaryDirectory);
+                // Recheck after creation so a concurrent directory redirect
+                // cannot turn the validated path into an external location.
+                if (!TryValidateProjectOwnedPath(temporaryPath, out error))
+                    return false;
+
+                byte[] source = currentContents ?? Array.Empty<byte>();
+                bool hasUtf8Bom = HasUtf8Bom(source);
+                using (var stream = new FileStream(
+                           temporaryPath,
+                           FileMode.CreateNew,
+                           FileAccess.Write,
+                           FileShare.None))
+                {
+                    stream.Write(source, 0, source.Length);
+                    stream.Flush(true);
+                }
+
+                if (!hasUtf8Bom)
+                {
+                    var removeSectionResult = RunGit(
+                        $"config --file {Quote(temporaryPath)} --remove-section {Quote("submodule." + submoduleName)}",
+                        ProjectRoot,
+                        CliCommandRunner.DefaultTimeoutMs,
+                        cancellationToken);
+                    if (!removeSectionResult.IsSuccess)
+                    {
+                        error = BuildCommandError(
+                            "Failed to predict Git's .gitmodules removal result",
+                            removeSectionResult);
+                        return false;
+                    }
+                }
+
+                // With a UTF-8 BOM, Git removes the gitlink but leaves the
+                // .gitmodules worktree and index bytes unchanged. Model that
+                // exact intermediate CAS state. The independently-computed
+                // final ExpectedContents still removes only the target section
+                // while retaining the BOM and original line endings. If a Git
+                // version later rewrites BOM-prefixed config, the post-rm CAS
+                // will fail closed without overwriting its unexpected result.
+                expectedContents = File.ReadAllBytes(temporaryPath);
+                var hashResult = RunGit(
+                    $"hash-object --path=.gitmodules -- {Quote(temporaryPath)}",
+                    ProjectRoot,
+                    5000,
+                    cancellationToken);
+                if (!TryRequireCompleteStructuralOutput(
+                        hashResult,
+                        "Predicted .gitmodules blob inspection",
+                        out error))
+                    return false;
+                expectedBlobId = hashResult.StdOut?.Trim() ?? string.Empty;
+                if (!hashResult.IsSuccess ||
+                    !Regex.IsMatch(
+                        expectedBlobId,
+                        "^[0-9a-fA-F]{40,64}$",
+                        RegexOptions.CultureInvariant))
+                {
+                    error = BuildCommandError(
+                        "Failed to hash Git's predicted .gitmodules result",
+                        hashResult);
+                    return false;
+                }
+
+                succeeded = true;
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                error = $"Failed to prepare the .gitmodules compare-and-swap state: {ex.Message}";
+            }
+            finally
+            {
+                if (!string.IsNullOrEmpty(temporaryPath) && File.Exists(temporaryPath))
+                {
+                    try
+                    {
+                        File.Delete(temporaryPath);
+                    }
+                    catch (Exception ex)
+                    {
+                        if (succeeded)
+                        {
+                            error = $"Failed to remove the temporary .gitmodules snapshot: {ex.Message}";
+                            succeeded = false;
+                        }
+                    }
+                }
+            }
+
+            if (!succeeded)
+            {
+                expectedContents = Array.Empty<byte>();
+                expectedBlobId = string.Empty;
+            }
+
+            return succeeded;
+        }
+
+        private static bool HasUtf8Bom(byte[] contents)
+        {
+            return contents != null &&
+                   contents.Length >= 3 &&
+                   contents[0] == 0xef &&
+                   contents[1] == 0xbb &&
+                   contents[2] == 0xbf;
+        }
+
+        private static bool TryVerifyGitProducedGitModulesState(
+            RemoveSubmoduleGitModulesPlan plan,
+            out FileStream lockedWorktreeStream,
+            out string error,
+            CancellationToken cancellationToken)
+        {
+            lockedWorktreeStream = null;
+            error = string.Empty;
+            if (plan.ExpectedGitProducedContents == null ||
+                !Regex.IsMatch(
+                    plan.ExpectedGitProducedBlobId ?? string.Empty,
+                    "^[0-9a-fA-F]{40,64}$",
+                    RegexOptions.CultureInvariant))
+            {
+                error = "The predicted .gitmodules compare-and-swap state is invalid.";
+                return false;
+            }
+
+            if (!TryRunQuietCheck(
+                    "diff --quiet -- .gitmodules",
+                    ".gitmodules changed after Git removed the package. The concurrent edit was preserved and automatic restoration stopped.",
+                    out error,
+                    cancellationToken))
+                return false;
+
+            if (!TryOpenVerifiedGitProducedGitModulesWorktree(
+                    plan,
+                    out lockedWorktreeStream,
+                    out error,
+                    cancellationToken))
+                return false;
+
+            if (TryVerifyGitProducedGitModulesIndexState(plan, out error, cancellationToken))
+                return true;
+
+            lockedWorktreeStream?.Dispose();
+            lockedWorktreeStream = null;
+            return false;
+        }
+
+        private static bool TryOpenVerifiedGitProducedGitModulesWorktree(
+            RemoveSubmoduleGitModulesPlan plan,
+            out FileStream lockedWorktreeStream,
+            out string error,
+            CancellationToken cancellationToken)
+        {
+            lockedWorktreeStream = null;
+            error = string.Empty;
+            string gitModulesPath = Path.Combine(ProjectRoot, ".gitmodules");
+            if (!TryInspectFileSystemEntryPresence(
+                    gitModulesPath,
+                    out bool worktreeEntryExists,
+                    out error,
+                    cancellationToken))
+                return false;
+
+            if (worktreeEntryExists)
+            {
+                if (!File.Exists(gitModulesPath) || Directory.Exists(gitModulesPath))
+                {
+                    error = ".gitmodules changed to an unsupported filesystem entry after Git removed the package.";
+                    return false;
+                }
+
+                try
+                {
+                    FileAttributes attributes = File.GetAttributes(gitModulesPath);
+                    if ((attributes & FileAttributes.ReparsePoint) != 0)
+                    {
+                        error = ".gitmodules changed to a symbolic link or reparse point after Git removed the package.";
+                        return false;
+                    }
+
+                    var stream = new FileStream(
+                        gitModulesPath,
+                        FileMode.Open,
+                        FileAccess.ReadWrite,
+                        FileShare.None);
+                    if (!TryReadLockedStreamBytes(stream, out byte[] currentContents, out error))
+                    {
+                        stream.Dispose();
+                        return false;
+                    }
+
+                    if (!currentContents.SequenceEqual(plan.ExpectedGitProducedContents))
+                    {
+                        stream.Dispose();
+                        error =
+                            ".gitmodules changed after Git removed the package. " +
+                            "The concurrent worktree edit was preserved and automatic restoration stopped.";
+                        return false;
+                    }
+
+                    lockedWorktreeStream = stream;
+                }
+                catch (Exception ex)
+                {
+                    error = $"Failed to verify .gitmodules after Git removed the package: {ex.Message}";
+                    return false;
+                }
+            }
+            else if (plan.ExpectedGitProducedContents.Length != 0)
+            {
+                error = ".gitmodules disappeared after Git removed the package; automatic restoration stopped.";
+                return false;
+            }
+
+            return true;
+        }
+
+        private static bool TryReadLockedStreamBytes(
+            FileStream stream,
+            out byte[] contents,
+            out string error)
+        {
+            contents = Array.Empty<byte>();
+            error = string.Empty;
+            if (stream.Length > int.MaxValue)
+            {
+                error = ".gitmodules is too large to verify safely.";
+                return false;
+            }
+
+            contents = new byte[(int)stream.Length];
+            stream.Position = 0;
+            int offset = 0;
+            while (offset < contents.Length)
+            {
+                int read = stream.Read(contents, offset, contents.Length - offset);
+                if (read <= 0)
+                {
+                    error = ".gitmodules changed length while it was being verified.";
+                    contents = Array.Empty<byte>();
+                    return false;
+                }
+
+                offset += read;
+            }
+
+            stream.Position = 0;
+            return true;
+        }
+
+        private static bool TryVerifyGitProducedGitModulesIndexState(
+            RemoveSubmoduleGitModulesPlan plan,
+            out string error,
+            CancellationToken cancellationToken)
+        {
+            error = string.Empty;
+
+            var indexResult = RunGit(
+                "ls-files --stage -- .gitmodules",
+                ProjectRoot,
+                5000,
+                cancellationToken);
+            if (!TryRequireCompleteStructuralOutput(
+                    indexResult,
+                    "Post-removal .gitmodules index inspection",
+                    out error))
+                return false;
+            if (!indexResult.IsSuccess)
+            {
+                error = BuildCommandError("Failed to inspect .gitmodules after Git removed the package", indexResult);
+                return false;
+            }
+
+            string indexEntry = (indexResult.StdOut ?? string.Empty).Trim();
+            if (string.IsNullOrEmpty(indexEntry))
+            {
+                if (plan.ExpectedGitProducedContents.Length == 0)
+                    return true;
+
+                error = ".gitmodules disappeared from the parent index after Git removed the package; automatic restoration stopped.";
+                return false;
+            }
+
+            Match indexMatch = Regex.Match(
+                indexEntry,
+                @"^100(?:644|755)\s+([0-9a-fA-F]{40,64})\s+0\t\.gitmodules$",
+                RegexOptions.CultureInvariant);
+            if (!indexMatch.Success ||
+                !string.Equals(
+                    indexMatch.Groups[1].Value,
+                    plan.ExpectedGitProducedBlobId,
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                error =
+                    ".gitmodules changed in the parent index after Git removed the package. " +
+                    "The concurrent staged edit was preserved and automatic restoration stopped.";
+                return false;
+            }
+
+            return true;
+        }
+
+        private static bool TryRemoveSubmoduleSectionContents(
+            byte[] contents,
+            string submoduleName,
+            out byte[] result,
+            out string error)
+        {
+            result = Array.Empty<byte>();
+            error = string.Empty;
+            string text;
+            try
+            {
+                text = StrictUtf8Encoding.GetString(contents ?? Array.Empty<byte>());
+            }
+            catch (DecoderFallbackException ex)
+            {
+                error = $".gitmodules is not valid UTF-8 and cannot be edited byte-safely: {ex.Message}";
+                return false;
+            }
+
+            var output = new StringBuilder(text.Length);
+            bool inTargetSection = false;
+            bool foundTargetSection = false;
+            int position = 0;
+            if (text.Length > 0 && text[0] == '\ufeff')
+            {
+                // The BOM is a file prefix, not part of a target-first section
+                // header. Preserve it independently from the removed lines.
+                output.Append('\ufeff');
+                position = 1;
+            }
+
+            while (position < text.Length)
+            {
+                int contentEnd = position;
+                while (contentEnd < text.Length && text[contentEnd] != '\r' && text[contentEnd] != '\n')
+                    contentEnd++;
+
+                int lineEnd = contentEnd;
+                if (lineEnd < text.Length && text[lineEnd] == '\r')
+                    lineEnd++;
+                if (lineEnd < text.Length && text[lineEnd] == '\n')
+                    lineEnd++;
+
+                string line = text.Substring(position, contentEnd - position);
+                string trimmedStart = line.TrimStart(' ', '\t', '\ufeff');
+                bool isSectionHeader = trimmedStart.StartsWith("[", StringComparison.Ordinal);
+                if (isSectionHeader)
+                {
+                    inTargetSection = TryGetSubmoduleSectionName(line, out string sectionName) &&
+                                      string.Equals(sectionName, submoduleName, StringComparison.Ordinal);
+                    if (inTargetSection)
+                    {
+                        foundTargetSection = true;
+                        position = lineEnd;
+                        continue;
+                    }
+                }
+
+                bool preserveLine = !inTargetSection ||
+                                    string.IsNullOrWhiteSpace(line) ||
+                                    trimmedStart.StartsWith("#", StringComparison.Ordinal) ||
+                                    trimmedStart.StartsWith(";", StringComparison.Ordinal);
+                if (preserveLine)
+                    output.Append(text, position, lineEnd - position);
+
+                position = lineEnd;
+            }
+
+            if (!foundTargetSection)
+            {
+                error = ".gitmodules did not contain the verified submodule section during removal.";
+                return false;
+            }
+
+            result = StrictUtf8Encoding.GetBytes(output.ToString());
+            return true;
+        }
+
+        private static bool TryGetSubmoduleSectionName(string line, out string submoduleName)
+        {
+            submoduleName = string.Empty;
+            string trimmed = (line ?? string.Empty).Trim().TrimStart('\ufeff');
+            if (trimmed.Length < 3 || trimmed[0] != '[')
+                return false;
+
+            int closeBracket = trimmed.LastIndexOf(']');
+            if (closeBracket <= 1)
+                return false;
+
+            string body = trimmed.Substring(1, closeBracket - 1).Trim();
+            int separator = body.IndexOfAny(new[] { ' ', '\t', '.' });
+            if (separator <= 0 ||
+                !string.Equals(body.Substring(0, separator), "submodule", StringComparison.OrdinalIgnoreCase))
+                return false;
+
+            if (body[separator] == '.')
+            {
+                submoduleName = body.Substring(separator + 1).Trim();
+                return !string.IsNullOrEmpty(submoduleName);
+            }
+
+            string quoted = body.Substring(separator).Trim();
+            if (quoted.Length < 2 || quoted[0] != '"' || quoted[quoted.Length - 1] != '"')
+                return false;
+
+            var decoded = new StringBuilder(quoted.Length - 2);
+            for (int index = 1; index < quoted.Length - 1; index++)
+            {
+                char value = quoted[index];
+                if (value != '\\')
+                {
+                    decoded.Append(value);
+                    continue;
+                }
+
+                if (++index >= quoted.Length - 1)
+                    return false;
+
+                switch (quoted[index])
+                {
+                    case 'n':
+                        decoded.Append('\n');
+                        break;
+                    case 't':
+                        decoded.Append('\t');
+                        break;
+                    case 'b':
+                        decoded.Append('\b');
+                        break;
+                    default:
+                        decoded.Append(quoted[index]);
+                        break;
+                }
+            }
+
+            submoduleName = decoded.ToString();
+            return !string.IsNullOrEmpty(submoduleName);
         }
 
         private static bool TryValidateProjectGitRoot(
