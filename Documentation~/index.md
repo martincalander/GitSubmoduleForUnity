@@ -12,8 +12,9 @@ submodules as embedded UPM packages under `Packages/`.
    sorting, and details show installed GitHub submodules plus valid UPM packages
    discovered incrementally from authenticated personal and organization
    repositories.
-3. Select a discovered package and choose **Add as Submodule** to install its
-   default branch, or choose **Refresh** to rescan the project and GitHub.
+3. Select a discovered package, inspect its **Repository** link, choose a branch
+   (the default branch is preselected), and choose **Install**. Choose
+   **Refresh** to rescan the project and GitHub.
 4. Open **Window > Package Management > Git Submodule Manager** for the complete
    management and discovery workspace. Older Unity versions open this workspace
    as an embedded Package Manager fallback.

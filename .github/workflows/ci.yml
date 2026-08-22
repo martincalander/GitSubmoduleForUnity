@@ -10,6 +10,11 @@ on:
         description: Optional trusted full commit SHA to test
         required: false
         type: string
+      unity_version:
+        description: Unity Editor version for the manual compatibility run
+        required: false
+        default: 2021.3.0f1
+        type: string
 
 permissions:
   contents: read
@@ -96,7 +101,7 @@ jobs:
         run: npm pack --ignore-scripts --dry-run
 
   unity:
-    name: Unity 2021.3 compile and EditMode tests
+    name: Unity ${{ inputs.unity_version || '2021.3.0f1' }} compile and EditMode tests
     # Never expose Unity credentials to pull-request-controlled C#. Enable the
     # push gate with the UNITY_CI_ENABLED repository variable after configuring
     # the protected unity-ci environment, or run it manually for a reviewed ref.
@@ -125,6 +130,15 @@ jobs:
           actual_sha="$(git rev-parse --verify HEAD)"
           if [[ "${actual_sha,,}" != "${REQUESTED_SHA,,}" ]]; then
             echo "Checked-out revision does not match the reviewed commit SHA." >&2
+            exit 1
+          fi
+
+      - name: Validate requested Unity version
+        env:
+          REQUESTED_UNITY_VERSION: ${{ inputs.unity_version || '2021.3.0f1' }}
+        run: |
+          if [[ ! "$REQUESTED_UNITY_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+[abfp][0-9]+$ ]]; then
+            echo "Unity version must be an exact version such as 2021.3.45f2 or 6000.5.9f1." >&2
             exit 1
           fi
 
@@ -160,7 +174,7 @@ jobs:
         with:
           packageMode: true
           projectPath: .ci/package
-          unityVersion: 2021.3.0f1
+          unityVersion: ${{ inputs.unity_version || '2021.3.0f1' }}
           testMode: EditMode
           artifactsPath: unity-test-results
 
@@ -168,7 +182,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: unity-editmode-${{ github.sha }}
+          name: unity-editmode-${{ inputs.unity_version || '2021.3.0f1' }}-${{ inputs.ref || github.sha }}
           path: unity-test-results/
           if-no-files-found: warn
           retention-days: 14

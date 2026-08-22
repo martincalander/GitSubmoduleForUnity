@@ -1,8 +1,11 @@
+using System.Collections;
 using System.Collections.Generic;
 using System.Reflection;
+using System.Text;
 using NUnit.Framework;
 using UnityEditor.UIElements;
 using UnityEngine;
+using UnityEngine.TestTools;
 using UnityEngine.UIElements;
 
 namespace MartinCalander.GitSubmoduleManager.Editor.Tests
@@ -10,12 +13,25 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
     public sealed class GitSubmoduleInstallPopupTests
     {
         [Test]
-        public void Popup_HasRoomForFieldsWarningsAndActions()
+        public void Popup_UsesCompactPackageManagerSizedBounds()
         {
             Vector2 size = GitSubmoduleInstallPopup.DefaultWindowSize;
 
-            Assert.That(size.x, Is.GreaterThanOrEqualTo(440f));
-            Assert.That(size.y, Is.GreaterThanOrEqualTo(260f));
+            Assert.That(size, Is.EqualTo(new Vector2(420f, 132f)));
+            Assert.That(
+                GitSubmoduleInstallPopup.StatusViewportHeight,
+                Is.EqualTo(28f));
+        }
+
+        [Test]
+        public void PopupSize_IsFixedBeforeUnityFitsItToTheMonitor()
+        {
+            Assert.That(
+                GitSubmoduleInstallPopup.GetWindowSize(null),
+                Is.EqualTo(GitSubmoduleInstallPopup.DefaultWindowSize));
+            Assert.That(
+                GitSubmoduleInstallPopup.GetWindowSize(new VisualElement()),
+                Is.EqualTo(GitSubmoduleInstallPopup.DefaultWindowSize));
         }
 
         [Test]
@@ -91,6 +107,177 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
             Assert.That(
                 GitSubmoduleInstallPopup.AreMetadataFieldsEnabled(true, true),
                 Is.True);
+        }
+
+        [TestCase("", "Git URL is required.", false)]
+        [TestCase("   ", "Git URL is required.", false)]
+        [TestCase("https://github.com/example/package.git", "", false)]
+        [TestCase("not-a-repository", "Use a valid Git URL.", true)]
+        public void InlineValidation_LeavesPristineFormQuiet(
+            string repositoryUrl,
+            string validationError,
+            bool expected)
+        {
+            Assert.That(
+                GitSubmoduleInstallPopup.ShouldShowValidationError(
+                    repositoryUrl,
+                    validationError),
+                Is.EqualTo(expected));
+        }
+
+        [Test]
+        public void PristinePresentation_DoesNotWeakenSubmitValidation()
+        {
+            Assert.That(
+                GitSubmoduleInstallPopup.GetValidationError(
+                    string.Empty,
+                    string.Empty,
+                    string.Empty),
+                Is.EqualTo("Git URL is required."));
+        }
+
+        [UnityTest]
+        public IEnumerator InvalidRepositoryInput_ShowsValidationWithoutEnablingMetadata()
+        {
+            var window = ScriptableObject.CreateInstance<GitSubmoduleInstallPopup>();
+            try
+            {
+                ShowAttachedWindow(window);
+                yield return null;
+                window.CreateGUI();
+                yield return null;
+                TextField url = window.rootVisualElement.Q<TextField>(
+                    "git-submodule-url");
+                TextField packageName = window.rootVisualElement.Q<TextField>(
+                    "git-submodule-package-name");
+                HelpBox status = window.rootVisualElement.Q<HelpBox>(
+                    "git-submodule-status");
+                Button submit = window.rootVisualElement.Q<Button>(
+                    "git-submodule-submit");
+
+                url.value = "not-a-repository";
+                window.Repaint();
+                yield return null;
+
+                Assert.That(status.style.display.value, Is.EqualTo(DisplayStyle.Flex));
+                Assert.That(status.text, Does.Contain("secure HTTPS"));
+                Assert.That(packageName.enabledSelf, Is.False);
+                Assert.That(submit.enabledSelf, Is.False);
+            }
+            finally
+            {
+                if (window != null)
+                    window.Close();
+            }
+        }
+
+        [UnityTest]
+        public IEnumerator ValidRepositoryInput_ShowsProbeStateBeforeMetadataUnlocks()
+        {
+            var window = ScriptableObject.CreateInstance<GitSubmoduleInstallPopup>();
+            try
+            {
+                ShowAttachedWindow(window);
+                yield return null;
+                window.CreateGUI();
+                yield return null;
+                TextField url = window.rootVisualElement.Q<TextField>(
+                    "git-submodule-url");
+                TextField packageName = window.rootVisualElement.Q<TextField>(
+                    "git-submodule-package-name");
+                ToolbarMenu branchMenu = window.rootVisualElement.Q<ToolbarMenu>(
+                    "git-submodule-branch-menu");
+                HelpBox status = window.rootVisualElement.Q<HelpBox>(
+                    "git-submodule-status");
+                Button submit = window.rootVisualElement.Q<Button>(
+                    "git-submodule-submit");
+
+                url.value = "https://github.com/example/package.git";
+                window.Repaint();
+                yield return null;
+
+                Assert.That(status.style.display.value, Is.EqualTo(DisplayStyle.Flex));
+                Assert.That(status.text, Is.EqualTo("Inspecting repository with Git..."));
+                Assert.That(packageName.enabledSelf, Is.False);
+                Assert.That(branchMenu.enabledSelf, Is.False);
+                Assert.That(submit.enabledSelf, Is.False);
+            }
+            finally
+            {
+                if (window != null)
+                    window.Close();
+            }
+        }
+
+        [UnityTest]
+        public IEnumerator LongStatus_UsesBoundedScrollingAndKeepsActionsInsideWindow()
+        {
+            var window = ScriptableObject.CreateInstance<GitSubmoduleInstallPopup>();
+            try
+            {
+                ShowAttachedWindow(window);
+                yield return null;
+                window.CreateGUI();
+                yield return null;
+                ScrollView viewport = window.rootVisualElement.Q<ScrollView>(
+                    "git-submodule-status-viewport");
+                HelpBox status = window.rootVisualElement.Q<HelpBox>(
+                    "git-submodule-status");
+                VisualElement actions = window.rootVisualElement.Q<VisualElement>(
+                    "git-submodule-actions");
+                Rect positionBeforeStatus = window.position;
+
+                status.text = BuildLongStatus();
+                status.style.display = DisplayStyle.Flex;
+                window.UpdateStatusViewport();
+                window.Repaint();
+                yield return null;
+                yield return null;
+
+                Assert.That(viewport.style.display.value, Is.EqualTo(DisplayStyle.Flex));
+                Assert.That(
+                    viewport.style.visibility.value,
+                    Is.EqualTo(Visibility.Visible));
+                Assert.That(
+                    viewport.resolvedStyle.height,
+                    Is.EqualTo(GitSubmoduleInstallPopup.StatusViewportHeight)
+                        .Within(0.5f));
+                Assert.That(
+                    viewport.verticalScrollerVisibility,
+                    Is.EqualTo(ScrollerVisibility.Auto));
+                Assert.That(
+                    viewport.verticalScroller.highValue,
+                    Is.GreaterThan(0f));
+                Assert.That(viewport.focusable, Is.True);
+                Assert.That(viewport.tooltip, Is.EqualTo(status.text));
+                Assert.That(
+                    window.minSize,
+                    Is.EqualTo(GitSubmoduleInstallPopup.DefaultWindowSize));
+                Assert.That(
+                    window.maxSize,
+                    Is.EqualTo(GitSubmoduleInstallPopup.DefaultWindowSize));
+                Assert.That(window.position, Is.EqualTo(positionBeforeStatus));
+                Assert.That(viewport.Contains(actions), Is.False);
+                Assert.That(actions.parent, Is.SameAs(window.rootVisualElement));
+                Assert.That(
+                    actions.resolvedStyle.display,
+                    Is.EqualTo(DisplayStyle.Flex));
+                Assert.That(actions.style.flexShrink.value, Is.EqualTo(0f));
+
+                Rect rootBounds = window.rootVisualElement.worldBound;
+                Rect actionBounds = actions.worldBound;
+                Assert.That(rootBounds.height, Is.GreaterThan(0f));
+                Assert.That(actionBounds.height, Is.GreaterThan(0f));
+                Assert.That(actionBounds.xMin, Is.GreaterThanOrEqualTo(rootBounds.xMin));
+                Assert.That(actionBounds.yMin, Is.GreaterThanOrEqualTo(rootBounds.yMin));
+                Assert.That(actionBounds.xMax, Is.LessThanOrEqualTo(rootBounds.xMax));
+                Assert.That(actionBounds.yMax, Is.LessThanOrEqualTo(rootBounds.yMax));
+            }
+            finally
+            {
+                if (window != null)
+                    window.Close();
+            }
         }
 
         [TestCase("", false, "", "com.example.package", "com.example.package")]
@@ -208,30 +395,118 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                     "git-submodule-branch");
                 ToolbarMenu branchMenu = window.rootVisualElement.Q<ToolbarMenu>(
                     "git-submodule-branch-menu");
+                ScrollView statusViewport = window.rootVisualElement.Q<ScrollView>(
+                    "git-submodule-status-viewport");
+                HelpBox status = window.rootVisualElement.Q<HelpBox>(
+                    "git-submodule-status");
+                Button cancel = window.rootVisualElement.Q<Button>(
+                    "git-submodule-cancel");
+                Button submit = window.rootVisualElement.Q<Button>(
+                    "git-submodule-submit");
 
                 Assert.That(packageName, Is.Not.Null);
                 Assert.That(branch, Is.Not.Null);
                 Assert.That(branchMenu, Is.Not.Null);
+                Assert.That(statusViewport, Is.Not.Null);
+                Assert.That(status, Is.Not.Null);
+                Assert.That(cancel, Is.Not.Null);
+                Assert.That(submit, Is.Not.Null);
                 Assert.That(packageName.enabledSelf, Is.False);
                 Assert.That(branch.enabledSelf, Is.False);
                 Assert.That(branchMenu.enabledSelf, Is.False);
+                Assert.That(submit.enabledSelf, Is.False);
+                Assert.That(status.text, Is.Empty);
+                Assert.That(
+                    status.style.display.value,
+                    Is.EqualTo(DisplayStyle.None));
+                Assert.That(
+                    statusViewport.style.display.value,
+                    Is.EqualTo(DisplayStyle.Flex));
+                Assert.That(
+                    statusViewport.style.visibility.value,
+                    Is.EqualTo(Visibility.Hidden));
+                Assert.That(
+                    statusViewport.style.height.value.value,
+                    Is.EqualTo(GitSubmoduleInstallPopup.StatusViewportHeight));
+
+                VisualElement root = window.rootVisualElement;
+                Assert.That(root.childCount, Is.EqualTo(5));
+                Assert.That(
+                    root.ElementAt(0).name,
+                    Is.EqualTo("git-submodule-url"));
+                Assert.That(
+                    root.ElementAt(3).name,
+                    Is.EqualTo("git-submodule-status-viewport"));
+                Assert.That(
+                    root.ElementAt(4).name,
+                    Is.EqualTo("git-submodule-actions"));
+                for (int index = 0; index < root.childCount; index++)
+                {
+                    Assert.That(
+                        root.ElementAt(index).style.flexGrow.value,
+                        Is.LessThanOrEqualTo(0f),
+                        $"Root child {index} must not create expandable lower space.");
+                }
+
+                TextField url = root.Q<TextField>("git-submodule-url");
+                Assert.That(
+                    root.style.paddingLeft.value.value,
+                    Is.LessThanOrEqualTo(8f));
+                Assert.That(
+                    root.style.paddingBottom.value.value,
+                    Is.LessThanOrEqualTo(6f));
+                Assert.That(
+                    url.labelElement.style.minWidth.value.value,
+                    Is.LessThanOrEqualTo(90f));
+                Assert.That(
+                    cancel.style.minWidth.value.value,
+                    Is.LessThanOrEqualTo(72f));
+                Assert.That(
+                    submit.style.minWidth.value.value,
+                    Is.LessThanOrEqualTo(96f));
 
                 bool hasDestinationLabel = false;
                 bool hasPermanentExplanation = false;
+                bool hasRedundantHeader = false;
                 window.rootVisualElement.Query<Label>().ForEach(label =>
                 {
                     hasDestinationLabel |= label.text == "Destination";
                     hasPermanentExplanation |=
                         label.text?.Contains("operation is rolled back") == true;
+                    hasRedundantHeader |= label.text ==
+                                          GitSubmoduleInstallPopup.WindowTitle;
                 });
 
                 Assert.That(hasDestinationLabel, Is.False);
                 Assert.That(hasPermanentExplanation, Is.False);
+                Assert.That(hasRedundantHeader, Is.False);
             }
             finally
             {
                 Object.DestroyImmediate(window);
             }
+        }
+
+        private static void ShowAttachedWindow(GitSubmoduleInstallPopup window)
+        {
+            Vector2 size = GitSubmoduleInstallPopup.DefaultWindowSize;
+            window.minSize = size;
+            window.maxSize = size;
+            window.position = new Rect(100f, 100f, size.x, size.y);
+            window.Show();
+        }
+
+        private static string BuildLongStatus()
+        {
+            var builder = new StringBuilder();
+            for (int index = 0; index < 40; index++)
+            {
+                builder.Append("Diagnostic line ")
+                    .Append(index + 1)
+                    .AppendLine(": repository inspection detail.");
+            }
+
+            return builder.ToString();
         }
     }
 }

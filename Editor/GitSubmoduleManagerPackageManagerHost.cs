@@ -344,6 +344,40 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             return target != null && postfix != null && HasPostfix(target, postfix);
         }
 
+        /// <summary>
+        /// Exposes a side-effect-free compatibility diagnostic for the EditMode
+        /// suite. Keeping the ownership check beside the patch implementation
+        /// makes failures identify Unity contract drift instead of merely proving
+        /// that a similarly named lifecycle method still exists.
+        /// </summary>
+        internal static bool AreLifecyclePatchesApplied()
+        {
+            Type windowType = GetPackageManagerWindowType();
+            List<MethodInfo> lifecycleMethods =
+                GetSupportedLifecycleMethods(windowType);
+            MethodInfo postfix = typeof(GitSubmoduleManagerPackageManagerHost)
+                .GetMethod(
+                    nameof(AfterPackageManagerGuiBuilt),
+                    BindingFlags.Static | BindingFlags.NonPublic);
+            MethodInfo prefix = typeof(GitSubmoduleManagerPackageManagerHost)
+                .GetMethod(
+                    nameof(BeforePackageManagerGuiBuilt),
+                    BindingFlags.Static | BindingFlags.NonPublic);
+            if (lifecycleMethods.Count == 0 || postfix == null || prefix == null)
+                return false;
+
+            foreach (MethodInfo lifecycleMethod in lifecycleMethods)
+            {
+                if (!HasPrefix(lifecycleMethod, prefix) ||
+                    !HasPostfix(lifecycleMethod, postfix))
+                {
+                    return false;
+                }
+            }
+
+            return true;
+        }
+
         private static void BeforePackageManagerGuiBuilt()
         {
             PackageManagerSubmoduleNativePage.TryRegisterFromServices(

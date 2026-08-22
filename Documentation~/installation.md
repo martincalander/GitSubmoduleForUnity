@@ -52,8 +52,9 @@ and select **GitHub** under **Sources**. The native package list incrementally
 adds valid UPM packages discovered from every repository page owned by the
 authenticated user and their visible organizations, alongside installed GitHub
 submodules. Native search, sorting, selection, and details work across the
-combined list. Select a discovered package and choose **Add as Submodule** to
-install its default branch, or choose **Refresh** to rescan.
+combined list. Select a discovered package, use **Repository** to review its
+website, select a branch (the repository default is preselected), and choose
+**Install**. Choose **Refresh** to rescan.
 
 If GitHub CLI is missing or authentication fails, installed GitHub submodules
 remain visible and the management workspace remains available for direct URL

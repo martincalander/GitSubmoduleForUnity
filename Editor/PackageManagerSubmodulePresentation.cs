@@ -189,6 +189,10 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             "git-submodule-manager-tag";
         internal const string RepositoryVisibilityTagClassName =
             "git-submodule-manager-repository-visibility-tag";
+        internal const string InstalledRepositoryVisibilityTagClassName =
+            "git-submodule-manager-installed-repository-visibility-tag";
+        internal const string InstalledVisibilityHadDisableEllipsisClassName =
+            "git-submodule-manager-installed-visibility-had-disable-ellipsis";
         internal const string CustomTagContainerClassName =
             "git-submodule-manager-tag-container";
         internal const string CustomSourceIconClassName =
@@ -280,6 +284,91 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             return true;
         }
 
+        internal static bool ApplyInstalledTagLabel(
+            object tagElement,
+            PackageManagerSubmoduleInfo info,
+            bool isGitHubPage,
+            PackageManagerGitHubDiscoverySnapshot discoverySnapshot)
+        {
+            // Package Manager recycles list-row labels. Always remove either of
+            // our prior presentations before selecting the one for this package
+            // and page, even when the new package cannot be classified.
+            ResetTagLabelPresentation(tagElement);
+
+            if (info == null)
+                return false;
+
+            if (isGitHubPage &&
+                TryGetRepositoryPrivacy(
+                    info,
+                    discoverySnapshot,
+                    out bool isPrivate))
+            {
+                return ApplyInstalledRepositoryVisibilityTag(
+                    tagElement,
+                    isPrivate);
+            }
+
+            // Privacy is deliberately never guessed. Outside the GitHub page,
+            // and while discovery has not produced the matching repository,
+            // retain the truthful installed-submodule presentation.
+            return ApplyTagLabel(tagElement, info);
+        }
+
+        internal static void ResetTagLabelPresentation(object tagElement)
+        {
+            // Installed visibility originates from Unity's InDevelopment
+            // (Custom) tag while projected discovery packages originate from
+            // Git. Restore the installed provenance first so an impossible
+            // overlap still resolves to the safer Custom baseline.
+            ResetInstalledRepositoryVisibilityTag(tagElement);
+            ResetRepositoryVisibilityTag(tagElement);
+            ResetCustomTagLabel(tagElement);
+        }
+
+        internal static bool TryGetRepositoryPrivacy(
+            PackageManagerSubmoduleInfo info,
+            PackageManagerGitHubDiscoverySnapshot discoverySnapshot,
+            out bool isPrivate)
+        {
+            isPrivate = false;
+            if (info == null ||
+                !info.IsGitHub ||
+                discoverySnapshot?.Repositories == null ||
+                !GitHubUtility.TryParseGitHubRepo(
+                    info.RepositoryUrl,
+                    out string owner,
+                    out string repository))
+            {
+                return false;
+            }
+
+            for (int index = 0;
+                 index < discoverySnapshot.Repositories.Count;
+                 index++)
+            {
+                PackageManagerGitHubRepository discoveredRepository =
+                    discoverySnapshot.Repositories[index];
+                if (discoveredRepository == null ||
+                    !string.Equals(
+                        discoveredRepository.Owner?.Trim(),
+                        owner,
+                        StringComparison.OrdinalIgnoreCase) ||
+                    !string.Equals(
+                        discoveredRepository.Name?.Trim(),
+                        repository,
+                        StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                isPrivate = discoveredRepository.IsPrivate;
+                return true;
+            }
+
+            return false;
+        }
+
         internal static void ResetCustomTagLabel(object tagElement)
         {
             if (!(tagElement is TextElement textElement) ||
@@ -329,6 +418,90 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             textElement.AddToClassList(RepositoryVisibilityTagClassName);
             textElement.AddToClassList(NativeDisableEllipsisClassName);
             return true;
+        }
+
+        internal static bool ApplyInstalledRepositoryVisibilityTag(
+            object tagElement,
+            bool isPrivate)
+        {
+            if (!(tagElement is TextElement textElement))
+                return false;
+
+            textElement.text = L10n.Tr(
+                isPrivate
+                    ? PrivateRepositoryTagLabel
+                    : PublicRepositoryTagLabel);
+            textElement.tooltip = isPrivate
+                ? PrivateRepositoryTagTooltip
+                : PublicRepositoryTagTooltip;
+            if (!textElement.ClassListContains(
+                    InstalledRepositoryVisibilityTagClassName))
+            {
+                if (textElement.ClassListContains(NativeDisableEllipsisClassName))
+                {
+                    textElement.AddToClassList(
+                        InstalledVisibilityHadDisableEllipsisClassName);
+                }
+                else
+                {
+                    textElement.RemoveFromClassList(
+                        InstalledVisibilityHadDisableEllipsisClassName);
+                }
+            }
+
+            textElement.AddToClassList(InstalledRepositoryVisibilityTagClassName);
+            textElement.AddToClassList(NativeDisableEllipsisClassName);
+            return true;
+        }
+
+        internal static void ResetInstalledRepositoryVisibilityTag(object tagElement)
+        {
+            if (!(tagElement is TextElement textElement) ||
+                !textElement.ClassListContains(
+                    InstalledRepositoryVisibilityTagClassName))
+            {
+                return;
+            }
+
+            bool stillUsesVisibilityText =
+                string.Equals(
+                    textElement.text,
+                    L10n.Tr(PublicRepositoryTagLabel),
+                    StringComparison.Ordinal) ||
+                string.Equals(
+                    textElement.text,
+                    L10n.Tr(PrivateRepositoryTagLabel),
+                    StringComparison.Ordinal);
+            if (stillUsesVisibilityText)
+            {
+                // Installed submodules are Unity InDevelopment packages. Their
+                // native recycled-row baseline is Custom, not the Git baseline
+                // used by discovery placeholders.
+                textElement.text = L10n.Tr("Custom");
+            }
+
+            if (string.Equals(
+                    textElement.tooltip,
+                    PublicRepositoryTagTooltip,
+                    StringComparison.Ordinal) ||
+                string.Equals(
+                    textElement.tooltip,
+                    PrivateRepositoryTagTooltip,
+                    StringComparison.Ordinal))
+            {
+                textElement.tooltip = string.Empty;
+            }
+
+            bool hadDisableEllipsis = textElement.ClassListContains(
+                InstalledVisibilityHadDisableEllipsisClassName);
+            textElement.RemoveFromClassList(
+                InstalledRepositoryVisibilityTagClassName);
+            textElement.RemoveFromClassList(
+                InstalledVisibilityHadDisableEllipsisClassName);
+            if (hadDisableEllipsis)
+                textElement.AddToClassList(NativeDisableEllipsisClassName);
+            else
+                textElement.RemoveFromClassList(NativeDisableEllipsisClassName);
         }
 
         internal static void ResetRepositoryVisibilityTag(object tagElement)

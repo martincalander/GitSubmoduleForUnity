@@ -18,6 +18,31 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
             public bool isInstalled { get; set; }
         }
 
+        private sealed class FakePage
+        {
+            public string id { get; set; }
+        }
+
+        private sealed class FakePageManager
+        {
+            public object activePage { get; set; }
+        }
+
+        private sealed class ThrowingPageManager
+        {
+            public object activePage => throw new InvalidOperationException("contract drift");
+        }
+
+        private sealed class FakePackageManagerRoot
+        {
+            private readonly object m_PageManager;
+
+            internal FakePackageManagerRoot(object pageManager)
+            {
+                m_PageManager = pageManager;
+            }
+        }
+
         [Test]
         public void Snapshot_ExactInstalledPackageSubmodule_IsClassifiedAsGitHub()
         {
@@ -237,6 +262,531 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
             Assert.That(label.ClassListContains(
                 PackageManagerSubmodulePresentation.NativeDisableEllipsisClassName),
                 Is.True);
+        }
+
+        [TestCase(false, "Public")]
+        [TestCase(true, "Private")]
+        public void InstalledTag_GitHubPageUsesMatchingDiscoveryPrivacy(
+            bool isPrivate,
+            string expectedLabel)
+        {
+            var label = new Label("Custom") { tooltip = string.Empty };
+            PackageManagerSubmoduleInfo info = CreateGitHubInfo(
+                "git@github.com:Owner/Repository.git");
+            PackageManagerGitHubDiscoverySnapshot discovery =
+                CreateDiscoverySnapshot(
+                    "owner",
+                    "repository",
+                    isPrivate);
+
+            Assert.That(
+                PackageManagerSubmodulePresentation.ApplyInstalledTagLabel(
+                    label,
+                    info,
+                    true,
+                    discovery),
+                Is.True);
+
+            Assert.That(label.text, Is.EqualTo(UnityEditor.L10n.Tr(expectedLabel)));
+            Assert.That(label.ClassListContains(
+                PackageManagerSubmodulePresentation
+                    .InstalledRepositoryVisibilityTagClassName),
+                Is.True);
+            Assert.That(label.ClassListContains(
+                PackageManagerSubmodulePresentation.CustomTagClassName),
+                Is.False);
+            Assert.That(label.ClassListContains(
+                PackageManagerSubmodulePresentation.RepositoryVisibilityTagClassName),
+                Is.False);
+        }
+
+        [Test]
+        public void InstalledTag_OutsideGitHubPageRemainsSubmodule()
+        {
+            var label = new Label("Custom") { tooltip = string.Empty };
+
+            Assert.That(
+                PackageManagerSubmodulePresentation.ApplyInstalledTagLabel(
+                    label,
+                    CreateInfo(isGitHub: true),
+                    false,
+                    CreateDiscoverySnapshot("owner", "repository", true)),
+                Is.True);
+
+            Assert.That(label.text, Is.EqualTo(PackageManagerSubmoduleInfo.TagLabel));
+            Assert.That(label.ClassListContains(
+                PackageManagerSubmodulePresentation.CustomTagClassName),
+                Is.True);
+            Assert.That(label.ClassListContains(
+                PackageManagerSubmodulePresentation.RepositoryVisibilityTagClassName),
+                Is.False);
+            Assert.That(label.ClassListContains(
+                PackageManagerSubmodulePresentation
+                    .InstalledRepositoryVisibilityTagClassName),
+                Is.False);
+        }
+
+        [Test]
+        public void InstalledTag_UnknownPrivacyFallsBackToSubmodule()
+        {
+            var label = new Label("Custom") { tooltip = string.Empty };
+
+            Assert.That(
+                PackageManagerSubmodulePresentation.ApplyInstalledTagLabel(
+                    label,
+                    CreateInfo(isGitHub: true),
+                    true,
+                    CreateDiscoverySnapshot("owner", "different-repository", true)),
+                Is.True);
+
+            Assert.That(label.text, Is.EqualTo(PackageManagerSubmoduleInfo.TagLabel));
+            Assert.That(label.tooltip,
+                Is.EqualTo(PackageManagerSubmodulePresentation.TagTooltip));
+            Assert.That(label.ClassListContains(
+                PackageManagerSubmodulePresentation.RepositoryVisibilityTagClassName),
+                Is.False);
+            Assert.That(label.ClassListContains(
+                PackageManagerSubmodulePresentation
+                    .InstalledRepositoryVisibilityTagClassName),
+                Is.False);
+        }
+
+        [Test]
+        public void InstalledTag_RecycledAcrossPagesAndRepositoriesResetsMarkers()
+        {
+            var container = new VisualElement
+            {
+                name = PackageManagerSubmodulePresentation.NativeTagContainerName
+            };
+            var label = new Label("Custom") { tooltip = string.Empty };
+            container.Add(label);
+            PackageManagerSubmoduleInfo info = CreateInfo(isGitHub: true);
+
+            Assert.That(
+                PackageManagerSubmodulePresentation.ApplyInstalledTagLabel(
+                    label,
+                    info,
+                    true,
+                    CreateDiscoverySnapshot("owner", "repository", true)),
+                Is.True);
+            Assert.That(label.text, Is.EqualTo(UnityEditor.L10n.Tr("Private")));
+
+            Assert.That(
+                PackageManagerSubmodulePresentation.ApplyInstalledTagLabel(
+                    label,
+                    info,
+                    false,
+                    CreateDiscoverySnapshot("owner", "repository", true)),
+                Is.True);
+            Assert.That(label.text, Is.EqualTo(PackageManagerSubmoduleInfo.TagLabel));
+            Assert.That(label.ClassListContains(
+                PackageManagerSubmodulePresentation
+                    .InstalledRepositoryVisibilityTagClassName),
+                Is.False);
+            Assert.That(label.ClassListContains(
+                PackageManagerSubmodulePresentation.CustomTagClassName),
+                Is.True);
+            Assert.That(container.ClassListContains(
+                PackageManagerSubmodulePresentation.CustomTagContainerClassName),
+                Is.True);
+
+            Assert.That(
+                PackageManagerSubmodulePresentation.ApplyInstalledTagLabel(
+                    label,
+                    info,
+                    true,
+                    CreateDiscoverySnapshot("OWNER", "REPOSITORY", false)),
+                Is.True);
+            Assert.That(label.text, Is.EqualTo(UnityEditor.L10n.Tr("Public")));
+            Assert.That(label.ClassListContains(
+                PackageManagerSubmodulePresentation.CustomTagClassName),
+                Is.False);
+            Assert.That(label.ClassListContains(
+                PackageManagerSubmodulePresentation
+                    .InstalledRepositoryVisibilityTagClassName),
+                Is.True);
+            Assert.That(container.ClassListContains(
+                PackageManagerSubmodulePresentation.CustomTagContainerClassName),
+                Is.False);
+            Assert.That(container.style.maxWidth.keyword, Is.EqualTo(StyleKeyword.Null));
+        }
+
+        [Test]
+        public void InstalledVisibility_RecycledToUnclassifiedPackageRestoresCustomBaseline()
+        {
+            var container = new VisualElement
+            {
+                name = PackageManagerSubmodulePresentation.NativeTagContainerName
+            };
+            var label = new Label(UnityEditor.L10n.Tr("Custom"))
+            {
+                tooltip = string.Empty
+            };
+            container.Add(label);
+
+            Assert.That(
+                PackageManagerSubmodulePresentation.ApplyInstalledTagLabel(
+                    label,
+                    CreateInfo(isGitHub: true),
+                    true,
+                    CreateDiscoverySnapshot("owner", "repository", true)),
+                Is.True);
+            Assert.That(label.text, Is.EqualTo(UnityEditor.L10n.Tr("Private")));
+            Assert.That(label.ClassListContains(
+                PackageManagerSubmodulePresentation.NativeDisableEllipsisClassName),
+                Is.True);
+
+            // Model Unity's native InDevelopment refresh running before our
+            // postfix. It restores Custom text but does not know that this
+            // package added disable-ellipsis on the prior row binding.
+            label.text = UnityEditor.L10n.Tr("Custom");
+            label.tooltip = string.Empty;
+
+            PackageManagerSubmoduleHarmonyPatch.ApplyTagPresentation(
+                label,
+                new object());
+
+            Assert.That(label.text, Is.EqualTo(UnityEditor.L10n.Tr("Custom")));
+            Assert.That(label.tooltip, Is.Empty);
+            Assert.That(label.ClassListContains(
+                PackageManagerSubmodulePresentation
+                    .InstalledRepositoryVisibilityTagClassName),
+                Is.False);
+            Assert.That(label.ClassListContains(
+                PackageManagerSubmodulePresentation.RepositoryVisibilityTagClassName),
+                Is.False);
+            Assert.That(label.ClassListContains(
+                PackageManagerSubmodulePresentation.CustomTagClassName),
+                Is.False);
+            Assert.That(label.ClassListContains(
+                PackageManagerSubmodulePresentation.NativeDisableEllipsisClassName),
+                Is.False);
+            Assert.That(container.style.maxWidth.keyword, Is.EqualTo(StyleKeyword.Null));
+        }
+
+        [TestCase("Git")]
+        [TestCase("Local")]
+        [TestCase("Exp")]
+        public void InstalledVisibility_NativeTextTransitionRestoresCapturedStyleBaseline(
+            string nativeTag)
+        {
+            var label = new Label(UnityEditor.L10n.Tr("Custom"))
+            {
+                tooltip = string.Empty
+            };
+
+            Assert.That(
+                PackageManagerSubmodulePresentation.ApplyInstalledTagLabel(
+                    label,
+                    CreateInfo(isGitHub: true),
+                    true,
+                    CreateDiscoverySnapshot("owner", "repository", true)),
+                Is.True);
+            Assert.That(label.ClassListContains(
+                PackageManagerSubmodulePresentation.NativeDisableEllipsisClassName),
+                Is.True);
+
+            label.text = nativeTag;
+            label.tooltip = "Native tag tooltip";
+            PackageManagerSubmodulePresentation.ResetTagLabelPresentation(label);
+
+            Assert.That(label.text, Is.EqualTo(nativeTag));
+            Assert.That(label.tooltip, Is.EqualTo("Native tag tooltip"));
+            Assert.That(label.ClassListContains(
+                PackageManagerSubmodulePresentation.NativeDisableEllipsisClassName),
+                Is.False);
+            Assert.That(label.ClassListContains(
+                PackageManagerSubmodulePresentation
+                    .InstalledRepositoryVisibilityTagClassName),
+                Is.False);
+            Assert.That(label.ClassListContains(
+                PackageManagerSubmodulePresentation
+                    .InstalledVisibilityHadDisableEllipsisClassName),
+                Is.False);
+        }
+
+        [Test]
+        public void InstalledVisibility_PreexistingDisableEllipsisIsPreserved()
+        {
+            var label = new Label(UnityEditor.L10n.Tr("Custom"));
+            label.AddToClassList(
+                PackageManagerSubmodulePresentation.NativeDisableEllipsisClassName);
+
+            Assert.That(
+                PackageManagerSubmodulePresentation.ApplyInstalledTagLabel(
+                    label,
+                    CreateInfo(isGitHub: true),
+                    true,
+                    CreateDiscoverySnapshot("owner", "repository", false)),
+                Is.True);
+            label.text = "Git";
+
+            PackageManagerSubmodulePresentation.ResetTagLabelPresentation(label);
+
+            Assert.That(label.text, Is.EqualTo("Git"));
+            Assert.That(label.ClassListContains(
+                PackageManagerSubmodulePresentation.NativeDisableEllipsisClassName),
+                Is.True);
+            Assert.That(label.ClassListContains(
+                PackageManagerSubmodulePresentation
+                    .InstalledVisibilityHadDisableEllipsisClassName),
+                Is.False);
+        }
+
+        [Test]
+        public void InstalledVisibility_DoesNotMutateInstalledIndicatorSibling()
+        {
+            var row = new VisualElement();
+            var tagContainer = new VisualElement
+            {
+                name = PackageManagerSubmodulePresentation.NativeTagContainerName
+            };
+            var label = new Label(UnityEditor.L10n.Tr("Custom"));
+            tagContainer.Add(label);
+            var installedIndicator = new Toggle
+            {
+                name = "installedIndicator",
+                value = true,
+                userData = new object()
+            };
+            installedIndicator.AddToClassList("native-installed-state");
+            installedIndicator.SetEnabled(false);
+            object indicatorState = installedIndicator.userData;
+            row.Add(tagContainer);
+            row.Add(installedIndicator);
+
+            Assert.That(
+                PackageManagerSubmodulePresentation.ApplyInstalledTagLabel(
+                    label,
+                    CreateInfo(isGitHub: true),
+                    true,
+                    CreateDiscoverySnapshot("owner", "repository", false)),
+                Is.True);
+
+            Assert.That(row[1], Is.SameAs(installedIndicator));
+            Assert.That(installedIndicator.parent, Is.SameAs(row));
+            Assert.That(installedIndicator.value, Is.True);
+            Assert.That(installedIndicator.enabledSelf, Is.False);
+            Assert.That(installedIndicator.userData, Is.SameAs(indicatorState));
+            Assert.That(installedIndicator.ClassListContains(
+                "native-installed-state"), Is.True);
+        }
+
+        [Test]
+        public void DeferredTag_UnrecognizedRebindBeforeAttachCancelsOldPackage()
+        {
+            var label = new Label(UnityEditor.L10n.Tr("Custom"));
+            var previouslyBoundPackage = new object();
+            var unrecognizedReboundPackage = new object();
+
+            PackageManagerSubmoduleHarmonyPatch.DeferTagPresentationUntilAttached(
+                label,
+                previouslyBoundPackage);
+            Assert.That(
+                PackageManagerSubmoduleHarmonyPatch.HasDeferredTagPresentation(
+                    label,
+                    previouslyBoundPackage),
+                Is.True);
+
+            PackageManagerSubmoduleHarmonyPatch.ApplyTagPresentation(
+                label,
+                unrecognizedReboundPackage);
+            Assert.That(
+                PackageManagerSubmoduleHarmonyPatch.HasDeferredTagPresentation(
+                    label,
+                    previouslyBoundPackage),
+                Is.False);
+            Assert.That(
+                PackageManagerSubmoduleHarmonyPatch.HasDeferredTagPresentation(
+                    label,
+                    unrecognizedReboundPackage),
+                Is.False);
+
+            // Exercise the callback's attach-time consumer after cancellation.
+            // It must remain a no-op instead of replaying the old package.
+            PackageManagerSubmoduleHarmonyPatch
+                .ApplyDeferredTagPresentationOnAttach(label);
+            Assert.That(label.text, Is.EqualTo(UnityEditor.L10n.Tr("Custom")));
+        }
+
+        [Test]
+        public void DeferredTag_RecognizedRebindReplacesPendingPackage()
+        {
+            var label = new Label(UnityEditor.L10n.Tr("Custom"));
+            var firstPackage = new object();
+            var reboundPackage = new object();
+
+            PackageManagerSubmoduleHarmonyPatch.DeferTagPresentationUntilAttached(
+                label,
+                firstPackage);
+            PackageManagerSubmoduleHarmonyPatch.DeferTagPresentationUntilAttached(
+                label,
+                reboundPackage);
+
+            Assert.That(
+                PackageManagerSubmoduleHarmonyPatch.HasDeferredTagPresentation(
+                    label,
+                    firstPackage),
+                Is.False);
+            Assert.That(
+                PackageManagerSubmoduleHarmonyPatch.HasDeferredTagPresentation(
+                    label,
+                    reboundPackage),
+                Is.True);
+
+            PackageManagerSubmoduleHarmonyPatch.CancelDeferredTagPresentation(label);
+        }
+
+        [TestCase(PackageManagerSubmoduleNativePage.ExtensionPageId, true, true)]
+        [TestCase("UnityRegistry", true, false)]
+        [TestCase("extension/git-submodule-manager", true, false)]
+        [TestCase(null, false, false)]
+        public void ActivePageDetection_RequiresExactResolvedGitHubPageId(
+            string pageId,
+            bool expectedResolved,
+            bool expectedGitHubPage)
+        {
+            var pageManager = new FakePageManager
+            {
+                activePage = new FakePage { id = pageId }
+            };
+
+            bool resolved = PackageManagerSubmoduleHarmonyPatch.TryGetGitHubPageState(
+                pageManager,
+                out bool isGitHubPage);
+
+            Assert.That(resolved, Is.EqualTo(expectedResolved));
+            Assert.That(isGitHubPage, Is.EqualTo(expectedGitHubPage));
+        }
+
+        [Test]
+        public void ActivePageDetection_ReflectionFailureIsUnresolved()
+        {
+            Assert.That(
+                PackageManagerSubmoduleHarmonyPatch.TryGetGitHubPageState(
+                    new ThrowingPageManager(),
+                    out bool isGitHubPage),
+                Is.False);
+            Assert.That(isGitHubPage, Is.False);
+            Assert.That(
+                PackageManagerSubmoduleHarmonyPatch.TryGetGitHubPageState(
+                    new object(),
+                    out isGitHubPage),
+                Is.False);
+            Assert.That(isGitHubPage, Is.False);
+        }
+
+        [Test]
+        public void ActivePageRootContract_TraversesPageManagerAndReportsDrift()
+        {
+            var root = new FakePackageManagerRoot(
+                new FakePageManager
+                {
+                    activePage = new FakePage
+                    {
+                        id = PackageManagerSubmoduleNativePage.ExtensionPageId
+                    }
+                });
+
+            Assert.That(
+                PackageManagerSubmoduleHarmonyPatch.TryGetGitHubPageStateFromRoot(
+                    root,
+                    out bool isGitHubPage,
+                    out string diagnostic),
+                Is.True,
+                diagnostic);
+            Assert.That(isGitHubPage, Is.True);
+            Assert.That(diagnostic, Is.Empty);
+
+            Assert.That(
+                PackageManagerSubmoduleHarmonyPatch.TryGetGitHubPageStateFromRoot(
+                    new object(),
+                    out isGitHubPage,
+                    out diagnostic),
+                Is.False);
+            Assert.That(isGitHubPage, Is.False);
+            Assert.That(diagnostic, Does.Contain(
+                PackageManagerSubmoduleHarmonyPatch.PageManagerFieldName));
+            Assert.That(diagnostic, Does.Contain(
+                PackageManagerSubmoduleHarmonyPatch.PageManagerPropertyName));
+        }
+
+        [Test]
+        public void ActivePageReflectionContract_RealUnityTypesExposeFullChain()
+        {
+            if (!PackageManagerSubmoduleNativePage.IsSupportedContract())
+            {
+                Assert.Ignore(
+                    "This Editor uses the guarded legacy Package Manager host; " +
+                    "the native active-page seam is intentionally unavailable.");
+                return;
+            }
+
+            Type windowType = PackageManagerSubmoduleHarmonyPatch.FindLoadedType(
+                PackageManagerSubmoduleHarmonyPatch.PackageManagerWindowTypeName);
+            Assert.That(windowType, Is.Not.Null);
+
+            FieldInfo rootField = FindInstanceField(
+                windowType,
+                PackageManagerSubmoduleHarmonyPatch.PackageManagerRootFieldName);
+            Assert.That(rootField, Is.Not.Null,
+                "PackageManagerWindow.m_Root reflection seam changed.");
+
+            FieldInfo pageManagerField = FindInstanceField(
+                rootField.FieldType,
+                PackageManagerSubmoduleHarmonyPatch.PageManagerFieldName);
+            PropertyInfo pageManagerProperty = FindInstanceProperty(
+                rootField.FieldType,
+                PackageManagerSubmoduleHarmonyPatch.PageManagerPropertyName);
+            Type pageManagerType = pageManagerField?.FieldType ??
+                                   pageManagerProperty?.PropertyType;
+            Assert.That(pageManagerType, Is.Not.Null,
+                "Package Manager root no longer exposes m_PageManager/pageManager.");
+
+            PropertyInfo activePageProperty = FindInstanceProperty(
+                pageManagerType,
+                PackageManagerSubmoduleHarmonyPatch.ActivePagePropertyName);
+            Assert.That(activePageProperty, Is.Not.Null,
+                "Package Manager page manager no longer exposes activePage.");
+            PropertyInfo pageIdProperty = FindInstanceProperty(
+                activePageProperty.PropertyType,
+                PackageManagerSubmoduleHarmonyPatch.PageIdPropertyName);
+            Assert.That(pageIdProperty, Is.Not.Null,
+                "Package Manager active page no longer exposes id.");
+            Assert.That(pageIdProperty.PropertyType, Is.EqualTo(typeof(string)));
+        }
+
+        [Test]
+        public void ActivePageReflectionContract_OpenWindowProvidesDiagnostic()
+        {
+            if (!PackageManagerSubmoduleNativePage.IsSupportedContract())
+            {
+                Assert.Ignore(
+                    "This Editor uses the guarded legacy Package Manager host; " +
+                    "there is no native active-page diagnostic to exercise.");
+                return;
+            }
+
+            Type windowType = PackageManagerSubmoduleHarmonyPatch.FindLoadedType(
+                PackageManagerSubmoduleHarmonyPatch.PackageManagerWindowTypeName);
+            UnityEditor.EditorWindow window = Resources
+                .FindObjectsOfTypeAll<UnityEditor.EditorWindow>()
+                .FirstOrDefault(candidate =>
+                    candidate != null && candidate.GetType() == windowType);
+            if (window == null)
+            {
+                Assert.Ignore("No live Package Manager window is open.");
+                return;
+            }
+
+            Assert.That(
+                PackageManagerSubmoduleHarmonyPatch.TryGetGitHubPageStateFromWindow(
+                    window,
+                    out _,
+                    out string diagnostic),
+                Is.True,
+                diagnostic);
+            Assert.That(diagnostic, Is.Empty);
         }
 
         [Test]
@@ -730,6 +1280,53 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
             Assert.That(GitSubmoduleManagerIcons.GetGitIcon(true), Is.Not.Null);
         }
 
+        private static FieldInfo FindInstanceField(Type type, string fieldName)
+        {
+            const BindingFlags flags = BindingFlags.Instance |
+                                       BindingFlags.Public |
+                                       BindingFlags.NonPublic;
+            for (Type current = type; current != null; current = current.BaseType)
+            {
+                FieldInfo field = current.GetField(fieldName, flags);
+                if (field != null)
+                    return field;
+            }
+
+            return null;
+        }
+
+        private static PropertyInfo FindInstanceProperty(
+            Type type,
+            string propertyName)
+        {
+            const BindingFlags flags = BindingFlags.Instance |
+                                       BindingFlags.Public |
+                                       BindingFlags.NonPublic;
+            for (Type current = type; current != null; current = current.BaseType)
+            {
+                PropertyInfo property = current.GetProperty(propertyName, flags);
+                if (property != null && property.GetIndexParameters().Length == 0)
+                    return property;
+            }
+
+            if (type != null)
+            {
+                foreach (Type interfaceType in type.GetInterfaces())
+                {
+                    PropertyInfo property = interfaceType.GetProperty(
+                        propertyName,
+                        flags);
+                    if (property != null &&
+                        property.GetIndexParameters().Length == 0)
+                    {
+                        return property;
+                    }
+                }
+            }
+
+            return null;
+        }
+
         private static PackageManagerSubmoduleSnapshotData CreateSnapshot(
             string projectRoot,
             string repositoryUrl)
@@ -757,6 +1354,48 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                     ? "https://github.com/owner/repository.git"
                     : "ssh://git@git.example.com/team/repository.git",
                 isGitHub);
+        }
+
+        private static PackageManagerSubmoduleInfo CreateGitHubInfo(
+            string repositoryUrl)
+        {
+            return new PackageManagerSubmoduleInfo(
+                "com.example.repository",
+                "Packages/com.example.repository",
+                "/project/Packages/com.example.repository",
+                repositoryUrl,
+                true);
+        }
+
+        private static PackageManagerGitHubDiscoverySnapshot CreateDiscoverySnapshot(
+            string owner,
+            string repository,
+            bool isPrivate)
+        {
+            var discoveredRepository = new PackageManagerGitHubRepository(
+                new GitHubRepo
+                {
+                    NodeId = "NODE-" + owner + "-" + repository,
+                    Owner = owner,
+                    Name = repository,
+                    Url = $"https://github.com/{owner}/{repository}.git",
+                    DefaultBranch = "main",
+                    IsPrivate = isPrivate,
+                    ManifestState = PackageManifestState.Valid,
+                    DeclaredPackageName = "com.example.repository",
+                    DeclaredDisplayName = "Example Repository",
+                    DeclaredVersion = "1.0.0"
+                });
+            return new PackageManagerGitHubDiscoverySnapshot(
+                new[] { discoveredRepository },
+                false,
+                string.Empty,
+                string.Empty,
+                1,
+                1,
+                1,
+                0,
+                1);
         }
     }
 }

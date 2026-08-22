@@ -20,7 +20,8 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         internal const string EditorMenuExtensionsTypeName =
             "UnityEditor.UIElements.EditorMenuExtensions";
 
-        internal static readonly Vector2 DefaultWindowSize = new(500f, 320f);
+        internal const float StatusViewportHeight = 28f;
+        internal static readonly Vector2 DefaultWindowSize = new(420f, 132f);
 
         private const double ProbeDebounceSeconds = 0.4d;
 
@@ -34,6 +35,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         private TextField branchField;
         private ToolbarMenu branchMenu;
         private readonly List<string> availableBranches = new();
+        private ScrollView statusViewport;
         private HelpBox validationHelp;
         private Button submitButton;
         private GitSubmoduleInstallProbe installProbe;
@@ -121,34 +123,10 @@ namespace MartinCalander.GitSubmoduleManager.Editor
 
         internal static Vector2 GetWindowSize(VisualElement activator)
         {
-            float toolbarWidth = FindPackageManagerToolbarWidth(activator);
-            float width = IsFinite(toolbarWidth) && toolbarWidth > 0f
-                ? Mathf.Max(320f, toolbarWidth)
-                : DefaultWindowSize.x;
-            return new Vector2(width, DefaultWindowSize.y);
-        }
-
-        private static float FindPackageManagerToolbarWidth(
-            VisualElement activator)
-        {
-            for (VisualElement element = activator;
-                 element != null;
-                 element = element.parent)
-            {
-                if (string.Equals(
-                        element.name,
-                        "topMenuToolbar",
-                        StringComparison.Ordinal) ||
-                    string.Equals(
-                        element.GetType().Name,
-                        "PackageManagerToolbar",
-                        StringComparison.Ordinal))
-                {
-                    return element.resolvedStyle.width;
-                }
-            }
-
-            return activator?.panel?.visualTree?.resolvedStyle.width ?? float.NaN;
+            // Unity receives the final bounds once in ShowAsDropDown and can
+            // fit them to the active monitor. Do not inherit the full Package
+            // Manager toolbar width or resize the native window afterwards.
+            return DefaultWindowSize;
         }
 
         internal static MethodInfo FindGuiToScreenRectMethod()
@@ -262,36 +240,11 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             uiBuilt = true;
             VisualElement root = rootVisualElement;
             root.Clear();
-            root.style.paddingLeft = 12f;
-            root.style.paddingRight = 12f;
-            root.style.paddingTop = 10f;
-            root.style.paddingBottom = 10f;
+            root.style.paddingLeft = 8f;
+            root.style.paddingRight = 8f;
+            root.style.paddingTop = 4f;
+            root.style.paddingBottom = 4f;
             root.style.flexDirection = FlexDirection.Column;
-
-            var header = new VisualElement();
-            header.style.flexDirection = FlexDirection.Row;
-            header.style.alignItems = Align.Center;
-            header.style.marginBottom = 8f;
-
-            Texture2D gitIcon = GitSubmoduleManagerIcons.GitIcon;
-            if (gitIcon != null)
-            {
-                var icon = new Image
-                {
-                    image = gitIcon,
-                    scaleMode = ScaleMode.ScaleToFit
-                };
-                icon.style.width = 18f;
-                icon.style.height = 18f;
-                icon.style.marginRight = 6f;
-                header.Add(icon);
-            }
-
-            var title = new Label(L10n.Tr(WindowTitle));
-            title.style.unityFontStyleAndWeight = FontStyle.Bold;
-            title.style.fontSize = 13f;
-            header.Add(title);
-            root.Add(header);
 
             urlField = CreateTextField(
                 "Git URL",
@@ -315,7 +268,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 name = "git-submodule-branch-row"
             };
             branchRow.style.flexDirection = FlexDirection.Row;
-            branchRow.style.alignItems = Align.FlexStart;
+            branchRow.style.alignItems = Align.Center;
             branchField.style.flexGrow = 1f;
             branchMenu = new ToolbarMenu
             {
@@ -324,38 +277,53 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 tooltip = "Choose a branch reported by Git.",
                 variant = ToolbarMenu.Variant.Popup
             };
-            branchMenu.style.marginLeft = 4f;
-            branchMenu.style.marginBottom = 4f;
+            branchMenu.style.marginLeft = 3f;
+            branchMenu.style.marginBottom = 1f;
             branchRow.Add(branchField);
             branchRow.Add(branchMenu);
             root.Add(branchRow);
 
+            statusViewport = new ScrollView(ScrollViewMode.Vertical)
+            {
+                name = "git-submodule-status-viewport",
+                horizontalScrollerVisibility = ScrollerVisibility.Hidden,
+                verticalScrollerVisibility = ScrollerVisibility.Auto,
+                focusable = true
+            };
+            statusViewport.style.marginTop = 2f;
+            statusViewport.style.flexShrink = 0f;
+            statusViewport.style.height = StatusViewportHeight;
+            statusViewport.style.display = DisplayStyle.Flex;
+            statusViewport.style.visibility = Visibility.Hidden;
+
             validationHelp = new HelpBox(string.Empty, HelpBoxMessageType.Warning);
             validationHelp.name = "git-submodule-status";
-            validationHelp.style.marginTop = 5f;
-            root.Add(validationHelp);
+            statusViewport.Add(validationHelp);
+            root.Add(statusViewport);
 
-            var spacer = new VisualElement();
-            spacer.style.flexGrow = 1f;
-            root.Add(spacer);
-
-            var actions = new VisualElement();
+            var actions = new VisualElement
+            {
+                name = "git-submodule-actions"
+            };
             actions.style.flexDirection = FlexDirection.Row;
             actions.style.justifyContent = Justify.FlexEnd;
-            actions.style.marginTop = 8f;
+            actions.style.marginTop = 3f;
+            actions.style.flexShrink = 0f;
 
             var cancelButton = new Button(Close)
             {
+                name = "git-submodule-cancel",
                 text = "Cancel"
             };
-            cancelButton.style.minWidth = 90f;
-            cancelButton.style.marginRight = 5f;
+            cancelButton.style.minWidth = 72f;
+            cancelButton.style.marginRight = 4f;
 
             submitButton = new Button(Submit)
             {
+                name = "git-submodule-submit",
                 text = "Clone and Add"
             };
-            submitButton.style.minWidth = 110f;
+            submitButton.style.minWidth = 96f;
 
             actions.Add(cancelButton);
             actions.Add(submitButton);
@@ -386,8 +354,8 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 tooltip = tooltip,
                 isDelayed = false
             };
-            field.style.marginBottom = 4f;
-            field.labelElement.style.minWidth = 110f;
+            field.style.marginBottom = 1f;
+            field.labelElement.style.minWidth = 90f;
             return field;
         }
 
@@ -567,6 +535,11 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 currentUrl,
                 packageNameField.value,
                 branchField.value);
+            string visibleValidationError = ShouldShowValidationError(
+                currentUrl,
+                validationError)
+                ? validationError
+                : string.Empty;
             bool canStart = GitSubmoduleAddService.CanStart;
             string probeWarning = string.Empty;
             if (hasCurrentSnapshot && snapshot.IsComplete)
@@ -594,20 +567,20 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             }
             else if (!string.IsNullOrWhiteSpace(combinedWarning))
             {
-                validationHelp.text = string.IsNullOrWhiteSpace(validationError)
+                validationHelp.text = string.IsNullOrWhiteSpace(visibleValidationError)
                     ? GitHubUtility.SanitizeUiDiagnostic(combinedWarning)
                     : GitHubUtility.SanitizeUiDiagnostic(combinedWarning) +
-                      "\n\n" + validationError;
+                      "\n\n" + visibleValidationError;
                 validationHelp.messageType = HelpBoxMessageType.Warning;
                 validationHelp.style.display = DisplayStyle.Flex;
             }
-            else if (!string.IsNullOrWhiteSpace(validationError))
+            else if (!string.IsNullOrWhiteSpace(visibleValidationError))
             {
-                validationHelp.text = validationError;
+                validationHelp.text = visibleValidationError;
                 validationHelp.messageType = HelpBoxMessageType.Warning;
                 validationHelp.style.display = DisplayStyle.Flex;
             }
-            else if (!canStart)
+            else if (!canStart && !string.IsNullOrWhiteSpace(currentUrl))
             {
                 validationHelp.text =
                     "Wait for current package scans and repository operations to finish.";
@@ -620,10 +593,30 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 validationHelp.style.display = DisplayStyle.None;
             }
 
+            UpdateStatusViewport();
             submitButton?.SetEnabled(CanSubmit(
                 validationError,
                 canStart,
                 isProbing));
+        }
+
+        internal void UpdateStatusViewport()
+        {
+            if (statusViewport == null || validationHelp == null)
+                return;
+
+            bool statusVisible =
+                validationHelp.style.display.value == DisplayStyle.Flex &&
+                !string.IsNullOrWhiteSpace(validationHelp.text);
+            string statusText = statusVisible
+                ? validationHelp.text
+                : string.Empty;
+            statusViewport.style.display = DisplayStyle.Flex;
+            statusViewport.style.visibility = statusVisible
+                ? Visibility.Visible
+                : Visibility.Hidden;
+            statusViewport.style.height = StatusViewportHeight;
+            statusViewport.tooltip = statusText;
         }
 
         private void OnKeyDown(KeyDownEvent evt)
@@ -900,6 +893,18 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             bool probeIsComplete)
         {
             return repositoryUrlIsValid && probeIsComplete;
+        }
+
+        internal static bool ShouldShowValidationError(
+            string repositoryUrl,
+            string validationError)
+        {
+            // An untouched form is already self-explanatory and the disabled
+            // action communicates that input is required. Keep validation
+            // intact for submission, but only spend vertical space on an
+            // inline warning after the user has entered repository input.
+            return !string.IsNullOrWhiteSpace(repositoryUrl) &&
+                   !string.IsNullOrWhiteSpace(validationError);
         }
 
         internal static bool ShouldWarnAboutManifestBranch(

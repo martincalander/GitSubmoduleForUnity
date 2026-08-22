@@ -23,10 +23,12 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   organization repository page. Results are grouped as **Organization -
   _owner_**, carry **Public** or **Private** repository badges, and use Package
   Manager's native loading message and spinner while discovery is running.
-- A native **Add as Submodule** action for discovered packages. It installs the
-  repository's default branch through the shared validated add transaction and
-  rolls back failed clones or postcondition checks when process termination and
-  cleanup ownership can be proven.
+- Native discovered-package details with a **Repository** website link, Git-based
+  branch selector defaulted to the repository's default branch, and a primary
+  **Install** action outside Unity's **Extensions** overflow. Installation uses
+  the shared validated add transaction and rolls back failed clones or
+  postcondition checks when process termination and cleanup ownership can be
+  proven.
 - A Package Manager **+ > Install package as Git Submodule...** command that is
   available from every Package Manager page. A Git-only remote probe discovers
   branches, the default branch, and the exact root `package.json` name before
@@ -62,6 +64,11 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- Installed repositories on **Sources > GitHub** now retain their **Public** or
+  **Private** badge instead of the redundant **Submodule** badge; normal Package
+  Manager pages continue to identify installed submodules explicitly.
+- The top-left Git-submodule installer now uses a compact baseline layout and a
+  bounded scrolling diagnostic area that expands only when status text needs it.
 - Moved the complete management workspace from its standalone Editor window
   into Unity's existing Package Manager. The explicit package menu opens that
   workspace, while the former public window redirects to it for compatibility.

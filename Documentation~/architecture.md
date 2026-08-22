@@ -51,9 +51,12 @@ transient, non-installed placeholder in Package Manager's in-memory package
 database. The placeholder exists only so Unity can render and search the
 discovery result; it is never written to `Packages/manifest.json` or
 `Packages/packages-lock.json`, and it is never classified as an installed
-submodule. Selecting it exposes the native **Add as Submodule** action, which
-passes the repository's declared package name, clone URL, and default branch to
-the shared validated add transaction.
+submodule. Selecting it mounts a **Repository** website link, a branch selector,
+and a primary **Install** action in Unity's details and built-in action regions,
+not the extension-action overflow. The selector starts on the repository's
+default branch and uses `git ls-remote --heads` for additional choices. The
+action passes the repository's declared package name, clone URL, and selected
+branch to the shared validated add transaction.
 
 Projection records are owned by a specific Package Manager host lifecycle.
 Refresh retires the previous catalogue handles before replacing obsolete
@@ -70,9 +73,10 @@ the fallback.
 The package probes and invokes this internal contract through guarded reflection
 and Harmony lifecycle hooks. Registration, row placement, and icon application
 fail independently without replacing Unity's package database or selection
-model. The presentation hook labels installed package submodules
-**Submodule** and reports their **GitHub** or **Git** source in normal Package
-Manager details.
+model. The presentation hook labels installed package submodules **Submodule**
+on normal Package Manager pages and uses matching **Public** or **Private**
+repository metadata on the exact GitHub extension page. It reports their
+**GitHub** or **Git** source in normal Package Manager details.
 
 The explicit **Window > Package Management > Git Submodule Manager** menu opens
 the host-neutral management workspace for discovery, add, initialize, update,
@@ -126,8 +130,8 @@ and malformed or truncated structural Git output fail closed. Persisted
 `.gitmodules` entries, local submodule configuration, and initialized worktree
 origins are revalidated before they are used.
 
-The native **Add as Submodule** action uses the same serialized mutation service
-as direct installation. It clones the discovered repository's default branch,
+The native **Install** action uses the same serialized mutation service as
+direct installation. It clones the branch selected in Package Manager,
 then verifies the root manifest name, Git registration, destination, origin,
 and branch postconditions. A failed clone or validation is rolled back only
 when process termination and cleanup ownership can be proven; ambiguous state
@@ -217,6 +221,15 @@ validation, repository URL safety, Windows path quoting, GitHub clone URL
 selection, discovery paging, search, stale-request supersession, full-account
 catalogue aggregation, immutable publication, organization deduplication, and
 the shared add transaction's rollback outcomes.
+
+The `PackageManagerCompatibility` EditMode category inventories the reflected
+Package Manager types and exact method signatures used by each supported
+Editor, then verifies Harmony ownership for every resolved hook. The category
+is intentionally quick to run across Unity versions and reports all drift found
+within a contract group together, including the Unity version and platform.
+Editors before the native extension-page generation verify the embedded
+fallback; Unity 2023.2 and newer additionally require the complete native
+Sources/GitHub page, projection, loading, toolbar, and sidebar contracts.
 
 Repository CI adds package metadata, documentation-link, Unity-meta, workflow,
 and package-archive sanity checks that do not require a Unity license.

@@ -95,6 +95,40 @@ In Unity:
 If a platform or Unity version could not be tested, state that clearly in the
 pull request.
 
+### Package Manager Compatibility Checks
+
+The reflection and Harmony seams have a dedicated
+`PackageManagerCompatibility` EditMode category. Run it first after opening the
+package in an older, newer, beta, or patch-release Editor. Its failure output
+includes the exact Unity version, platform, reflected type/method inventory, and
+missing Harmony owner so contract changes can be localized before running the
+full suite.
+
+From a Unity project with the official `unity` CLI and Pipeline connected:
+
+```bash
+UNITY_PROJECT=/absolute/path/to/the/unity-project
+unity --format json command run_tests \
+  --mode editor \
+  --filter PackageManagerCompatibility \
+  --filter_type category \
+  --async_tests true \
+  --project-path "$UNITY_PROJECT"
+unity --format json command test_status \
+  --project-path "$UNITY_PROJECT"
+```
+
+The Test Runner window can run the same subset by filtering EditMode tests by
+the `PackageManagerCompatibility` category. After it passes, run the complete
+`MartinCalander.GitSubmoduleManager.Editor.Tests` assembly because behavior and
+state-transition coverage intentionally lives outside the compatibility subset.
+
+Maintainers can also dispatch **Sanity Checks** with a reviewed full commit SHA
+and an exact `unity_version` such as `2021.3.45f2`, `2023.2.22f1`, or
+`6000.5.9f1`. Manual dispatch stages the same package revision and runs the full
+EditMode assembly in that Editor; normal protected push runs remain pinned to
+the minimum `2021.3.0f1` baseline.
+
 CI runs license-free structure, Markdown, archive, and portability checks on
 every pull request. Unity credentials are never exposed to pull-request code.
 After reviewing a contribution, a maintainer can manually dispatch the

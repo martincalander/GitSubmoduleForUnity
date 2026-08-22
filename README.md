@@ -39,8 +39,9 @@ standard and visible to normal Git tooling.
   the authenticated user's repositories and organizations, combines them with
   installed GitHub submodules, and uses Unity's package list, search, sort,
   selection, and details UI.
-- Adds a discovered package as a submodule from the native details pane. The
-  action uses the repository's default branch and retains the same validation,
+- Adds a **Repository** website link, a branch selector defaulted to the
+  repository's default branch, and a primary **Install** action to a discovered
+  package's native details pane. The action retains the same validation,
   postcondition checks, and safe rollback as the management workspace.
 - Adds **+ > Install package as Git Submodule...** to Package Manager wherever
   it is open. After a repository URL is entered, a Git-only probe fills the
@@ -48,8 +49,10 @@ standard and visible to normal Git tooling.
   branches without requiring GitHub CLI. A trust confirmation precedes the
   shared transaction; failed additions are rolled back whenever cleanup
   ownership can be proven.
-- Labels those packages as **Submodule** in Package Manager and identifies
-  GitHub-hosted repositories as the **GitHub** source with the Git icon.
+- Labels installed package submodules as **Submodule** on normal Package Manager
+  pages. Inside **Sources > GitHub**, installed and discovered repositories use
+  their **Public** or **Private** badge instead. GitHub-hosted installed packages
+  show the **GitHub** source with the Git icon.
 - Keeps the full installed-package management, GitHub discovery, add, update,
   retarget, and remove workspace at **Window > Package Management > Git
   Submodule Manager**.
@@ -109,8 +112,9 @@ managed by the tool are still added to the project as Git submodules.
    submodules in Unity's native package list and details UI. Organization
    headers, **Public**/**Private** badges, and Unity's native loading indicator
    make the catalogue state visible while it is being populated.
-2. Select a discovered package and choose **Add as Submodule** to install its
-   default branch, or use **Refresh** to rescan GitHub and the project.
+2. Select a discovered package, follow **Repository** to inspect it, choose a
+   branch (the repository default is preselected), and choose **Install**. Use
+   **Refresh** to rescan GitHub and the project.
 3. Open **Window > Package Management > Git Submodule Manager** for the full
    management, discovery, add, update, retarget, and remove workspace. On older
    Unity versions, this menu opens the embedded Package Manager fallback.

@@ -5,9 +5,9 @@ Package Manager** and select **GitHub** under **Sources**. This is a fully nativ
 Package Manager page that combines installed GitHub submodules with valid UPM
 packages discovered incrementally from every authenticated personal and
 organization repository page. It uses Unity's package list, search, sorting,
-selection, and package details. Select an uninstalled discovery result and
-choose **Add as Submodule** to install its default branch; **Refresh** rescans
-the project and GitHub.
+selection, and package details. Select an uninstalled discovery result, review
+its **Repository** link, select a branch (the repository default is preselected),
+and choose **Install**; **Refresh** rescans the project and GitHub.
 
 Open **Window > Package Management > Git Submodule Manager** for the complete
 management workspace. It contains **In Project**, authenticated GitHub
@@ -17,9 +17,12 @@ On older supported Unity versions without the extension-page contract, the menu
 opens the management workspace embedded in Package Manager. Use **Back to
 Package Manager** to return to Unity's package list.
 
-Installed package submodules are labelled **Submodule** instead of **Custom** in
-Package Manager. Their Source card shows **GitHub** with the Git icon for GitHub
-repositories, or **Git** for other supported Git hosts.
+Installed package submodules are labelled **Submodule** instead of **Custom** on
+normal Package Manager pages. Inside **Sources > GitHub**, installed and
+discovered repositories are labelled **Public** or **Private** because the
+installed checkmark already communicates installation state. Their Source card
+shows **GitHub** with the Git icon for GitHub repositories, or **Git** for other
+supported Git hosts.
 
 ## Welcome and Setup
 
@@ -139,8 +142,11 @@ SemVer 2.0 `version`.
 To install a discovered result:
 
 1. Select the package and review its owner, source, version, and description.
-2. Choose **Add as Submodule** and confirm the repository and destination.
-3. The package is added below `Packages/` using the repository's default branch.
+2. Choose **Repository** to inspect the repository website when needed.
+3. Choose a branch. The repository's default branch is selected before the
+   Git-based remote branch list finishes loading.
+4. Choose **Install** and confirm the repository, branch, and destination.
+5. The package is added below `Packages/` on the selected branch.
 
 The native action uses the same serialized Git transaction as direct addition.
 It validates the cloned manifest and Git registration, then safely rolls back a
@@ -179,6 +185,10 @@ the remote default branch, and adds the available remote branches to the
 branch menu. Both values remain editable for manual fallback. This workflow
 uses Git directly and never requires GitHub CLI, including for GitHub
 repository URLs.
+
+The popup starts with a compact height. Status and error text expands into a
+bounded scrolling area only when needed, so the action row remains reachable
+without leaving a large empty lower section.
 
 Before cloning, a trust confirmation shows the redacted repository URL, chosen
 branch or repository default, and exact `Packages/<package-name>` destination.

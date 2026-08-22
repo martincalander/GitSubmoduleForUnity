@@ -1,9 +1,11 @@
 using System;
 using System.Collections.Generic;
 using System.Reflection;
+using System.Runtime.CompilerServices;
 using HarmonyLib;
 using UnityEditor;
 using UnityEngine;
+using UnityEngine.UIElements;
 
 namespace MartinCalander.GitSubmoduleManager.Editor
 {
@@ -28,6 +30,11 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             "UnityEditor.PackageManager.UI.PackageManagerWindow";
         internal const string RefreshMethodName = "Refresh";
         internal const string LegacyCreateTagLabelMethodName = "CreateTagLabel";
+        internal const string PackageManagerRootFieldName = "m_Root";
+        internal const string PageManagerFieldName = "m_PageManager";
+        internal const string PageManagerPropertyName = "pageManager";
+        internal const string ActivePagePropertyName = "activePage";
+        internal const string PageIdPropertyName = "id";
 
         private const BindingFlags AnyInstance =
             BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
@@ -39,6 +46,14 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         private static bool shuttingDown;
         private static double nextPatchAttempt;
         private static string lastPatchError = string.Empty;
+        private static readonly ConditionalWeakTable<VisualElement, DeferredTagState>
+            DeferredTags = new ConditionalWeakTable<VisualElement, DeferredTagState>();
+
+        private sealed class DeferredTagState
+        {
+            internal object PackageVersion;
+            internal bool IsRegistered;
+        }
 
         static PackageManagerSubmoduleHarmonyPatch()
         {
@@ -302,13 +317,18 @@ namespace MartinCalander.GitSubmoduleManager.Editor
 
             try
             {
-                object root = GetFieldValue(window, "m_Root");
-                object pageManager = GetFieldValue(root, "m_PageManager");
+                object root = GetFieldValue(
+                    window,
+                    PackageManagerRootFieldName);
+                object pageManager = GetFieldValue(
+                    root,
+                    PageManagerFieldName);
                 if (pageManager == null)
                     return false;
 
-                object activePage = GetPropertyValue(pageManager, "activePage") ??
-                                    InvokeOptionalCurrentPageGetter(pageManager);
+                object activePage =
+                    GetPropertyValue(pageManager, ActivePagePropertyName) ??
+                    InvokeOptionalCurrentPageGetter(pageManager);
                 if (activePage == null)
                     return false;
 
@@ -389,6 +409,66 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             return null;
         }
 
+        private static bool TryGetFieldValue(
+            object instance,
+            string fieldName,
+            out object value)
+        {
+            value = null;
+            if (instance == null)
+                return false;
+
+            try
+            {
+                for (Type type = instance.GetType(); type != null; type = type.BaseType)
+                {
+                    FieldInfo field = type.GetField(fieldName, AnyInstance);
+                    if (field == null)
+                        continue;
+
+                    value = field.GetValue(instance);
+                    return true;
+                }
+            }
+            catch
+            {
+                return false;
+            }
+
+            return false;
+        }
+
+        private static bool TryGetPropertyValue(
+            object instance,
+            string propertyName,
+            out object value)
+        {
+            value = null;
+            if (instance == null)
+                return false;
+
+            try
+            {
+                for (Type type = instance.GetType(); type != null; type = type.BaseType)
+                {
+                    PropertyInfo property = type.GetProperty(
+                        propertyName,
+                        AnyInstance);
+                    if (property == null || property.GetIndexParameters().Length != 0)
+                        continue;
+
+                    value = property.GetValue(instance, null);
+                    return true;
+                }
+            }
+            catch
+            {
+                return false;
+            }
+
+            return false;
+        }
+
         private static object InvokeOptionalCurrentPageGetter(object pageManager)
         {
             foreach (MethodInfo method in pageManager.GetType().GetMethods(AnyInstance))
@@ -459,21 +539,33 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             ApplyTagPresentation(__result, __0);
         }
 
-        private static void ApplyTagPresentation(object tagElement, object packageVersion)
+        internal static void ApplyTagPresentation(object tagElement, object packageVersion)
         {
             try
             {
-                PackageManagerSubmodulePresentation.ResetRepositoryVisibilityTag(
-                    tagElement);
-                PackageManagerSubmodulePresentation.ResetCustomTagLabel(tagElement);
+                // Refresh can rebind a detached/recycled label before its
+                // AttachToPanel callback runs. The newest invocation always
+                // owns the binding; unrecognized packages cancel it entirely.
+                CancelDeferredTagPresentation(tagElement);
+                bool pageResolved = TryGetGitHubPageStateForTag(
+                    tagElement,
+                    out bool isGitHubPage);
                 if (PackageManagerGitHubPackageProjection.TryGetRepository(
                         packageVersion,
                         out PackageManagerGitHubRepository repository))
                 {
-                    PackageManagerSubmodulePresentation
-                        .ApplyRepositoryVisibilityTag(
-                            tagElement,
-                            repository.IsPrivate);
+                    PackageManagerSubmodulePresentation.ResetTagLabelPresentation(
+                        tagElement);
+                    if (pageResolved && isGitHubPage)
+                    {
+                        PackageManagerSubmodulePresentation
+                            .ApplyRepositoryVisibilityTag(
+                                tagElement,
+                                repository.IsPrivate);
+                    }
+
+                    if (!pageResolved)
+                        DeferTagPresentationUntilAttached(tagElement, packageVersion);
                     return;
                 }
 
@@ -481,13 +573,313 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                         packageVersion,
                         out PackageManagerSubmoduleInfo info))
                 {
-                    PackageManagerSubmodulePresentation.ApplyTagLabel(tagElement, info);
+                    PackageManagerSubmodulePresentation.ApplyInstalledTagLabel(
+                        tagElement,
+                        info,
+                        pageResolved && isGitHubPage,
+                        PackageManagerGitHubDiscovery.Current);
+                    if (!pageResolved)
+                        DeferTagPresentationUntilAttached(tagElement, packageVersion);
+                    return;
                 }
+
+                PackageManagerSubmodulePresentation.ResetTagLabelPresentation(
+                    tagElement);
             }
             catch
             {
                 // Unity's Package Manager remains authoritative when its internals change.
             }
+        }
+
+        internal static bool TryGetGitHubPageState(
+            object pageManager,
+            out bool isGitHubPage)
+        {
+            return TryGetGitHubPageState(
+                pageManager,
+                out isGitHubPage,
+                out _);
+        }
+
+        internal static bool TryGetGitHubPageState(
+            object pageManager,
+            out bool isGitHubPage,
+            out string compatibilityDiagnostic)
+        {
+            isGitHubPage = false;
+            compatibilityDiagnostic = string.Empty;
+            if (pageManager == null)
+            {
+                compatibilityDiagnostic = "Package Manager page manager is null.";
+                return false;
+            }
+
+            try
+            {
+                if (!TryGetPropertyValue(
+                        pageManager,
+                        ActivePagePropertyName,
+                        out object activePage))
+                {
+                    compatibilityDiagnostic =
+                        $"Package Manager property '{ActivePagePropertyName}' is unavailable.";
+                    return false;
+                }
+
+                if (activePage == null)
+                {
+                    compatibilityDiagnostic = "Package Manager active page is null.";
+                    return false;
+                }
+
+                if (!TryGetPropertyValue(
+                        activePage,
+                        PageIdPropertyName,
+                        out object pageIdValue))
+                {
+                    compatibilityDiagnostic =
+                        $"Package Manager active-page property '{PageIdPropertyName}' is unavailable.";
+                    return false;
+                }
+
+                string pageId = pageIdValue as string;
+                if (string.IsNullOrWhiteSpace(pageId))
+                {
+                    compatibilityDiagnostic = "Package Manager active-page id is empty.";
+                    return false;
+                }
+
+                isGitHubPage = string.Equals(
+                    pageId,
+                    PackageManagerSubmoduleNativePage.ExtensionPageId,
+                    StringComparison.Ordinal);
+                return true;
+            }
+            catch (Exception exception)
+            {
+                compatibilityDiagnostic =
+                    "Package Manager active-page contract failed: " +
+                    GitHubUtility.SanitizeUiDiagnostic(exception.Message);
+                return false;
+            }
+        }
+
+        internal static bool TryGetGitHubPageStateFromRoot(
+            object packageManagerRoot,
+            out bool isGitHubPage,
+            out string compatibilityDiagnostic)
+        {
+            isGitHubPage = false;
+            compatibilityDiagnostic = string.Empty;
+            if (packageManagerRoot == null)
+            {
+                compatibilityDiagnostic = "Package Manager root is null.";
+                return false;
+            }
+
+            bool fieldRead = TryGetFieldValue(
+                packageManagerRoot,
+                PageManagerFieldName,
+                out object pageManager);
+            if (pageManager == null)
+            {
+                bool propertyRead = TryGetPropertyValue(
+                    packageManagerRoot,
+                    PageManagerPropertyName,
+                    out pageManager);
+                if (!fieldRead && !propertyRead)
+                {
+                    compatibilityDiagnostic =
+                        $"Package Manager field '{PageManagerFieldName}' and property " +
+                        $"'{PageManagerPropertyName}' are unavailable.";
+                    return false;
+                }
+            }
+
+            if (pageManager == null)
+            {
+                compatibilityDiagnostic = "Package Manager page manager is null.";
+                return false;
+            }
+
+            return TryGetGitHubPageState(
+                pageManager,
+                out isGitHubPage,
+                out compatibilityDiagnostic);
+        }
+
+        internal static bool TryGetGitHubPageStateFromWindow(
+            object packageManagerWindow,
+            out bool isGitHubPage,
+            out string compatibilityDiagnostic)
+        {
+            isGitHubPage = false;
+            compatibilityDiagnostic = string.Empty;
+            if (packageManagerWindow == null)
+            {
+                compatibilityDiagnostic = "Package Manager window is null.";
+                return false;
+            }
+
+            if (!string.Equals(
+                    packageManagerWindow.GetType().FullName,
+                    PackageManagerWindowTypeName,
+                    StringComparison.Ordinal))
+            {
+                compatibilityDiagnostic =
+                    "Object is not the expected Package Manager window type.";
+                return false;
+            }
+
+            if (!TryGetFieldValue(
+                    packageManagerWindow,
+                    PackageManagerRootFieldName,
+                    out object root))
+            {
+                compatibilityDiagnostic =
+                    $"Package Manager field '{PackageManagerRootFieldName}' is unavailable.";
+                return false;
+            }
+
+            if (root == null)
+            {
+                compatibilityDiagnostic = "Package Manager root is null.";
+                return false;
+            }
+
+            return TryGetGitHubPageStateFromRoot(
+                root,
+                out isGitHubPage,
+                out compatibilityDiagnostic);
+        }
+
+        internal static bool TryGetGitHubPageStateForTag(
+            object tagElement,
+            out bool isGitHubPage)
+        {
+            isGitHubPage = false;
+            if (!(tagElement is VisualElement element))
+                return false;
+
+            try
+            {
+                Type windowType = FindLoadedType(PackageManagerWindowTypeName);
+                if (windowType == null)
+                    return false;
+
+                foreach (EditorWindow window in Resources.FindObjectsOfTypeAll<EditorWindow>())
+                {
+                    if (window == null ||
+                        window.GetType() != windowType ||
+                        !IsDescendantOrSelf(window.rootVisualElement, element))
+                    {
+                        continue;
+                    }
+
+                    return TryGetGitHubPageStateFromWindow(
+                        window,
+                        out isGitHubPage,
+                        out _);
+                }
+            }
+            catch
+            {
+                // A detached label or a changed window contract is unresolved,
+                // never evidence that it belongs to the GitHub extension page.
+            }
+
+            return false;
+        }
+
+        private static bool IsDescendantOrSelf(
+            VisualElement root,
+            VisualElement element)
+        {
+            if (root == null || element == null)
+                return false;
+
+            for (VisualElement current = element;
+                 current != null;
+                 current = current.parent)
+            {
+                if (ReferenceEquals(current, root))
+                    return true;
+            }
+
+            return false;
+        }
+
+        internal static void CancelDeferredTagPresentation(object tagElement)
+        {
+            if (!(tagElement is VisualElement element) ||
+                !DeferredTags.TryGetValue(element, out DeferredTagState state))
+            {
+                return;
+            }
+
+            state.PackageVersion = null;
+            if (state.IsRegistered)
+            {
+                element.UnregisterCallback<AttachToPanelEvent>(
+                    OnDeferredTagAttached);
+                state.IsRegistered = false;
+            }
+
+            DeferredTags.Remove(element);
+        }
+
+        internal static bool HasDeferredTagPresentation(
+            object tagElement,
+            object packageVersion)
+        {
+            return tagElement is VisualElement element &&
+                   DeferredTags.TryGetValue(element, out DeferredTagState state) &&
+                   state.IsRegistered &&
+                   ReferenceEquals(state.PackageVersion, packageVersion);
+        }
+
+        internal static void DeferTagPresentationUntilAttached(
+            object tagElement,
+            object packageVersion)
+        {
+            if (!(tagElement is VisualElement element) ||
+                element.panel != null ||
+                packageVersion == null)
+            {
+                return;
+            }
+
+            DeferredTagState state = DeferredTags.GetValue(
+                element,
+                _ => new DeferredTagState());
+            state.PackageVersion = packageVersion;
+            if (state.IsRegistered)
+                return;
+
+            state.IsRegistered = true;
+            element.RegisterCallback<AttachToPanelEvent>(OnDeferredTagAttached);
+        }
+
+        private static void OnDeferredTagAttached(AttachToPanelEvent attachEvent)
+        {
+            ApplyDeferredTagPresentationOnAttach(attachEvent.currentTarget);
+        }
+
+        internal static void ApplyDeferredTagPresentationOnAttach(object tagElement)
+        {
+            if (!(tagElement is VisualElement element))
+                return;
+
+            element.UnregisterCallback<AttachToPanelEvent>(OnDeferredTagAttached);
+            if (!DeferredTags.TryGetValue(element, out DeferredTagState state))
+                return;
+
+            state.IsRegistered = false;
+            object packageVersion = state.PackageVersion;
+            state.PackageVersion = null;
+            if (packageVersion != null)
+                ApplyTagPresentation(element, packageVersion);
         }
 
         private static void SourceRefreshPostfix(object __instance, object __0)
