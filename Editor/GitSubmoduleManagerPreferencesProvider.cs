@@ -9,11 +9,15 @@ namespace MartinCalander.GitSubmoduleManager.Editor
     {
         private string saveError = string.Empty;
         private string recoveryError = string.Empty;
+        private GitSubmoduleManagerSetupProbe setupProbe;
 
         private static readonly string[] SearchKeywords =
         {
             "Git",
             "GitHub",
+            "GitHub CLI",
+            "Authentication",
+            "Version",
             "Package Manager",
             "Submodule",
             "Read-Only",
@@ -54,8 +58,25 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             return new GitSubmoduleManagerPreferencesProvider();
         }
 
+        public override void OnActivate(
+            string searchContext,
+            UnityEngine.UIElements.VisualElement rootElement)
+        {
+            base.OnActivate(searchContext, rootElement);
+            EnsureSetupProbe();
+        }
+
+        public override void OnDeactivate()
+        {
+            if (setupProbe != null)
+                setupProbe.Changed -= OnSetupProbeChanged;
+            setupProbe = null;
+            base.OnDeactivate();
+        }
+
         public override void OnGUI(string searchContext)
         {
+            EnsureSetupProbe();
             GitSubmoduleManagerUserSettings settings = GitSubmoduleManagerUserSettings.Instance;
 
             EditorGUILayout.LabelField("Confirmations", EditorStyles.boldLabel);
@@ -126,6 +147,18 @@ namespace MartinCalander.GitSubmoduleManager.Editor
 
             EditorGUILayout.Space(10f);
             EditorGUILayout.LabelField("Setup", EditorStyles.boldLabel);
+            GitSubmoduleManagerSetupSnapshot setup =
+                setupProbe?.Current ?? GitSubmoduleManagerSetupSnapshot.Idle;
+            GitSubmoduleManagerSetupGUI.Draw(setup);
+
+            EditorGUILayout.Space(6f);
+            using (new EditorGUI.DisabledScope(setup.IsChecking))
+            {
+                if (GUILayout.Button("Check Again", GUILayout.Width(150f)))
+                    setupProbe?.Start();
+            }
+
+            EditorGUILayout.Space(6f);
             EditorGUILayout.HelpBox(
                 "These preferences are stored per user and project in " +
                 GitSubmoduleManagerUserSettings.SettingsFilePath + ".",
@@ -134,11 +167,30 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             EditorGUILayout.BeginHorizontal();
             if (GUILayout.Button("Show Welcome", GUILayout.Width(150f)))
                 GitSubmoduleManagerWelcomeWindow.Open();
-            if (GUILayout.Button("Open Sources > GitHub", GUILayout.Width(180f)))
+            if (GUILayout.Button(
+                    "Open GitHub Package Manager",
+                    GUILayout.Width(210f)))
+            {
                 GitSubmoduleManagerPackageManagerHost.OpenGitHubSource();
+            }
             EditorGUILayout.EndHorizontal();
 
             DrawRecoverySection();
+        }
+
+        private void EnsureSetupProbe()
+        {
+            if (setupProbe != null)
+                return;
+
+            setupProbe = GitSubmoduleManagerSetupProbe.Shared;
+            setupProbe.Changed += OnSetupProbeChanged;
+            setupProbe.EnsureStarted();
+        }
+
+        private void OnSetupProbeChanged()
+        {
+            Repaint();
         }
 
         private void DrawRecoverySection()

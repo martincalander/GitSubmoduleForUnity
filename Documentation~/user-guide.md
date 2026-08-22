@@ -33,7 +33,14 @@ authentication command, complete it in a visible terminal, and check again.
 Git Submodule Manager never accepts or stores tokens, passwords, SSH keys, or
 credential-helper output.
 
-Choose **Open Sources > GitHub** to continue into Package Manager. Reopen the
+The same live setup cards appear under **Preferences > Git Submodule Manager**.
+Installed tools show a checkmark and their detected version. Preferences and
+Welcome share one probe, so opening both does not start competing GitHub CLI
+authentication checks. A cached result refreshes automatically after a short
+freshness window; use **Check Again** for an immediate refresh after changing a
+tool or its authentication.
+
+Choose **Open GitHub Package Manager** to continue into Package Manager. Reopen the
 window at any time from **Preferences > Git Submodule Manager > Show Welcome**.
 
 ## Preferences
@@ -53,8 +60,9 @@ Package Manager defaults include:
 
 Visibility and organization defaults are applied only when **Sources > GitHub**
 has no existing filter selection. The install-mode default initializes the
-selector for a discovered repository. The page also provides **Open Sources >
-GitHub**.
+selector for a discovered repository. The page also provides **Open GitHub
+Package Manager**, setup status, version details, installation guidance, and a
+manual **Check Again** action.
 
 Two opt-in workflow settings are available:
 

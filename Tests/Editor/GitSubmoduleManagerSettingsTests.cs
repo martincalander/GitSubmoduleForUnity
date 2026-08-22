@@ -97,6 +97,111 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
         }
 
         [Test]
+        public void SetupPresentation_InstalledStatusShowsCheckmarkAndFirstVersionLine()
+        {
+            Assert.That(
+                GitSubmoduleManagerSetupGUI.FormatInstalledMessage(
+                    "git version 2.50.1\nplatform details"),
+                Is.EqualTo("\u2713 Installed — git version 2.50.1"));
+        }
+
+        [Test]
+        public void SetupPresentation_AuthenticatedStatusShowsCheckmarkAndGhVersion()
+        {
+            Assert.That(
+                GitSubmoduleManagerSetupGUI.FormatAuthenticatedMessage(
+                    "gh version 2.96.0 (2026-07-02)\r\nrelease notes"),
+                Is.EqualTo(
+                    "\u2713 Installed and authenticated — " +
+                    "gh version 2.96.0 (2026-07-02)"));
+        }
+
+        [Test]
+        public void SetupSnapshot_RefreshPreservesLastKnownToolDetails()
+        {
+            var ready = new GitSubmoduleManagerSetupSnapshot(
+                false,
+                true,
+                "git version 2.50.1",
+                string.Empty,
+                true,
+                "gh version 2.96.0",
+                string.Empty,
+                GitHubAuthenticationProbeStatus.Authenticated,
+                string.Empty,
+                false);
+
+            GitSubmoduleManagerSetupSnapshot checking = ready.WithChecking(true);
+
+            Assert.That(checking.IsChecking, Is.True);
+            Assert.That(checking.GitAvailable, Is.True);
+            Assert.That(checking.GitVersion, Is.EqualTo("git version 2.50.1"));
+            Assert.That(checking.GitHubCliAvailable, Is.True);
+            Assert.That(checking.GitHubCliVersion, Is.EqualTo("gh version 2.96.0"));
+            Assert.That(checking.GitHubAuthenticated, Is.True);
+        }
+
+        [TestCase(false, false, 0d, true)]
+        [TestCase(true, true, 300d, false)]
+        [TestCase(true, false, 29.9d, false)]
+        [TestCase(true, false, 30d, true)]
+        public void SetupProbe_RefreshesOnlyWhenMissingOrCacheIsStale(
+            bool alreadyStarted,
+            bool isChecking,
+            double elapsedSinceCompletion,
+            bool expected)
+        {
+            Assert.That(
+                GitSubmoduleManagerSetupProbe.ShouldRefresh(
+                    alreadyStarted,
+                    isChecking,
+                    elapsedSinceCompletion),
+                Is.EqualTo(expected));
+        }
+
+        [Test]
+        public void AuthenticationClassification_RecognizesGhAuthenticationExitCode()
+        {
+            Assert.That(
+                GitHubUtility.IsDefiniteAuthenticationFailure(
+                    new CommandResult
+                    {
+                        ExitCode = 4,
+                        StdOut = string.Empty,
+                        StdErr = string.Empty
+                    }),
+                Is.True);
+        }
+
+        [Test]
+        public void AuthenticationClassification_DoesNotCallNetworkFailureUnauthenticated()
+        {
+            Assert.That(
+                GitHubUtility.IsDefiniteAuthenticationFailure(
+                    new CommandResult
+                    {
+                        ExitCode = 1,
+                        StdOut = string.Empty,
+                        StdErr = "could not resolve api.github.com"
+                    }),
+                Is.False);
+        }
+
+        [Test]
+        public void AuthenticationClassification_RecognizesInvalidCredentials()
+        {
+            Assert.That(
+                GitHubUtility.IsDefiniteAuthenticationFailure(
+                    new CommandResult
+                    {
+                        ExitCode = 1,
+                        StdOut = string.Empty,
+                        StdErr = "HTTP 401: Bad credentials"
+                    }),
+                Is.True);
+        }
+
+        [Test]
         public void StandaloneWelcomeWindow_DoesNotRegisterAnEditorMenuItem()
         {
             bool hasMenuItem = typeof(GitSubmoduleManagerWelcomeWindow)

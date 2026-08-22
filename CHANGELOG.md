@@ -14,6 +14,10 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Preferences and Welcome now share one asynchronous setup probe. Both surfaces
+  show explicit checkmarks and detected versions for Git and GitHub CLI,
+  GitHub authentication status, refresh controls, and safe official
+  installation or authentication guidance when setup is incomplete.
 - Discovered GitHub packages can now be installed as either editable Git
   submodules or normal read-only UPM Git dependencies. Eligible installed
   packages expose **Convert to Submodule**, **Convert to Read-Only Package**,

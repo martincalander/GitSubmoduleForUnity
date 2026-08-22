@@ -8,6 +8,14 @@ using UnityEngine;
 
 namespace MartinCalander.GitSubmoduleManager.Editor
 {
+    internal enum GitHubAuthenticationProbeStatus
+    {
+        Unknown,
+        Authenticated,
+        Unauthenticated,
+        Unverified
+    }
+
     internal static class GitHubUtility
     {
         internal const string GitHubHost = "github.com";
@@ -94,6 +102,18 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             out string error,
             out bool deferredByAuthentication)
         {
+            GitHubAuthenticationProbeStatus status = ProbeAuthentication(
+                cancellationToken,
+                out error,
+                out deferredByAuthentication);
+            return status == GitHubAuthenticationProbeStatus.Authenticated;
+        }
+
+        internal static GitHubAuthenticationProbeStatus ProbeAuthentication(
+            CancellationToken cancellationToken,
+            out string error,
+            out bool deferredByAuthentication)
+        {
             var result = CliCommandRunner.Run(
                 "gh",
                 BuildAuthenticationStatusArguments(),
@@ -104,11 +124,45 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             if (result.IsSuccess)
             {
                 error = string.Empty;
-                return true;
+                return GitHubAuthenticationProbeStatus.Authenticated;
             }
 
             error = SanitizeUiDiagnostic(
                 string.IsNullOrWhiteSpace(result.StdErr) ? result.StdOut : result.StdErr);
+            if (deferredByAuthentication)
+                return GitHubAuthenticationProbeStatus.Unverified;
+
+            return IsDefiniteAuthenticationFailure(result)
+                ? GitHubAuthenticationProbeStatus.Unauthenticated
+                : GitHubAuthenticationProbeStatus.Unverified;
+        }
+
+        internal static bool IsDefiniteAuthenticationFailure(CommandResult result)
+        {
+            if (result == null || result.TimedOut || result.Cancelled)
+                return false;
+            if (result.ExitCode == 4)
+                return true;
+
+            string diagnostic = ((result.StdErr ?? string.Empty) + "\n" +
+                                 (result.StdOut ?? string.Empty))
+                .ToLowerInvariant();
+            foreach (string marker in new[]
+                     {
+                         "authentication required",
+                         "gh auth login",
+                         "not logged in",
+                         "not logged into",
+                         "bad credentials",
+                         "invalid token",
+                         "token is invalid",
+                         "http 401"
+                     })
+            {
+                if (diagnostic.Contains(marker))
+                    return true;
+            }
+
             return false;
         }
 

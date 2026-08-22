@@ -243,7 +243,8 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             }
         }
 
-        internal static string GitExecutable => gitExecutableOverride ?? "git";
+        internal static string GitExecutable =>
+            Volatile.Read(ref gitExecutableOverride) ?? "git";
 
         internal static string ResolveRecoveryRoot(string projectRoot)
         {
@@ -1204,7 +1205,6 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             CancellationToken cancellationToken)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            gitExecutableOverride = null;
             if (RuntimeInformation.IsOSPlatform(OSPlatform.OSX) &&
                 CliCommandRunner.TryResolveCommand("git", out string resolvedGitPath) &&
                 string.Equals(resolvedGitPath, "/usr/bin/git", StringComparison.Ordinal))
@@ -1236,7 +1236,15 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                                 out _))
                             continue;
 
-                        gitExecutableOverride = alternateGitPath;
+                        // The fallback is process-wide because every later Git
+                        // command must use the same executable. Publish it only
+                        // once and never reset it from a background setup check;
+                        // changing executables between transaction steps would
+                        // make rollback behavior unpredictable.
+                        Interlocked.CompareExchange(
+                            ref gitExecutableOverride,
+                            alternateGitPath,
+                            null);
                         version = alternateResult.StdOut.Trim();
                         error = string.Empty;
                         return true;

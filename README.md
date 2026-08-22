@@ -69,9 +69,9 @@ remain completely standard and visible to normal Git tooling.
   removal/conversion confirmation are configurable per user in **Preferences >
   Git Submodule Manager**. Safe defaults show all repositories from all owners,
   install as a Git submodule, and keep both confirmation prompts active.
-- Provides a small standalone Welcome window, reopened from Preferences, that
-  checks Git, GitHub CLI, and GitHub authentication and opens **Sources >
-  GitHub**.
+- Provides shared setup cards in Preferences and the standalone Welcome window.
+  They show Git and GitHub CLI versions, installation and authentication
+  checkmarks, official install/help actions, and open **Sources > GitHub**.
 - Adds a package from a secure HTTPS or SSH repository URL, or from an explicit
   local repository path.
 - Discovers repositories from GitHub users and organizations when `gh` is
@@ -133,7 +133,7 @@ read-only UPM Git dependencies.
    uninstall a submodule safely.
 5. Open **Preferences > Git Submodule Manager** to choose GitHub filter and
    install defaults, change confirmation behavior, reopen **Show Welcome**, or
-   jump directly to **Open Sources > GitHub**.
+   jump directly to **Open GitHub Package Manager**.
 6. From any open Package Manager page, choose **+ > Install package as Git
    Submodule...** to add a repository directly by URL. Git inspects the remote
    package name, default branch, and available branches before enabling those

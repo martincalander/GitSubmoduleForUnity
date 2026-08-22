@@ -59,8 +59,10 @@ user. Its shown flag is stored per user and project under Unity's ignored
 `UserSettings/` directory. Reopen it with **Show Welcome** under Unity's
 **Preferences > Git Submodule Manager** page.
 
-That Preferences page also provides **Open Sources > GitHub** and stores the
-following per-user defaults and safety choices:
+That Preferences page repeats the Welcome setup checks with installed versions,
+authentication status, official install/help actions, and **Check Again**. It
+also provides **Open GitHub Package Manager** and stores the following per-user
+defaults and safety choices:
 
 - initial repository visibility (**All Repositories** by default) and
   organization filters (blank for all owners by default);
