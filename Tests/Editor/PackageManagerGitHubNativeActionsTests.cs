@@ -156,6 +156,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                 (_, _) => { },
                 _ => { });
             details.Refresh(CreateRepository("alpha", "main"));
+            details.SetInstallState(true, true, "Ready");
 
             Assert.That(PackageManagerGitHubDetails.InstallText, Is.EqualTo("Install"));
             Assert.That(
@@ -176,6 +177,15 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                 extensionItems.Q<Button>(
                     PackageManagerGitHubDetails.InstallActionElementName),
                 Is.Null);
+            Assert.That(
+                details.CancelInstallButton.style.display.value,
+                Is.EqualTo(DisplayStyle.None));
+            Assert.That(
+                details.InstallFeedback.style.display.value,
+                Is.EqualTo(DisplayStyle.None));
+            Assert.That(
+                details.InstallFeedback.parent?.name,
+                Is.EqualTo(PackageManagerGitHubDetails.NativeHelpBoxContainerName));
         }
 
         [TestCase(
@@ -345,16 +355,97 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                 details.Refresh(repository);
                 details.ApplyAvailableBranchesForTests(
                     new[] { "main", "release", "feature/native-ui" });
+                details.SetInstallState(true, true, "Ready");
 
                 details.BranchField.value = "release";
                 host.Repaint();
                 yield return null;
 
                 Assert.That(details.SelectedBranch, Is.EqualTo("release"));
-                details.TriggerInstall();
+                SendNavigationSubmit(details.InstallButton);
+
+                Assert.That(installedRepository, Is.Null);
+                Assert.That(installedBranch, Is.Empty);
+                Assert.That(details.IsInstallConfirmationPending, Is.True);
+                Assert.That(
+                    details.InstallButton.text,
+                    Is.EqualTo(L10n.Tr(
+                        PackageManagerGitHubDetails.ConfirmInstallText)));
+                Assert.That(
+                    details.CancelInstallButton.style.display.value,
+                    Is.EqualTo(DisplayStyle.Flex));
+                Assert.That(
+                    details.InstallFeedback.style.display.value,
+                    Is.EqualTo(DisplayStyle.Flex));
+                Assert.That(
+                    details.InstallFeedback.messageType,
+                    Is.EqualTo(HelpBoxMessageType.Warning));
+                Label feedbackLabel = details.InstallFeedback.Q<Label>(
+                    className: HelpBox.labelUssClassName);
+                Assert.That(feedbackLabel, Is.Not.Null);
+                Assert.That(feedbackLabel.enableRichText, Is.False);
+                Assert.That(details.BranchField.enabledSelf, Is.False);
+
+                SendNavigationSubmit(details.InstallButton);
 
                 Assert.That(installedRepository, Is.SameAs(repository));
                 Assert.That(installedBranch, Is.EqualTo("release"));
+                Assert.That(details.IsInstalling, Is.True);
+                Assert.That(
+                    details.InstallButton.text,
+                    Is.EqualTo(L10n.Tr(
+                        PackageManagerGitHubDetails.InstallingText)));
+                Assert.That(details.InstallButton.enabledSelf, Is.False);
+            }
+            finally
+            {
+                details.Dispose();
+                if (host != null)
+                    host.Close();
+            }
+        }
+
+        [UnityTest]
+        public IEnumerator InstallConfirmation_CancelRestoresIdleWithoutInstalling()
+        {
+            int installCount = 0;
+            PackageManagerGitHubDetails details = CreateDetails(
+                out _,
+                out VisualElement extensionItems,
+                out _,
+                (_, _) => installCount++,
+                _ => { });
+            var host = ScriptableObject.CreateInstance<NativeActionsHostWindow>();
+            try
+            {
+                VisualElement fixtureRoot = extensionItems.parent?.parent;
+                Assert.That(fixtureRoot, Is.Not.Null);
+                host.position = new Rect(100f, 100f, 500f, 200f);
+                host.Show();
+                host.rootVisualElement.Add(fixtureRoot);
+                yield return null;
+
+                details.Refresh(CreateRepository("repository", "main"));
+                details.SetInstallState(true, true, "Ready");
+                SendNavigationSubmit(details.InstallButton);
+                Assert.That(details.IsInstallConfirmationPending, Is.True);
+
+                SendNavigationSubmit(details.CancelInstallButton);
+
+                Assert.That(installCount, Is.Zero);
+                Assert.That(details.IsInstallConfirmationPending, Is.False);
+                Assert.That(
+                    details.InstallButton.text,
+                    Is.EqualTo(L10n.Tr(
+                        PackageManagerGitHubDetails.InstallText)));
+                Assert.That(details.InstallButton.enabledSelf, Is.True);
+                Assert.That(details.BranchField.enabledSelf, Is.True);
+                Assert.That(
+                    details.CancelInstallButton.style.display.value,
+                    Is.EqualTo(DisplayStyle.None));
+                Assert.That(
+                    details.InstallFeedback.style.display.value,
+                    Is.EqualTo(DisplayStyle.None));
             }
             finally
             {
@@ -377,18 +468,288 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                 _ => { });
             details.Refresh(CreateRepository("first", "main"));
             details.ApplyAvailableBranchesForTests(new[] { "main", "release" });
+            details.SetInstallState(true, true, "Ready");
             details.BranchField.value = "release";
+            details.TriggerInstall();
+
+            Assert.That(details.IsInstallConfirmationPending, Is.True);
+            Assert.That(installRequests, Is.Empty);
 
             PackageManagerGitHubRepository second = CreateRepository(
                 "second",
                 "trunk");
             details.Refresh(second);
             details.ApplyAvailableBranchesForTests(new[] { "trunk", "develop" });
+            details.SetInstallState(true, true, "Ready");
+
+            Assert.That(details.IsInstallConfirmationPending, Is.False);
+            Assert.That(
+                details.InstallButton.text,
+                Is.EqualTo(L10n.Tr(PackageManagerGitHubDetails.InstallText)));
+            Assert.That(installRequests, Is.Empty);
+
+            details.TriggerInstall();
             details.TriggerInstall();
 
             Assert.That(details.CurrentRepository, Is.SameAs(second));
             Assert.That(details.SelectedBranch, Is.EqualTo("trunk"));
             Assert.That(installRequests, Is.EqualTo(new[] { "second:trunk" }));
+        }
+
+        [Test]
+        public void Confirmation_ResetsWhenSameRepositoryChangesInstallInputs()
+        {
+            using PackageManagerGitHubDetails details = CreateDetails(
+                out _,
+                out _,
+                out _,
+                (_, _) => { },
+                _ => { });
+            details.Refresh(CreateRepository(
+                "repository",
+                "main",
+                "https://github.com/example/repository.git"));
+            details.SetInstallState(true, true, "Ready");
+            details.TriggerInstall();
+            Assert.That(details.IsInstallConfirmationPending, Is.True);
+
+            details.Refresh(CreateRepository(
+                "repository",
+                "main",
+                "https://github.com/example/repository-renamed.git"));
+
+            Assert.That(details.IsInstallConfirmationPending, Is.False);
+            Assert.That(
+                details.InstallButton.text,
+                Is.EqualTo(L10n.Tr(PackageManagerGitHubDetails.InstallText)));
+            Assert.That(
+                details.InstallFeedback.style.display.value,
+                Is.EqualTo(DisplayStyle.None));
+        }
+
+        [UnityTest]
+        public IEnumerator Confirmation_ResetsWhenBranchDiscoveryChangesSelection()
+        {
+            PackageManagerGitHubDetails details = CreateDetails(
+                out _,
+                out VisualElement extensionItems,
+                out _,
+                (_, _) => { },
+                _ => { });
+            var host = ScriptableObject.CreateInstance<NativeActionsHostWindow>();
+            try
+            {
+                VisualElement fixtureRoot = extensionItems.parent?.parent;
+                Assert.That(fixtureRoot, Is.Not.Null);
+                host.position = new Rect(100f, 100f, 500f, 200f);
+                host.Show();
+                host.rootVisualElement.Add(fixtureRoot);
+                yield return null;
+
+                details.Refresh(CreateRepository("repository", "main"));
+                details.ApplyAvailableBranchesForTests(
+                    new[] { "main", "release" });
+                details.SetInstallState(true, true, "Ready");
+                details.BranchField.value = "release";
+                Assert.That(details.SelectedBranch, Is.EqualTo("release"));
+                details.TriggerInstall();
+                Assert.That(details.IsInstallConfirmationPending, Is.True);
+
+                details.ApplyAvailableBranchesForTests(new[] { "main" });
+
+                Assert.That(details.SelectedBranch, Is.EqualTo("main"));
+                Assert.That(details.IsInstallConfirmationPending, Is.False);
+                Assert.That(
+                    details.InstallButton.text,
+                    Is.EqualTo(L10n.Tr(
+                        PackageManagerGitHubDetails.InstallText)));
+            }
+            finally
+            {
+                details.Dispose();
+                if (host != null)
+                    host.Close();
+            }
+        }
+
+        [Test]
+        public void InstallConfirmation_UsesSanitizedRepositoryDetails()
+        {
+            PackageManagerGitHubRepository repository = CreateRepository(
+                "repository",
+                "main",
+                "https://user:super-secret@github.com/example/repository.git");
+
+            string message = PackageManagerGitHubDetails
+                .BuildTrustConfirmationMessage(repository, "release");
+
+            Assert.That(message, Does.Contain("github.com/example/repository.git"));
+            Assert.That(message, Does.Contain("release"));
+            Assert.That(message, Does.Contain("Packages/com.example.repository"));
+            Assert.That(message, Does.Contain("Confirm Install"));
+            Assert.That(message, Does.Not.Contain("super-secret"));
+            Assert.That(message, Does.Not.Contain("user:"));
+        }
+
+        [Test]
+        public void InstallConfirmation_FailsClosedWithoutRepositoryIdentity()
+        {
+            bool installRequested = false;
+            using PackageManagerGitHubDetails details = CreateDetails(
+                out _,
+                out _,
+                out _,
+                (_, _) => installRequested = true,
+                _ => { });
+            details.Refresh(CreateRepository("repository", "main", string.Empty));
+            details.SetInstallState(true, true, "Ready");
+
+            details.TriggerInstall();
+            details.TriggerInstall();
+
+            Assert.That(details.IsInstallConfirmationPending, Is.False);
+            Assert.That(installRequested, Is.False);
+            Assert.That(
+                details.InstallFeedback.messageType,
+                Is.EqualTo(HelpBoxMessageType.Error));
+            Assert.That(
+                details.InstallFeedback.text,
+                Does.Contain("safe confirmation"));
+        }
+
+        [Test]
+        public void InstallIdentity_BindsRepositoryInputsAndBranchWithoutCredentials()
+        {
+            PackageManagerGitHubRepository repository = CreateRepository(
+                "repository",
+                "main",
+                "https://user:super-secret@github.com/example/repository.git");
+            PackageManagerGitHubRepository changedUrl = CreateRepository(
+                "repository",
+                "main",
+                "https://github.com/example/other-repository.git");
+            PackageManagerGitHubRepository changedSshUser = CreateRepository(
+                "repository",
+                "main",
+                "ssh://deploy@github.com/example/repository.git");
+            PackageManagerGitHubRepository originalSshUser = CreateRepository(
+                "repository",
+                "main",
+                "ssh://git@github.com/example/repository.git");
+
+            string repositoryIdentity = PackageManagerGitHubDetails
+                .GetInstallRepositoryIdentity(repository);
+            string mainSelection = PackageManagerGitHubDetails
+                .GetInstallSelectionIdentity(repository, "main");
+            string releaseSelection = PackageManagerGitHubDetails
+                .GetInstallSelectionIdentity(repository, "release");
+
+            Assert.That(mainSelection, Does.StartWith(repositoryIdentity));
+            Assert.That(mainSelection, Is.Not.EqualTo(releaseSelection));
+            Assert.That(
+                repositoryIdentity,
+                Is.Not.EqualTo(PackageManagerGitHubDetails
+                    .GetInstallRepositoryIdentity(changedUrl)));
+            Assert.That(
+                PackageManagerGitHubDetails.GetInstallRepositoryIdentity(
+                    originalSshUser),
+                Is.Not.EqualTo(
+                    PackageManagerGitHubDetails.GetInstallRepositoryIdentity(
+                        changedSshUser)));
+            Assert.That(repositoryIdentity, Does.Not.Contain("super-secret"));
+            Assert.That(repositoryIdentity, Does.Not.Contain("user:"));
+        }
+
+        [Test]
+        public void InstallFeedback_ShowsProgressAndRecoverableInlineError()
+        {
+            using PackageManagerGitHubDetails details = CreateDetails(
+                out _,
+                out _,
+                out _,
+                (_, _) => { },
+                _ => { });
+            details.Refresh(CreateRepository("repository", "main"));
+            details.SetInstallState(true, true, "Ready");
+
+            details.ShowInstalling("Installing safely...");
+
+            Assert.That(details.IsInstalling, Is.True);
+            Assert.That(details.InstallFeedback.text, Is.EqualTo("Installing safely..."));
+            Assert.That(
+                details.InstallFeedback.style.display.value,
+                Is.EqualTo(DisplayStyle.Flex));
+            Assert.That(
+                details.InstallFeedback.messageType,
+                Is.EqualTo(HelpBoxMessageType.Info));
+            Assert.That(details.InstallButton.enabledSelf, Is.False);
+            Assert.That(details.BranchField.enabledSelf, Is.False);
+            Assert.That(
+                details.CancelInstallButton.style.display.value,
+                Is.EqualTo(DisplayStyle.None));
+
+            details.ShowInstallCompleted(
+                "Git submodule installed. Refreshing Package Manager...");
+
+            Assert.That(details.IsInstallCompleted, Is.True);
+            Assert.That(
+                details.InstallButton.text,
+                Is.EqualTo(L10n.Tr(PackageManagerGitHubDetails.InstalledText)));
+            Assert.That(details.InstallButton.enabledSelf, Is.False);
+            Assert.That(details.BranchField.enabledSelf, Is.False);
+            Assert.That(
+                details.InstallFeedback.messageType,
+                Is.EqualTo(HelpBoxMessageType.Info));
+
+            details.ShowInstallError(
+                "Clone failed for file:///tmp/repository<size=0>.git");
+
+            Assert.That(details.IsInstalling, Is.False);
+            Label feedbackLabel = details.InstallFeedback.Q<Label>(
+                className: HelpBox.labelUssClassName);
+            Assert.That(feedbackLabel, Is.Not.Null);
+            Assert.That(feedbackLabel.enableRichText, Is.False);
+            Assert.That(details.InstallFeedback.text, Does.Contain("<size=0>"));
+            Assert.That(
+                details.InstallButton.text,
+                Is.EqualTo(L10n.Tr(PackageManagerGitHubDetails.RetryInstallText)));
+            Assert.That(details.InstallButton.enabledSelf, Is.True);
+            Assert.That(details.BranchField.enabledSelf, Is.True);
+            Assert.That(
+                details.InstallFeedback.messageType,
+                Is.EqualTo(HelpBoxMessageType.Error));
+            Assert.That(details.InstallFeedback.text, Does.Contain("Clone failed"));
+            Assert.That(details.InstallFeedback.text, Does.Not.Contain("secret"));
+            Assert.That(details.InstallFeedback.text, Does.Not.Contain("user:"));
+        }
+
+        [Test]
+        public void InstallFeedback_ReappearsAfterNativeContainerIsRecycled()
+        {
+            using PackageManagerGitHubDetails details = CreateDetails(
+                out _,
+                out _,
+                out _,
+                (_, _) => { },
+                _ => { });
+            PackageManagerGitHubRepository repository = CreateRepository(
+                "repository",
+                "main");
+            details.Refresh(repository);
+            details.SetInstallState(true, true, "Ready");
+            details.TriggerInstall();
+            VisualElement feedbackContainer = details.InstallFeedback.parent;
+            Assert.That(feedbackContainer, Is.Not.Null);
+
+            feedbackContainer.Clear();
+            Assert.That(details.InstallFeedback.parent, Is.Null);
+            details.Refresh(repository);
+
+            Assert.That(details.InstallFeedback.parent, Is.SameAs(feedbackContainer));
+            Assert.That(details.IsInstallConfirmationPending, Is.True);
+            Assert.That(
+                details.InstallFeedback.style.display.value,
+                Is.EqualTo(DisplayStyle.Flex));
         }
 
         [Test]
@@ -506,6 +867,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
         {
             var root = new VisualElement();
             var toolbar = new VisualElement();
+            var detailsHeader = new VisualElement();
             extensionItems = new VisualElement
             {
                 name = PackageManagerGitHubDetails.NativeExtensionActionsContainerName
@@ -515,10 +877,16 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
             {
                 name = PackageManagerGitHubDetails.NativeDetailsLinksContainerName
             };
+            var helpBoxContainer = new VisualElement
+            {
+                name = PackageManagerGitHubDetails.NativeHelpBoxContainerName
+            };
             toolbar.Add(extensionItems);
             toolbar.Add(primaryActions);
             root.Add(toolbar);
-            root.Add(detailsLinks);
+            detailsHeader.Add(detailsLinks);
+            detailsHeader.Add(helpBoxContainer);
+            root.Add(detailsHeader);
 
             Assert.That(
                 PackageManagerGitHubDetails.TryCreate(
@@ -530,6 +898,20 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                     out PackageManagerGitHubDetails details),
                 Is.True);
             return details;
+        }
+
+        private static void SendNavigationSubmit(VisualElement target)
+        {
+            NavigationSubmitEvent submit = NavigationSubmitEvent.GetPooled();
+            try
+            {
+                submit.target = target;
+                target.SendEvent(submit);
+            }
+            finally
+            {
+                submit.Dispose();
+            }
         }
 
         private static PackageManagerGitHubRepository CreateRepository(

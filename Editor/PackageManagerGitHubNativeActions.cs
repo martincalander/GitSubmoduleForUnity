@@ -38,6 +38,8 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             new(ReferenceComparer.Instance);
         private static readonly Dictionary<object, NativeActionEntry> EntriesByToolbar =
             new(ReferenceComparer.Instance);
+        private static readonly Dictionary<string, string> ActiveInstallMessages =
+            new(StringComparer.Ordinal);
 
         internal static int InstalledRootCount => EntriesByRoot.Count;
 
@@ -91,14 +93,19 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                     ReleaseForRoot(previousToolbarEntry.Root);
                 }
 
+                PackageManagerGitHubDetails details = null;
                 if (!PackageManagerGitHubDetails.TryCreate(
                         primaryActions,
                         detailsLinks,
                         (repository, branch) =>
-                            OnInstallRequested(toolbar, repository, branch),
+                            OnInstallRequested(
+                                toolbar,
+                                details,
+                                repository,
+                                branch),
                         Application.OpenURL,
                         true,
-                        out PackageManagerGitHubDetails details))
+                        out details))
                 {
                     return false;
                 }
@@ -198,6 +205,41 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 }
 
                 entry.Details.Refresh(repository);
+                string installRepositoryIdentity =
+                    PackageManagerGitHubDetails.GetInstallRepositoryIdentity(
+                        repository);
+                if (ActiveInstallMessages.TryGetValue(
+                        installRepositoryIdentity,
+                        out string activeInstallMessage))
+                {
+                    entry.Details.ShowInstalling(activeInstallMessage);
+                    entry.Details.SetInstallState(
+                        true,
+                        false,
+                        activeInstallMessage);
+                    return;
+                }
+
+                if (entry.Details.IsInstalling)
+                {
+                    if (GitOperationService.IsBusy)
+                    {
+                        const string activeOperationMessage =
+                            "A repository operation is still running. " +
+                            "Package Manager will refresh when it finishes.";
+                        entry.Details.ShowInstalling(activeOperationMessage);
+                        entry.Details.SetInstallState(
+                            true,
+                            false,
+                            activeOperationMessage);
+                        return;
+                    }
+
+                    entry.Details.ShowInstallError(
+                        "The install operation finished, but Package Manager " +
+                        "could not match its final state. Use Refresh to retry.");
+                }
+
                 string selectedBranch = entry.Details.SelectedBranch;
                 string validationError = GitSubmoduleAddService.ValidateInput(
                     repository.Url,
@@ -374,33 +416,88 @@ namespace MartinCalander.GitSubmoduleManager.Editor
 
         private static void OnInstallRequested(
             VisualElement toolbar,
+            PackageManagerGitHubDetails sourceDetails,
             PackageManagerGitHubRepository repository,
             string selectedBranch)
         {
+            PackageManagerGitHubDetails feedbackTarget = sourceDetails;
+            string activeInstallIdentity = string.Empty;
+            bool operationStarted = false;
             try
             {
-                if (toolbar == null ||
-                    repository == null ||
-                    !EntriesByToolbar.TryGetValue(
-                        toolbar,
-                        out NativeActionEntry entry) ||
-                    !IsGitHubPage(toolbar) ||
-                    !ReferenceEquals(entry.Details.CurrentRepository, repository))
+                if (toolbar == null || repository == null)
                 {
+                    ReportInstallError(
+                        feedbackTarget,
+                        "Cannot Install Git Package",
+                        "The selected GitHub repository is no longer available. " +
+                        "Select it again in Sources > GitHub and retry.");
+                    return;
+                }
+
+                if (!EntriesByToolbar.TryGetValue(
+                        toolbar,
+                        out NativeActionEntry entry))
+                {
+                    ReportInstallError(
+                        feedbackTarget,
+                        "Cannot Install Git Package",
+                        "Package Manager refreshed before the install request could be handled. " +
+                        "Select the repository again and retry.");
+                    return;
+                }
+
+                feedbackTarget = entry.Details;
+                if (!IsGitHubPage(toolbar))
+                {
+                    ReportInstallError(
+                        feedbackTarget,
+                        "Cannot Install Git Package",
+                        "Sources > GitHub is no longer active. Return to that source and retry.");
+                    return;
+                }
+
+                string requestedIdentity =
+                    PackageManagerGitHubDetails.GetRepositoryIdentity(repository);
+                string currentIdentity =
+                    PackageManagerGitHubDetails.GetRepositoryIdentity(
+                        entry.Details.CurrentRepository);
+                if (string.IsNullOrEmpty(requestedIdentity) ||
+                    !string.Equals(
+                        requestedIdentity,
+                        currentIdentity,
+                        StringComparison.Ordinal))
+                {
+                    ReportInstallError(
+                        feedbackTarget,
+                        "Cannot Install Git Package",
+                        "The selected GitHub repository changed before the install request " +
+                        "could be handled. Select it again and retry.");
                     return;
                 }
 
                 object selectedPackage = GetFieldValue(toolbar, "m_Package");
-                if (!PackageManagerGitHubPackageProjection.TryGetRepository(
+                bool resolvedProjectedRepository =
+                    PackageManagerGitHubPackageProjection.TryGetRepository(
                         selectedPackage,
-                        out PackageManagerGitHubRepository projectedRepository) ||
+                        out PackageManagerGitHubRepository projectedRepository);
+                string requestedSelectionIdentity =
+                    PackageManagerGitHubDetails.GetInstallSelectionIdentity(
+                        repository,
+                        selectedBranch);
+                string projectedSelectionIdentity =
+                    PackageManagerGitHubDetails.GetInstallSelectionIdentity(
+                        projectedRepository,
+                        selectedBranch);
+                if (!resolvedProjectedRepository ||
+                    string.IsNullOrEmpty(requestedSelectionIdentity) ||
                     !string.Equals(
-                        PackageManagerGitHubDetails.GetRepositoryIdentity(
-                            projectedRepository),
-                        PackageManagerGitHubDetails.GetRepositoryIdentity(repository),
+                        projectedSelectionIdentity,
+                        requestedSelectionIdentity,
                         StringComparison.Ordinal))
                 {
-                    ShowError(
+                    ReportInstallError(
+                        feedbackTarget,
                         "Cannot Install Git Package",
                         "This discovered repository is no longer selected. " +
                         "Select it again in Sources > GitHub and retry.");
@@ -408,6 +505,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                     return;
                 }
 
+                repository = projectedRepository;
                 string branch = selectedBranch?.Trim() ?? string.Empty;
                 string validationError = GitSubmoduleAddService.ValidateInput(
                     repository.Url,
@@ -415,49 +513,66 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                     branch);
                 if (!string.IsNullOrWhiteSpace(validationError))
                 {
-                    ShowError("Cannot Install Git Package", validationError);
+                    ReportInstallError(
+                        feedbackTarget,
+                        "Cannot Install Git Package",
+                        validationError);
                     RefreshAllEntries();
                     return;
                 }
 
                 if (!GitSubmoduleAddService.CanStart)
                 {
-                    ShowError(
+                    ReportInstallError(
+                        feedbackTarget,
                         "Cannot Install Git Package",
                         BuildDisabledTooltip(string.Empty));
                     RefreshAllEntries();
                     return;
                 }
 
-                string packagePath = GitSubmoduleAddService.GetPackagePath(
-                    repository.PackageName);
-                string branchDescription = string.IsNullOrWhiteSpace(branch)
-                    ? "the repository default"
-                    : branch;
-                string safeUrl = GitUtility.RedactCredentials(
-                    repository.Url?.Trim() ?? string.Empty);
-                if (!EditorUtility.DisplayDialog(
-                        "Install Git Package?",
-                        $"Repository:\n{safeUrl}\n\n" +
-                        $"Branch: {branchDescription}\n" +
-                        $"Destination: {packagePath}\n\n" +
-                        "Unity packages can contain Editor code that executes " +
-                        "inside the Unity Editor. Only install repositories you trust.",
-                        L10n.Tr(PackageManagerGitHubDetails.InstallText),
-                        L10n.Tr("Cancel")))
+                string installIdentity =
+                    PackageManagerGitHubDetails.GetRepositoryIdentity(repository);
+                activeInstallIdentity =
+                    PackageManagerGitHubDetails.GetInstallRepositoryIdentity(
+                        repository);
+                if (string.IsNullOrEmpty(installIdentity) ||
+                    string.IsNullOrEmpty(activeInstallIdentity))
                 {
+                    ReportInstallError(
+                        feedbackTarget,
+                        "Cannot Install Git Package",
+                        "The selected repository could not be bound to a safe " +
+                        "install operation. Select it again and retry.");
+                    RefreshAllEntries();
                     return;
                 }
 
+                PackageManagerGitHubDetails completionTarget = feedbackTarget;
+                string installMessage = feedbackTarget?.InstallFeedback?.text;
+                if (string.IsNullOrWhiteSpace(installMessage))
+                {
+                    installMessage = "Installing " + repository.PackageName +
+                                     " as a Git submodule...";
+                }
+
+                ActiveInstallMessages[activeInstallIdentity] = installMessage;
                 bool started = GitSubmoduleAddService.TryStart(
                     repository.Url,
                     branch,
                     repository.PackageName,
-                    OnAddCompleted,
+                    completion => OnAddCompleted(
+                        completionTarget,
+                        installIdentity,
+                        activeInstallIdentity,
+                        completion),
                     out string startError);
+                operationStarted = started;
                 if (!started)
                 {
-                    ShowError(
+                    ActiveInstallMessages.Remove(activeInstallIdentity);
+                    ReportInstallError(
+                        feedbackTarget,
                         "Could Not Start Install",
                         string.IsNullOrWhiteSpace(startError)
                             ? "The Git package operation could not be started."
@@ -468,7 +583,19 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             }
             catch (Exception exception)
             {
-                ShowError(
+                if (operationStarted)
+                {
+                    Debug.LogWarning(
+                        "[Git Submodule Manager] The Git package install started, " +
+                        "but Package Manager could not refresh its inline status: " +
+                        GitHubUtility.SanitizeUiDiagnostic(exception.Message));
+                    return;
+                }
+
+                if (!string.IsNullOrEmpty(activeInstallIdentity))
+                    ActiveInstallMessages.Remove(activeInstallIdentity);
+                ReportInstallError(
+                    feedbackTarget,
                     "Could Not Start Install",
                     "The Git package operation could not be started: " +
                     exception.Message);
@@ -476,35 +603,79 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             }
         }
 
-        private static void OnAddCompleted(GitSubmoduleAddCompletion completion)
+        private static void OnAddCompleted(
+            PackageManagerGitHubDetails preferredDetails,
+            string repositoryIdentity,
+            string activeInstallIdentity,
+            GitSubmoduleAddCompletion completion)
         {
+            if (!string.IsNullOrEmpty(activeInstallIdentity))
+                ActiveInstallMessages.Remove(activeInstallIdentity);
+
             if (completion == null || !completion.Success)
             {
-                ShowError(
-                    "Could Not Install Git Package",
+                string completionMessage =
                     string.IsNullOrWhiteSpace(completion?.Message)
                         ? "The Git package operation did not complete successfully."
-                        : completion.Message);
+                        : completion.Message;
+                // The Package Manager may have recycled its details hierarchy
+                // while Git was running. Refresh first, then resolve the current
+                // controller so the useful failure remains visible inline.
                 RefreshAllEntries();
+                ReportInstallErrorForRepository(
+                    preferredDetails,
+                    repositoryIdentity,
+                    activeInstallIdentity,
+                    "Could Not Install Git Package",
+                    completionMessage);
                 return;
             }
 
+            string terminalErrorTitle = string.Empty;
+            string terminalErrorMessage = string.Empty;
             try
             {
                 PackageManagerSubmoduleSnapshot.Refresh();
-                PackageManagerGitHubPackageProjection.Reconcile(
+                bool reconciled = PackageManagerGitHubPackageProjection.Reconcile(
                     PackageManagerGitHubDiscovery.Current);
                 PackageManagerSubmoduleHarmonyPatch.RefreshOpenPackageManagerWindows();
+                if (!reconciled)
+                {
+                    terminalErrorTitle = "Package Manager Refresh Failed";
+                    terminalErrorMessage =
+                        "The package was installed, but Package Manager could not " +
+                        "update its GitHub package list. Use Refresh to retry.";
+                }
             }
             catch (Exception exception)
             {
-                ShowError(
-                    "Package Manager Refresh Failed",
+                terminalErrorTitle = "Package Manager Refresh Failed";
+                terminalErrorMessage =
                     "The package was installed, but Package Manager could not refresh: " +
-                    exception.Message);
+                    exception.Message;
             }
 
             RefreshAllEntries();
+            if (!string.IsNullOrEmpty(terminalErrorMessage))
+            {
+                ReportInstallErrorForRepository(
+                    preferredDetails,
+                    repositoryIdentity,
+                    activeInstallIdentity,
+                    terminalErrorTitle,
+                    terminalErrorMessage);
+                return;
+            }
+
+            foreach (PackageManagerGitHubDetails details in
+                     FindDetailsForInstall(
+                         preferredDetails,
+                         repositoryIdentity,
+                         activeInstallIdentity))
+            {
+                details.ShowInstallCompleted(
+                    "Git submodule installed. Package Manager is up to date.");
+            }
         }
 
         private static void RefreshAllEntries()
@@ -591,15 +762,136 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             return null;
         }
 
-        private static void ShowError(string title, string message)
+        private static List<PackageManagerGitHubDetails> FindDetailsForInstall(
+            PackageManagerGitHubDetails preferredDetails,
+            string repositoryIdentity,
+            string installIdentity)
         {
+            var matches = new List<PackageManagerGitHubDetails>();
+            if (string.IsNullOrWhiteSpace(installIdentity) &&
+                string.IsNullOrWhiteSpace(repositoryIdentity))
+            {
+                return matches;
+            }
+
+            AddDetailsIfMatching(
+                matches,
+                preferredDetails,
+                repositoryIdentity,
+                installIdentity);
+
+            foreach (NativeActionEntry entry in EntriesByToolbar.Values)
+            {
+                AddDetailsIfMatching(
+                    matches,
+                    entry?.Details,
+                    repositoryIdentity,
+                    installIdentity);
+            }
+
+            return matches;
+        }
+
+        private static void AddDetailsIfMatching(
+            List<PackageManagerGitHubDetails> matches,
+            PackageManagerGitHubDetails details,
+            string repositoryIdentity,
+            string installIdentity)
+        {
+            if (details == null ||
+                details.IsDisposed ||
+                matches.Contains(details))
+            {
+                return;
+            }
+
+            bool matchesIdentity = !string.IsNullOrWhiteSpace(installIdentity)
+                ? string.Equals(
+                    installIdentity,
+                    PackageManagerGitHubDetails.GetInstallRepositoryIdentity(
+                        details.CurrentRepository),
+                    StringComparison.Ordinal)
+                : IsDetailsShowingRepository(
+                    details,
+                    repositoryIdentity);
+            if (matchesIdentity)
+                matches.Add(details);
+        }
+
+        private static bool IsDetailsShowingRepository(
+            PackageManagerGitHubDetails details,
+            string repositoryIdentity)
+        {
+            return details != null &&
+                   !details.IsDisposed &&
+                   string.Equals(
+                       repositoryIdentity,
+                       PackageManagerGitHubDetails.GetRepositoryIdentity(
+                           details.CurrentRepository),
+                       StringComparison.Ordinal);
+        }
+
+        private static void ReportInstallError(
+            PackageManagerGitHubDetails details,
+            string title,
+            string message)
+        {
+            string safeTitle = GitHubUtility.SanitizeUiDiagnostic(title);
             string safeMessage = GitHubUtility.SanitizeUiDiagnostic(message);
-            EditorUtility.DisplayDialog(
-                string.IsNullOrWhiteSpace(title) ? "Git Package Error" : title,
-                string.IsNullOrWhiteSpace(safeMessage)
-                    ? "The Git package operation could not be completed."
-                    : safeMessage,
-                "OK");
+            if (string.IsNullOrWhiteSpace(safeMessage))
+                safeMessage = "The Git package operation could not be completed.";
+
+            string diagnostic = string.IsNullOrWhiteSpace(safeTitle)
+                ? safeMessage
+                : safeTitle + ": " + safeMessage;
+            try
+            {
+                if (details != null && !details.IsDisposed)
+                    details.ShowInstallError(diagnostic);
+            }
+            catch
+            {
+                // Package Manager can recycle the details hierarchy while an
+                // asynchronous Git callback is completing. The sanitized console
+                // diagnostic remains available if inline feedback cannot mount.
+            }
+
+            Debug.LogWarning("[Git Submodule Manager] " + diagnostic);
+        }
+
+        private static void ReportInstallErrorForRepository(
+            PackageManagerGitHubDetails preferredDetails,
+            string repositoryIdentity,
+            string installIdentity,
+            string title,
+            string message)
+        {
+            string safeTitle = GitHubUtility.SanitizeUiDiagnostic(title);
+            string safeMessage = GitHubUtility.SanitizeUiDiagnostic(message);
+            if (string.IsNullOrWhiteSpace(safeMessage))
+                safeMessage = "The Git package operation could not be completed.";
+
+            string diagnostic = string.IsNullOrWhiteSpace(safeTitle)
+                ? safeMessage
+                : safeTitle + ": " + safeMessage;
+            foreach (PackageManagerGitHubDetails details in
+                     FindDetailsForInstall(
+                         preferredDetails,
+                         repositoryIdentity,
+                         installIdentity))
+            {
+                try
+                {
+                    details.ShowInstallError(diagnostic);
+                }
+                catch
+                {
+                    // Another Package Manager refresh can recycle one window
+                    // while feedback is being applied to the others.
+                }
+            }
+
+            Debug.LogWarning("[Git Submodule Manager] " + diagnostic);
         }
 
         private sealed class NativeActionEntry

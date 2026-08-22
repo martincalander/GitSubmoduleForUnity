@@ -7,7 +7,9 @@ packages discovered incrementally from every authenticated personal and
 organization repository page. It uses Unity's package list, search, sorting,
 selection, and package details. Select an uninstalled discovery result, review
 its **Repository** link, select a branch (the repository default is preselected),
-and choose **Install**; **Refresh** rescans the project and GitHub.
+and choose **Install**. Review the inline trust warning, then choose **Confirm
+Install**; the same details pane reports progress and any recoverable error.
+**Refresh** rescans the project and GitHub.
 
 Open **Window > Package Management > Git Submodule Manager** for the complete
 management workspace. It contains **In Project**, authenticated GitHub
@@ -190,10 +192,11 @@ The popup starts with a compact height. Status and error text expands into a
 bounded scrolling area only when needed, so the action row remains reachable
 without leaving a large empty lower section.
 
-Before cloning, a trust confirmation shows the redacted repository URL, chosen
-branch or repository default, and exact `Packages/<package-name>` destination.
-Only continue for a repository you trust, because Unity packages can execute
-Editor code.
+Before cloning, the popup shows an inline trust confirmation with the redacted
+repository URL, chosen branch or repository default, and exact
+`Packages/<package-name>` destination. Choose **Confirm Install** only for a
+repository you trust, because Unity packages can execute Editor code. The same
+inline status area reports installation progress and recoverable errors.
 
 Plaintext `http://` and `git://` repository transports are intentionally
 blocked because they do not protect the package source from substitution in

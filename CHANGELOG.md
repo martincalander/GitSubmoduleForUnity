@@ -108,6 +108,9 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- Make the native GitHub package **Install** action and the Package Manager **+**
+  installer use inline confirmation, progress, and error states so they remain
+  responsive in automated GUI Editors where Unity suppresses modal dialogs.
 - Block submodule removal when modified, untracked, conflicted, unpushed, staged,
   or otherwise ambiguous work could be lost; recovery metadata is preserved.
 - Preserve staged and unstaged `.gitmodules` state by refusing ambiguous parent

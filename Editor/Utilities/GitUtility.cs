@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Runtime.InteropServices;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading;
@@ -279,6 +280,31 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 return display;
 
             return display.Substring(0, MaxDisplayedRepositoryUrlLength - 1) + "…";
+        }
+
+        internal static string GetRepositoryLocationFingerprint(
+            string repositoryUrl)
+        {
+            try
+            {
+                string identity = GitHubUtility.GetRepositoryCacheIdentity(
+                    repositoryUrl);
+                if (string.IsNullOrWhiteSpace(identity))
+                    return string.Empty;
+
+                using (SHA256 sha256 = SHA256.Create())
+                {
+                    byte[] digest = sha256.ComputeHash(
+                        Encoding.UTF8.GetBytes(identity));
+                    return Convert.ToBase64String(digest);
+                }
+            }
+            catch
+            {
+                // Confirmation and operation identity fail closed if the runtime
+                // cannot provide the required non-reversible fingerprint.
+                return string.Empty;
+            }
         }
 
         internal static bool IsPackagePath(string path)

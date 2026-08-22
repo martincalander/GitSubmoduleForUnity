@@ -210,6 +210,74 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
         }
 
         [UnityTest]
+        public IEnumerator ValidSubmission_FirstClickShowsInlineConfirmationWithoutStartingGit()
+        {
+            var window = ScriptableObject.CreateInstance<GitSubmoduleInstallPopup>();
+            try
+            {
+                ShowAttachedWindow(window);
+                yield return null;
+                window.CreateGUI();
+                yield return null;
+
+                TextField url = window.rootVisualElement.Q<TextField>(
+                    "git-submodule-url");
+                TextField packageName = window.rootVisualElement.Q<TextField>(
+                    "git-submodule-package-name");
+                TextField branch = window.rootVisualElement.Q<TextField>(
+                    "git-submodule-branch");
+                HelpBox status = window.rootVisualElement.Q<HelpBox>(
+                    "git-submodule-status");
+                Button submit = window.rootVisualElement.Q<Button>(
+                    "git-submodule-submit");
+
+                url.SetValueWithoutNotify(
+                    "https://github.com/example/package.git");
+                packageName.SetValueWithoutNotify("com.example.package");
+                branch.SetValueWithoutNotify("main");
+                submit.SetEnabled(true);
+                Assert.That(GitOperationService.IsBusy, Is.False);
+
+                SendNavigationSubmit(submit);
+
+                Assert.That(GitOperationService.IsBusy, Is.False);
+                Assert.That(
+                    submit.text,
+                    Is.EqualTo(GitSubmoduleInstallPopup.ConfirmSubmitText));
+                Assert.That(submit.enabledSelf, Is.True);
+                Assert.That(url.enabledSelf, Is.False);
+                Assert.That(packageName.enabledSelf, Is.False);
+                Assert.That(branch.enabledSelf, Is.False);
+                Assert.That(status.messageType, Is.EqualTo(HelpBoxMessageType.Warning));
+                Assert.That(status.text, Does.Contain("Only install repositories you trust"));
+                Label statusLabel = status.Q<Label>(
+                    className: HelpBox.labelUssClassName);
+                Assert.That(statusLabel, Is.Not.Null);
+                Assert.That(statusLabel.enableRichText, Is.False);
+                status.text = GitSubmoduleInstallPopup.BuildTrustConfirmationMessage(
+                    "file:///tmp/repository<size=0>.git",
+                    "com.example.package",
+                    "main");
+                Assert.That(status.text, Does.Contain("<size=0>"));
+                Assert.That(
+                    status.style.display.value,
+                    Is.EqualTo(DisplayStyle.Flex));
+
+                url.value = "https://github.com/example/changed.git";
+
+                Assert.That(
+                    submit.text,
+                    Is.EqualTo(GitSubmoduleInstallPopup.SubmitText));
+                Assert.That(GitOperationService.IsBusy, Is.False);
+            }
+            finally
+            {
+                if (window != null)
+                    window.Close();
+            }
+        }
+
+        [UnityTest]
         public IEnumerator LongStatus_UsesBoundedScrollingAndKeepsActionsInsideWindow()
         {
             var window = ScriptableObject.CreateInstance<GitSubmoduleInstallPopup>();
@@ -337,6 +405,24 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
             Assert.That(message, Does.Contain("Branch: the repository default"));
             Assert.That(message, Does.Contain("Destination: Packages/com.example.package"));
             Assert.That(message, Does.Contain("Only install repositories you trust"));
+        }
+
+        [Test]
+        public void SubmissionIdentity_IsNonReversibleAndDistinguishesSshUsers()
+        {
+            string first = GitSubmoduleInstallPopup.BuildSubmissionIdentity(
+                "ssh://git@github.com/example/package.git",
+                "com.example.package",
+                "main");
+            string second = GitSubmoduleInstallPopup.BuildSubmissionIdentity(
+                "ssh://deploy@github.com/example/package.git",
+                "com.example.package",
+                "main");
+
+            Assert.That(first, Is.Not.Empty);
+            Assert.That(first, Is.Not.EqualTo(second));
+            Assert.That(first, Does.Not.Contain("github.com"));
+            Assert.That(first, Does.Not.Contain("git@"));
         }
 
         [TestCase("", true, true)]
@@ -494,6 +580,20 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
             window.maxSize = size;
             window.position = new Rect(100f, 100f, size.x, size.y);
             window.Show();
+        }
+
+        private static void SendNavigationSubmit(VisualElement target)
+        {
+            NavigationSubmitEvent submit = NavigationSubmitEvent.GetPooled();
+            try
+            {
+                submit.target = target;
+                target.SendEvent(submit);
+            }
+            finally
+            {
+                submit.Dispose();
+            }
         }
 
         private static string BuildLongStatus()

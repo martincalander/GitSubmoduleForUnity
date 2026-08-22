@@ -22,6 +22,9 @@ namespace MartinCalander.GitSubmoduleManager.Editor
 
         internal const float StatusViewportHeight = 28f;
         internal static readonly Vector2 DefaultWindowSize = new(420f, 132f);
+        internal const string SubmitText = "Clone and Add";
+        internal const string ConfirmSubmitText = "Confirm Install";
+        internal const string InstallingText = "Installing...";
 
         private const double ProbeDebounceSeconds = 0.4d;
 
@@ -37,6 +40,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         private readonly List<string> availableBranches = new();
         private ScrollView statusViewport;
         private HelpBox validationHelp;
+        private Button cancelButton;
         private Button submitButton;
         private GitSubmoduleInstallProbe installProbe;
         private string pendingProbeUrl = string.Empty;
@@ -47,6 +51,10 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         private int appliedProbeRevision = -1;
         private bool packageNameEditedByUser;
         private bool branchEditedByUser;
+        private bool confirmationPending;
+        private bool isInstalling;
+        private string confirmationSubmissionIdentity = string.Empty;
+        private string installError = string.Empty;
         private bool uiBuilt;
 
         /// <summary>
@@ -298,6 +306,10 @@ namespace MartinCalander.GitSubmoduleManager.Editor
 
             validationHelp = new HelpBox(string.Empty, HelpBoxMessageType.Warning);
             validationHelp.name = "git-submodule-status";
+            Label validationLabel = validationHelp.Q<Label>(
+                className: HelpBox.labelUssClassName);
+            if (validationLabel != null)
+                validationLabel.enableRichText = false;
             statusViewport.Add(validationHelp);
             root.Add(statusViewport);
 
@@ -310,7 +322,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             actions.style.marginTop = 3f;
             actions.style.flexShrink = 0f;
 
-            var cancelButton = new Button(Close)
+            cancelButton = new Button(Close)
             {
                 name = "git-submodule-cancel",
                 text = "Cancel"
@@ -321,7 +333,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             submitButton = new Button(Submit)
             {
                 name = "git-submodule-submit",
-                text = "Clone and Add"
+                text = SubmitText
             };
             submitButton.style.minWidth = 96f;
 
@@ -335,11 +347,13 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             packageNameField.RegisterValueChangedCallback(_ =>
             {
                 packageNameEditedByUser = true;
+                ResetSubmissionState();
                 UpdatePresentation();
             });
             branchField.RegisterValueChangedCallback(_ =>
             {
                 branchEditedByUser = true;
+                ResetSubmissionState();
                 UpdatePresentation();
             });
             root.RegisterCallback<KeyDownEvent>(OnKeyDown, TrickleDown.TrickleDown);
@@ -361,6 +375,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
 
         private void OnRepositoryUrlChanged()
         {
+            ResetSubmissionState();
             string url = urlField?.value?.Trim() ?? string.Empty;
             pendingProbeUrl = string.Empty;
             appliedProbeRevision = -1;
@@ -497,6 +512,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
 
             branchEditedByUser = true;
             branchField.SetValueWithoutNotify(branch);
+            ResetSubmissionState();
             UpdatePresentation();
         }
 
@@ -529,7 +545,6 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             bool metadataEnabled = AreMetadataFieldsEnabled(
                 validUrl,
                 hasCurrentSnapshot && snapshot.IsComplete);
-            SetMetadataControlsEnabled(metadataEnabled);
 
             string validationError = GetValidationError(
                 currentUrl,
@@ -558,8 +573,45 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             string combinedWarning = CombineMessages(
                 probeWarning,
                 branchManifestWarning);
+            string submissionIdentity = BuildSubmissionIdentity(
+                currentUrl,
+                packageNameField.value,
+                branchField.value);
+            if (confirmationPending &&
+                !string.Equals(
+                    confirmationSubmissionIdentity,
+                    submissionIdentity,
+                    StringComparison.Ordinal))
+            {
+                ResetSubmissionState(false);
+            }
 
-            if (isProbing)
+            bool inputsLocked = confirmationPending || isInstalling;
+            urlField.SetEnabled(!inputsLocked);
+            SetMetadataControlsEnabled(!inputsLocked && metadataEnabled);
+
+            if (isInstalling)
+            {
+                validationHelp.text = "Installing the package as a Git submodule...";
+                validationHelp.messageType = HelpBoxMessageType.Info;
+                validationHelp.style.display = DisplayStyle.Flex;
+            }
+            else if (confirmationPending)
+            {
+                validationHelp.text = BuildTrustConfirmationMessage(
+                    currentUrl,
+                    packageNameField.value,
+                    branchField.value);
+                validationHelp.messageType = HelpBoxMessageType.Warning;
+                validationHelp.style.display = DisplayStyle.Flex;
+            }
+            else if (!string.IsNullOrWhiteSpace(installError))
+            {
+                validationHelp.text = installError;
+                validationHelp.messageType = HelpBoxMessageType.Error;
+                validationHelp.style.display = DisplayStyle.Flex;
+            }
+            else if (isProbing)
             {
                 validationHelp.text = "Inspecting repository with Git...";
                 validationHelp.messageType = HelpBoxMessageType.Info;
@@ -594,10 +646,23 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             }
 
             UpdateStatusViewport();
-            submitButton?.SetEnabled(CanSubmit(
-                validationError,
-                canStart,
-                isProbing));
+            if (submitButton != null)
+            {
+                submitButton.text = isInstalling
+                    ? InstallingText
+                    : confirmationPending
+                        ? ConfirmSubmitText
+                        : SubmitText;
+                submitButton.SetEnabled(
+                    !isInstalling &&
+                    CanSubmit(
+                        validationError,
+                        canStart,
+                        confirmationPending ? false : isProbing));
+            }
+
+            if (cancelButton != null)
+                cancelButton.text = isInstalling ? "Close" : "Cancel";
         }
 
         internal void UpdateStatusViewport()
@@ -675,6 +740,9 @@ namespace MartinCalander.GitSubmoduleManager.Editor
 
         private void Submit()
         {
+            if (isInstalling)
+                return;
+
             string submittedUrl = urlField?.value?.Trim() ?? string.Empty;
             string submittedPackageName =
                 packageNameField?.value?.Trim() ?? string.Empty;
@@ -685,47 +753,127 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 submittedBranch);
             if (!string.IsNullOrWhiteSpace(validationError))
             {
-                ShowError("Cannot Add Git Package", validationError);
+                ShowInlineError("Cannot Add Git Package", validationError);
                 return;
             }
 
             if (!GitSubmoduleAddService.CanStart)
             {
-                ShowError(
+                ShowInlineError(
                     "Cannot Add Git Package",
                     "Wait for current package scans and repository operations to finish.");
                 return;
             }
 
-            if (!EditorUtility.DisplayDialog(
-                    "Add Git Package?",
-                    BuildTrustConfirmationMessage(
-                        submittedUrl,
-                        submittedPackageName,
-                        submittedBranch),
-                    "Clone and Add",
-                    "Cancel"))
+            string submissionIdentity = BuildSubmissionIdentity(
+                submittedUrl,
+                submittedPackageName,
+                submittedBranch);
+            if (string.IsNullOrEmpty(submissionIdentity))
             {
+                ShowInlineError(
+                    "Cannot Add Git Package",
+                    "The repository inputs could not be bound to a safe " +
+                    "confirmation. Change the Git URL and retry.");
                 return;
             }
 
-            bool started = GitSubmoduleAddService.TryStart(
-                submittedUrl,
-                submittedBranch,
-                submittedPackageName,
-                OnAddCompleted,
-                out string startError);
+            if (!confirmationPending ||
+                !string.Equals(
+                    confirmationSubmissionIdentity,
+                    submissionIdentity,
+                    StringComparison.Ordinal))
+            {
+                confirmationSubmissionIdentity = submissionIdentity;
+                confirmationPending = true;
+                installError = string.Empty;
+                UpdatePresentation();
+                return;
+            }
+
+            confirmationPending = false;
+            confirmationSubmissionIdentity = string.Empty;
+            installError = string.Empty;
+            isInstalling = true;
+            UpdatePresentation();
+            bool started;
+            string startError;
+            try
+            {
+                started = GitSubmoduleAddService.TryStart(
+                    submittedUrl,
+                    submittedBranch,
+                    submittedPackageName,
+                    OnAddCompleted,
+                    out startError);
+            }
+            catch (Exception exception)
+            {
+                started = false;
+                startError =
+                    "The Git package operation could not be started: " +
+                    exception.Message;
+            }
+
             if (!started)
             {
-                ShowError(
+                isInstalling = false;
+                ShowInlineError(
                     "Could Not Start Add",
                     string.IsNullOrWhiteSpace(startError)
                         ? "The Git package operation could not be started."
                         : startError);
                 return;
             }
+        }
 
-            Close();
+        private void ResetSubmissionState(bool clearInstallError = true)
+        {
+            if (isInstalling)
+                return;
+
+            confirmationPending = false;
+            confirmationSubmissionIdentity = string.Empty;
+            if (clearInstallError)
+                installError = string.Empty;
+        }
+
+        internal static string BuildSubmissionIdentity(
+            string repositoryUrl,
+            string packageName,
+            string branch)
+        {
+            string locationFingerprint =
+                GitUtility.GetRepositoryLocationFingerprint(repositoryUrl);
+            return string.IsNullOrEmpty(locationFingerprint)
+                ? string.Empty
+                : "location-sha256:" + locationFingerprint +
+                   "\n" + (packageName?.Trim() ?? string.Empty) +
+                   "\n" + (branch?.Trim() ?? string.Empty);
+        }
+
+        private void ShowInlineError(string title, string message)
+        {
+            string safeTitle = GitHubUtility.SanitizeUiDiagnostic(title);
+            string safeMessage = GitHubUtility.SanitizeUiDiagnostic(message);
+            if (string.IsNullOrWhiteSpace(safeMessage))
+                safeMessage = "The Git package operation could not be completed.";
+
+            string diagnostic = string.IsNullOrWhiteSpace(safeTitle)
+                ? safeMessage
+                : safeTitle + ": " + safeMessage;
+            if (this == null ||
+                validationHelp == null ||
+                rootVisualElement?.panel == null)
+            {
+                Debug.LogWarning("[Git Submodule Manager] " + diagnostic);
+                return;
+            }
+
+            confirmationPending = false;
+            confirmationSubmissionIdentity = string.Empty;
+            installError = diagnostic;
+            UpdatePresentation();
         }
 
         private void OnDisable()
@@ -750,11 +898,12 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             activeWindow = this;
         }
 
-        private static void OnAddCompleted(GitSubmoduleAddCompletion completion)
+        private void OnAddCompleted(GitSubmoduleAddCompletion completion)
         {
             if (completion == null || !completion.Success)
             {
-                ShowError(
+                isInstalling = false;
+                ShowInlineError(
                     "Could Not Add Git Package",
                     string.IsNullOrWhiteSpace(completion?.Message)
                         ? "The Git package operation did not complete successfully."
@@ -765,17 +914,31 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             try
             {
                 PackageManagerSubmoduleSnapshot.Refresh();
-                PackageManagerGitHubPackageProjection.Reconcile(
+                bool reconciled = PackageManagerGitHubPackageProjection.Reconcile(
                     PackageManagerGitHubDiscovery.Current);
                 PackageManagerSubmoduleHarmonyPatch.RefreshOpenPackageManagerWindows();
+                if (!reconciled)
+                {
+                    isInstalling = false;
+                    ShowInlineError(
+                        "Package Manager Refresh Failed",
+                        "The package was added, but Package Manager could not " +
+                        "update its package list. Use Refresh to retry.");
+                    return;
+                }
             }
             catch (Exception exception)
             {
-                ShowError(
+                isInstalling = false;
+                ShowInlineError(
                     "Package Manager Refresh Failed",
                     "The package was added, but Package Manager could not refresh: " +
-                    exception.Message);
+                        exception.Message);
+                return;
             }
+
+            if (this != null)
+                Close();
         }
 
         internal static bool CanSubmit(string validationError, bool canStart)
@@ -946,15 +1109,5 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                        StringComparison.Ordinal);
         }
 
-        private static void ShowError(string title, string message)
-        {
-            string safeMessage = GitHubUtility.SanitizeUiDiagnostic(message);
-            EditorUtility.DisplayDialog(
-                string.IsNullOrWhiteSpace(title) ? "Git Package Error" : title,
-                string.IsNullOrWhiteSpace(safeMessage)
-                    ? "The Git package operation could not be completed."
-                    : safeMessage,
-                "OK");
-        }
     }
 }
