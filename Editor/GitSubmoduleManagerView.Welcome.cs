@@ -4,7 +4,7 @@ using UnityEngine;
 
 namespace MartinCalander.GitSubmoduleManager.Editor
 {
-    public partial class GitSubmoduleManagerWindow
+    internal partial class GitSubmoduleManagerView
     {
         private const float WelcomeMaximumWidth = 620f;
         private const float WelcomeStackActionsBelowWidth = 520f;
@@ -115,11 +115,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
 
         internal static void OpenWelcomeFromPreferences()
         {
-            var window = GetWindow<GitSubmoduleManagerWindow>("Git Submodule Manager");
-            window.ApplyThemeIcon();
-            window.Show();
-            window.ShowWelcomeScreen();
-            window.Focus();
+            GitSubmoduleManagerPackageManagerHost.Open(openWelcome: true);
         }
 
         private void RecordWelcomeShownIfNeeded()
@@ -234,7 +230,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         private static void DrawWelcomeLocationCard()
         {
             EditorGUILayout.BeginVertical(Styles.InfoBox);
-            EditorGUILayout.LabelField("Open this window later from", Styles.InfoLabel);
+            EditorGUILayout.LabelField("Open this view later from", Styles.InfoLabel);
             EditorGUILayout.LabelField(MenuPath.DisplayPath, Styles.InfoValue);
             EditorGUILayout.EndVertical();
         }

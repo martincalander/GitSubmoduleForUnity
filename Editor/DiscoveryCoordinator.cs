@@ -76,6 +76,8 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         {
             public PackageManifestState State;
             public string PackageName;
+            public string DisplayName;
+            public string Version;
             public string Message;
         }
 
@@ -870,7 +872,14 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             repo.PackageManifestBlobOid = blob.oid;
             if (packageManifestCache.TryGetValue(blob.oid, out PackageManifestCacheEntry cached))
             {
-                SetManifestState(repo, cached.State, cached.Message, cached.PackageName, blob.oid);
+                SetManifestState(
+                    repo,
+                    cached.State,
+                    cached.Message,
+                    cached.PackageName,
+                    blob.oid,
+                    cached.DisplayName,
+                    cached.Version);
                 return;
             }
 
@@ -886,9 +895,18 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             if (GitUtility.TryReadValidPackageManifestFromJson(
                     blob.text,
                     out string packageName,
+                    out string displayName,
+                    out string version,
                     out string validationError))
             {
-                SetManifestState(repo, PackageManifestState.Valid, string.Empty, packageName, blob.oid);
+                SetManifestState(
+                    repo,
+                    PackageManifestState.Valid,
+                    string.Empty,
+                    packageName,
+                    blob.oid,
+                    displayName,
+                    version);
                 CacheManifestResult(blob.oid, repo);
                 return;
             }
@@ -915,9 +933,18 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 if (GitUtility.TryReadValidPackageManifestFromJson(
                         content,
                         out string packageName,
+                        out string displayName,
+                        out string version,
                         out string validationError))
                 {
-                    SetManifestState(repo, PackageManifestState.Valid, string.Empty, packageName);
+                    SetManifestState(
+                        repo,
+                        PackageManifestState.Valid,
+                        string.Empty,
+                        packageName,
+                        string.Empty,
+                        displayName,
+                        version);
                 }
                 else
                 {
@@ -949,6 +976,8 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             {
                 State = repo.ManifestState,
                 PackageName = repo.DeclaredPackageName,
+                DisplayName = repo.DeclaredDisplayName,
+                Version = repo.DeclaredVersion,
                 Message = repo.PackageManifestMessage
             };
         }
@@ -958,7 +987,9 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             PackageManifestState state,
             string message,
             string packageName = "",
-            string blobOid = "")
+            string blobOid = "",
+            string displayName = "",
+            string version = "")
         {
             if (repo == null)
                 return;
@@ -966,6 +997,8 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             repo.ManifestState = state;
             repo.PackageManifestMessage = message ?? string.Empty;
             repo.DeclaredPackageName = packageName ?? string.Empty;
+            repo.DeclaredDisplayName = displayName ?? string.Empty;
+            repo.DeclaredVersion = version ?? string.Empty;
             if (!string.IsNullOrEmpty(blobOid))
                 repo.PackageManifestBlobOid = blobOid;
         }
@@ -1192,7 +1225,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
 
         private static bool CanStartGitHubCommandNow =>
             CanStartGitHubCommand(
-                GitSubmoduleManagerWindow.IsSharedGitHubAuthenticationBlocked,
+                GitSubmoduleManagerView.IsSharedGitHubAuthenticationBlocked,
                 AsyncCommandDrainRegistry.IsDraining ||
                 CliCommandRunner.GitHubCommandRequiresEditorRestart);
 

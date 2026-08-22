@@ -5,7 +5,7 @@ using UnityEngine;
 
 namespace MartinCalander.GitSubmoduleManager.Editor
 {
-    public partial class GitSubmoduleManagerWindow
+    internal partial class GitSubmoduleManagerView
     {
         private string installedDetailsIdentity = string.Empty;
         private string installedDetailsSourceBranch = string.Empty;
@@ -198,7 +198,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             {
                 installedPath = GitUtility.NormalizePath(
                     UnityEditor.PackageManager.PackageInfo.FindForAssembly(
-                        typeof(GitSubmoduleManagerWindow).Assembly)?.assetPath);
+                        typeof(GitSubmoduleManagerView).Assembly)?.assetPath);
             }
             catch
             {

@@ -7,9 +7,18 @@ submodules as embedded UPM packages under `Packages/`.
 
 1. Follow [Installation](installation.md) to install Git, optionally configure
    GitHub CLI, and add the package.
-2. Open **Window > Package Management > Git Submodule Manager**.
-3. Continue with the [User Guide](user-guide.md).
-4. Use [Troubleshooting](troubleshooting.md) when a CLI, credential, or
+2. On Unity versions with extension-page support, open **Window > Package
+   Manager**, then select **Sources > GitHub**. Unity's native list, search,
+   sorting, and details show installed GitHub submodules plus valid UPM packages
+   discovered incrementally from authenticated personal and organization
+   repositories.
+3. Select a discovered package and choose **Add as Submodule** to install its
+   default branch, or choose **Refresh** to rescan the project and GitHub.
+4. Open **Window > Package Management > Git Submodule Manager** for the complete
+   management and discovery workspace. Older Unity versions open this workspace
+   as an embedded Package Manager fallback.
+5. Continue with the [User Guide](user-guide.md).
+6. Use [Troubleshooting](troubleshooting.md) when a CLI, credential, or
    submodule command fails.
 
 ## Documentation

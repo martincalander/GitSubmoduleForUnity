@@ -4,7 +4,7 @@ using UnityEngine;
 
 namespace MartinCalander.GitSubmoduleManager.Editor
 {
-    public partial class GitSubmoduleManagerWindow
+    internal partial class GitSubmoduleManagerView
     {
         private const int GitHubAuthenticationTimeoutMs = 10 * 60 * 1000;
         private const double GitHubAuthenticationBrowserDelaySeconds = 1.5;

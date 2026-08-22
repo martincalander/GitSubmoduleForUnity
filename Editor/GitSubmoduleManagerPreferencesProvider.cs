@@ -57,7 +57,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 (GitSubmoduleManagerStartupTab)EditorGUILayout.Popup(
                     new GUIContent(
                         "Startup Tab",
-                        "The tab selected when the Git Submodule Manager window opens."),
+                        "The tab selected when Git Submodule Manager opens inside Package Manager."),
                     (int)settings.StartupTab,
                     StartupTabLabels);
 
@@ -85,7 +85,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 (GitSubmoduleManagerDefaultGitHubFilter)EditorGUILayout.Popup(
                     new GUIContent(
                         "Default Filter",
-                        "The repository filter selected when the Git Submodule Manager window opens."),
+                        "The repository filter selected when the GitHub source opens in Package Manager."),
                     (int)settings.DefaultGitHubFilter,
                     GitHubFilterLabels);
             EditorGUILayout.HelpBox(
@@ -114,7 +114,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 MessageType.None);
 
             if (GUILayout.Button("Open Welcome & Setup", GUILayout.Width(180f)))
-                GitSubmoduleManagerWindow.OpenWelcomeFromPreferences();
+                GitSubmoduleManagerPackageManagerHost.Open(openWelcome: true);
         }
     }
 }

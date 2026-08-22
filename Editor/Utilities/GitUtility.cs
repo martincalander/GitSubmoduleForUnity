@@ -452,8 +452,24 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             out string displayName,
             out string error)
         {
+            return TryReadValidPackageManifestFromJson(
+                content,
+                out packageName,
+                out displayName,
+                out _,
+                out error);
+        }
+
+        internal static bool TryReadValidPackageManifestFromJson(
+            string content,
+            out string packageName,
+            out string displayName,
+            out string version,
+            out string error)
+        {
             packageName = string.Empty;
             displayName = string.Empty;
+            version = string.Empty;
             error = string.Empty;
 
             if (content == null)
@@ -517,6 +533,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             displayName = string.IsNullOrWhiteSpace(metadata.displayName)
                 ? string.Empty
                 : metadata.displayName.Trim();
+            version = metadata.version;
             return true;
         }
 

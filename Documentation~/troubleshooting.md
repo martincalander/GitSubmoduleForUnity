@@ -29,7 +29,11 @@ gh api user --hostname github.com --jq .login
 If authentication fails, use the in-editor **Authenticate with GitHub...**
 action or run `gh auth login --hostname github.com --web` in a visible terminal.
 Ensure the active account can see the user or organization repositories you
-expect.
+expect. Until authentication is restored, **Sources > GitHub** continues to show
+installed GitHub submodules, and the management workspace remains available for
+installed-package operations and direct URL installation. After fixing GitHub
+CLI or authentication, choose **Refresh** in Package Manager to start a new
+catalogue scan.
 
 One-click authentication requires GitHub CLI 2.79.0 or newer and working system
 clipboard access. If no device code is available to paste, cancel the in-editor
@@ -85,6 +89,20 @@ destination package name, for example:
 Monorepos that keep the UPM package below the repository root are not currently
 supported by discovery or installation.
 
+## A GitHub Package Is Missing from Sources
+
+The native catalogue scans all repository pages owned by the authenticated user
+and every organization visible to that account. Confirm that `gh api user`
+returns the intended identity and that the identity can access the missing
+repository. Organization membership or repository permissions may need to be
+updated outside Unity.
+
+Discovery publishes only repositories whose root `package.json` contains a
+valid reverse-domain `name` and SemVer 2.0 `version`. A missing, malformed,
+unavailable, or nested manifest is intentionally excluded. Correct the
+repository or access issue, then choose **Refresh** in Package Manager to rescan
+the account and organizations.
+
 ## The Package Name Is Rejected
 
 Managed names use lowercase reverse-domain form with at least three segments:
@@ -97,7 +115,9 @@ Spaces, uppercase letters, path separators, and traversal segments are rejected.
 
 ## An Update Changed Files but Unity Still Shows the Old State
 
-Wait for Unity's package import to finish, then use the window's refresh action.
+Wait for Unity's package import to finish, then choose **Refresh** in Package
+Manager or in the management workspace.
+
 Confirm the parent repository records the new submodule commit with:
 
 ```bash
@@ -111,7 +131,7 @@ Do not dismiss the recovery warning until you have inspected `git status`,
 `.gitmodules`, the package path, and any Git or SSH processes that may still be
 running. The warning is retained when process termination, rollback, or a
 postcondition cannot be proven. Once the repository is safe, use the recovery
-acknowledgement in the window and refresh again.
+acknowledgement in the management workspace and refresh again.
 
 ## A Teammate Cannot Clone a Private Package
 

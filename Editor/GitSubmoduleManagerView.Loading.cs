@@ -5,7 +5,7 @@ using UnityEngine;
 namespace MartinCalander.GitSubmoduleManager.Editor
 {
     // Shared, theme-aware loading presentation for every asynchronous editor view.
-    public partial class GitSubmoduleManagerWindow
+    internal partial class GitSubmoduleManagerView
     {
         private const int LoadingSpinnerFrameCount = 12;
         private const double LoadingSpinnerFramesPerSecond = 10.0;

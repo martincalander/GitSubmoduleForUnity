@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import re
 import sys
@@ -141,6 +142,9 @@ def check_required_files() -> None:
         "Editor/MartinCalander.GitSubmoduleManager.Editor.asmdef",
         "Editor/GitEditorWindowIcon.png",
         "Editor/GitEditorWindowIconLight.png",
+        "ThirdParty.meta",
+        "ThirdParty/GitSubmoduleManager.Harmony.dll",
+        "ThirdParty/GitSubmoduleManager.Harmony.dll.meta",
         "Tests/Editor/MartinCalander.GitSubmoduleManager.Editor.Tests.asmdef",
         ".github/workflows/ci.yml",
         ".github/workflows/release.yml",
@@ -223,6 +227,75 @@ def check_assembly_identities() -> None:
         fail("Test assembly must reference the renamed editor assembly")
 
 
+def check_harmony_plugin_contract() -> None:
+    dll_path = ROOT / "ThirdParty" / "GitSubmoduleManager.Harmony.dll"
+    meta_path = Path(f"{dll_path}.meta")
+    editor_asmdef_path = (
+        ROOT / "Editor" / "MartinCalander.GitSubmoduleManager.Editor.asmdef"
+    )
+    if not dll_path.is_file() or not meta_path.is_file():
+        return
+
+    expected_sha256 = "353daafec180bb8e7bbe4da78f2a7cdc78067392e3a4e79dc8e7af295f2371e6"
+    try:
+        dll_bytes = dll_path.read_bytes()
+    except OSError as exc:
+        fail(f"Could not read Harmony binary: {exc}")
+        return
+
+    if not dll_bytes.startswith(b"MZ"):
+        fail("Bundled Harmony plugin is not a valid managed PE image")
+    if hashlib.sha256(dll_bytes).hexdigest() != expected_sha256:
+        fail("Bundled Harmony 2.4.1 binary does not match the audited artifact")
+
+    editor = read_json(editor_asmdef_path)
+    if editor.get("overrideReferences") is not True:
+        fail("Editor assembly must explicitly override precompiled references")
+    if "GitSubmoduleManager.Harmony.dll" not in (editor.get("precompiledReferences") or []):
+        fail("Editor assembly must explicitly reference the bundled Harmony plugin")
+
+    try:
+        meta_text = meta_path.read_text(encoding="utf-8")
+    except OSError as exc:
+        fail(f"Could not read Harmony importer metadata: {exc}")
+        return
+
+    required_importer_patterns = {
+        "explicit-reference": r"(?m)^  isExplicitlyReferenced: 1$",
+        "Editor/AnyOS/AnyCPU": (
+            r"(?ms)^    Editor:\n"
+            r"      enabled: 1\n"
+            r"      settings:\n"
+            r"        CPU: AnyCPU\n"
+            r"        DefaultValueInitialized: true\n"
+            r"        OS: AnyOS$"
+        ),
+    }
+    for label, pattern in required_importer_patterns.items():
+        if not re.search(pattern, meta_text):
+            fail(f"Harmony importer must preserve {label} settings")
+
+    for platform in (
+        "Any",
+        "Linux64",
+        "OSXUniversal",
+        "Win",
+        "Win64",
+        "WindowsStoreApps",
+    ):
+        if not re.search(
+            rf"(?m)^    {re.escape(platform)}:\n      enabled: 0$",
+            meta_text,
+        ):
+            fail(f"Harmony importer must remain disabled for {platform} players")
+
+    notices_path = ROOT / "Third Party Notices.md"
+    if notices_path.is_file():
+        notices = notices_path.read_text(encoding="utf-8")
+        if "Harmony 2.4.1" not in notices or str(dll_path.relative_to(ROOT)) not in notices:
+            fail("Third Party Notices.md must attribute the bundled Harmony binary")
+
+
 MARKDOWN_LINK = re.compile(r"!?\[[^\]]*\]\(([^)]+)\)")
 HTML_SOURCE = re.compile(r"\b(?:src|href)=[\"']([^\"']+)[\"']")
 
@@ -281,6 +354,7 @@ def main() -> int:
     check_unity_meta_files()
     check_editor_only_layout()
     check_assembly_identities()
+    check_harmony_plugin_contract()
     check_markdown_links()
 
     if ERRORS:

@@ -5,6 +5,7 @@ using System.Linq;
 using System.Runtime.InteropServices;
 using System.Threading;
 using NUnit.Framework;
+using GitSubmoduleManagerView = MartinCalander.GitSubmoduleManager.Editor.GitSubmoduleManagerView;
 
 [assembly: LevelOfParallelism(1)]
 
@@ -35,17 +36,17 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
             Assert.That(arguments, Is.EqualTo("api user --jq .login --hostname github.com"));
         }
 
-        [TestCase(true, false, (int)GitSubmoduleManagerWindow.WelcomeCheckStage.Git)]
-        [TestCase(true, true, (int)GitSubmoduleManagerWindow.WelcomeCheckStage.GitHub)]
-        [TestCase(false, false, (int)GitSubmoduleManagerWindow.WelcomeCheckStage.Complete)]
-        [TestCase(false, true, (int)GitSubmoduleManagerWindow.WelcomeCheckStage.Complete)]
+        [TestCase(true, false, (int)GitSubmoduleManagerView.WelcomeCheckStage.Git)]
+        [TestCase(true, true, (int)GitSubmoduleManagerView.WelcomeCheckStage.GitHub)]
+        [TestCase(false, false, (int)GitSubmoduleManagerView.WelcomeCheckStage.Complete)]
+        [TestCase(false, true, (int)GitSubmoduleManagerView.WelcomeCheckStage.Complete)]
         public void WelcomeCheckStage_SeparatesRequiredGitFromOptionalGitHubWork(
             bool isInitialLoading,
             bool isGitStageReady,
             int expected)
         {
             Assert.That(
-                (int)GitSubmoduleManagerWindow.GetWelcomeCheckStage(
+                (int)GitSubmoduleManagerView.GetWelcomeCheckStage(
                     isInitialLoading,
                     isGitStageReady),
                 Is.EqualTo(expected));
@@ -61,13 +62,13 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
             bool isGitAvailable,
             bool expected)
         {
-            var checkStage = GitSubmoduleManagerWindow.GetWelcomeCheckStage(
+            var checkStage = GitSubmoduleManagerView.GetWelcomeCheckStage(
                 isInitialLoading,
                 isGitStageReady);
 
             Assert.That(
-                GitSubmoduleManagerWindow.CanFinishWelcome(
-                    checkStage == GitSubmoduleManagerWindow.WelcomeCheckStage.Git,
+                GitSubmoduleManagerView.CanFinishWelcome(
+                    checkStage == GitSubmoduleManagerView.WelcomeCheckStage.Git,
                     isGitAvailable),
                 Is.EqualTo(expected));
         }
@@ -86,7 +87,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
             bool expected)
         {
             Assert.That(
-                GitSubmoduleManagerWindow.CanUseToolbarGitActions(
+                GitSubmoduleManagerView.CanUseToolbarGitActions(
                     gitAvailable,
                     isInitialLoading,
                     isGitStageReady,
@@ -106,7 +107,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
             bool expected)
         {
             Assert.That(
-                GitSubmoduleManagerWindow.CanStartCliInstall(
+                GitSubmoduleManagerView.CanStartCliInstall(
                     interactionBusy,
                     backgroundLoadsDraining,
                     recoveryRequiresReview),
@@ -122,9 +123,9 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
             {
                 repo.ManifestState = state;
                 Assert.That(
-                    GitSubmoduleManagerWindow.PassesFilter(
+                    GitSubmoduleManagerView.PassesFilter(
                         repo,
-                        GitSubmoduleManagerWindow.FilterOption.ValidPackagesOnly),
+                        GitSubmoduleManagerView.FilterOption.ValidPackagesOnly),
                     Is.EqualTo(state == PackageManifestState.Valid),
                     state.ToString());
             }
@@ -136,7 +137,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
             foreach (PackageManifestState state in Enum.GetValues(typeof(PackageManifestState)))
             {
                 Assert.That(
-                    GitSubmoduleManagerWindow.CanStartDiscoveredPackageAdd(
+                    GitSubmoduleManagerView.CanStartDiscoveredPackageAdd(
                         state,
                         hasValidationError: false,
                         repositoryOperationBusy: false),
@@ -155,7 +156,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
             bool expected)
         {
             Assert.That(
-                GitSubmoduleManagerWindow.CanStartDiscoveredPackageAdd(
+                GitSubmoduleManagerView.CanStartDiscoveredPackageAdd(
                     PackageManifestState.Valid,
                     hasValidationError,
                     repositoryOperationBusy),

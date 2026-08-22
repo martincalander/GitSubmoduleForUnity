@@ -1,6 +1,7 @@
 using System.Threading;
 using NUnit.Framework;
 using UnityEngine;
+using GitSubmoduleManagerView = MartinCalander.GitSubmoduleManager.Editor.GitSubmoduleManagerView;
 
 namespace MartinCalander.GitSubmoduleManager.Editor.Tests
 {
@@ -10,10 +11,10 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
         [Test]
         public void GitHubAuthentication_BlocksGitHubInteractionsButNotRepositoryActions()
         {
-            bool repositoryBusy = GitSubmoduleManagerWindow.IsRepositoryOperationBusyState(
+            bool repositoryBusy = GitSubmoduleManagerView.IsRepositoryOperationBusyState(
                 operationExecutionBusy: false,
                 deferredMutationPending: false);
-            bool gitHubBusy = GitSubmoduleManagerWindow.IsGitHubInteractionBusyState(
+            bool gitHubBusy = GitSubmoduleManagerView.IsGitHubInteractionBusyState(
                 repositoryBusy,
                 authenticationInProgress: true);
 
@@ -35,7 +36,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
             bool expected)
         {
             Assert.That(
-                GitSubmoduleManagerWindow.IsSharedGitHubAuthenticationGateState(
+                GitSubmoduleManagerView.IsSharedGitHubAuthenticationGateState(
                     activeOrAwaitingProcessing,
                     retiredOrStopping,
                     restartRequired),
@@ -55,7 +56,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
             bool expected)
         {
             Assert.That(
-                GitSubmoduleManagerWindow.CanStartGitHubAuthentication(
+                GitSubmoduleManagerView.CanStartGitHubAuthentication(
                     ghAvailable,
                     repositoryOperationBusy,
                     sharedAuthenticationBlocked,
@@ -67,7 +68,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
         public void GitHubAuthenticationStart_WaitsForAnyActiveGitHubCliCommand()
         {
             Assert.That(
-                GitSubmoduleManagerWindow.CanStartGitHubAuthentication(
+                GitSubmoduleManagerView.CanStartGitHubAuthentication(
                     ghAvailable: true,
                     repositoryOperationBusy: false,
                     sharedAuthenticationBlocked: false,
@@ -95,6 +96,8 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
         [Test]
         public void CliRunner_TracksActiveGitHubCommandsAcrossAsyncOwners()
         {
+            IgnoreWhenLivePackageManagerDiscoveryOwnsGitHubCommands();
+
             ICommandRunner previousRunner = CliCommandRunner.CurrentRunner;
             using var started = new ManualResetEventSlim(false);
             using var release = new ManualResetEventSlim(false);
@@ -127,6 +130,8 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
         [Test]
         public void CliRunner_AuthenticationReservationIsAtomicWithGitHubCommandStarts()
         {
+            IgnoreWhenLivePackageManagerDiscoveryOwnsGitHubCommands();
+
             Assert.That(CliCommandRunner.TryReserveGitHubAuthentication(), Is.True);
             try
             {
@@ -154,6 +159,19 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
             }
         }
 
+        private static void IgnoreWhenLivePackageManagerDiscoveryOwnsGitHubCommands()
+        {
+            if (PackageManagerGitHubDiscovery.IsStarted ||
+                CliCommandRunner.HasActiveGitHubCommands ||
+                CliCommandRunner.IsGitHubAuthenticationReserved ||
+                CliCommandRunner.GitHubCommandRequiresEditorRestart ||
+                AsyncCommandDrainRegistry.IsDraining)
+            {
+                Assert.Ignore(
+                    "A live Package Manager GitHub discovery session owns the shared command gate.");
+            }
+        }
+
         [TestCase(false, true)]
         [TestCase(true, false)]
         public void InitialLoader_AlwaysRunsGitStageButDefersGitHubDuringSharedAuthentication(
@@ -161,7 +179,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
             bool shouldRunGitHubStage)
         {
             Assert.That(
-                GitSubmoduleManagerWindow.ShouldRunInitialGitHubStage(sharedAuthenticationBlocked),
+                GitSubmoduleManagerView.ShouldRunInitialGitHubStage(sharedAuthenticationBlocked),
                 Is.EqualTo(shouldRunGitHubStage));
         }
 
@@ -175,9 +193,31 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
             bool expected)
         {
             Assert.That(
-                GitSubmoduleManagerWindow.IsRepositoryOperationBusyState(
+                GitSubmoduleManagerView.IsRepositoryOperationBusyState(
                     operationExecutionBusy,
                     deferredMutationPending),
+                Is.EqualTo(expected));
+        }
+
+        [TestCase(false, false, false, false, false)]
+        [TestCase(true, false, false, false, true)]
+        [TestCase(false, true, false, false, true)]
+        [TestCase(false, false, true, false, true)]
+        [TestCase(false, false, false, true, true)]
+        [TestCase(true, true, true, true, true)]
+        public void RepositoryMutationGate_BlocksEveryPackageReaderOwner(
+            bool managerReadersDraining,
+            bool packageManagerSnapshotReaderActive,
+            bool installProbeReaderActive,
+            bool commandDrainActive,
+            bool expected)
+        {
+            Assert.That(
+                GitOperationService.ShouldBlockMutationForReaders(
+                    managerReadersDraining,
+                    packageManagerSnapshotReaderActive,
+                    installProbeReaderActive,
+                    commandDrainActive),
                 Is.EqualTo(expected));
         }
 
@@ -191,16 +231,16 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
             try
             {
                 Assert.That(
-                    GitSubmoduleManagerWindow.CanEnterDeferredWindowAction(owner, windowEnabled: true),
+                    GitSubmoduleManagerView.CanEnterDeferredWindowAction(owner, windowEnabled: true),
                     Is.True);
                 Assert.That(
-                    GitSubmoduleManagerWindow.CanEnterDeferredWindowAction(owner, windowEnabled: false),
+                    GitSubmoduleManagerView.CanEnterDeferredWindowAction(owner, windowEnabled: false),
                     Is.False,
                     "OnDisable must invalidate callbacks before Unity destroys the window object.");
 
                 Object.DestroyImmediate(owner);
                 Assert.That(
-                    GitSubmoduleManagerWindow.CanEnterDeferredWindowAction(owner, windowEnabled: true),
+                    GitSubmoduleManagerView.CanEnterDeferredWindowAction(owner, windowEnabled: true),
                     Is.False,
                     "Unity-destroyed owners must never enter delayed repository work.");
             }

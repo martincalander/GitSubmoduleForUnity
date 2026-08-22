@@ -3,7 +3,6 @@ using System.Collections.Generic;
 using System.Threading;
 using UnityEditor;
 using UnityEngine;
-using UnityEngine.Scripting.APIUpdating;
 
 namespace MartinCalander.GitSubmoduleManager.Editor
 {
@@ -51,12 +50,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         }
     }
 
-    [MovedFrom(
-        true,
-        sourceNamespace: "MartinCalander.GitPackageManager.Editor",
-        sourceAssembly: "MartinCalander.GitPackageManager.Editor",
-        sourceClassName: "GitPackageManagerWindow")]
-    public partial class GitSubmoduleManagerWindow : EditorWindow
+    internal partial class GitSubmoduleManagerView : ScriptableObject
     {
         internal enum Tab
         {
@@ -88,6 +82,12 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         private const float ListPaneWidth = 320f;
 
         private static int activeBackgroundLoadWorkers;
+
+        private Action hostRepaint;
+        private Action hostClose;
+        private Rect position;
+        private GUIContent titleContent;
+        private Vector2 minSize;
 
         private readonly RepositoryCoordinator repositoryCoordinator = new();
         private readonly DiscoveryCoordinator discoveryCoordinator = new();
@@ -203,8 +203,26 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         private int installedLoadGeneration;
         private double nextProgressRepaintTime;
 
-        private void OnEnable()
+        internal bool IsAttached => isWindowEnabled;
+        internal GUIContent TitleContent => titleContent;
+        internal Vector2 MinimumSize => minSize;
+
+        internal void AttachToHost(
+            Action repaint,
+            Action close,
+            Rect initialPosition,
+            bool openWelcome)
         {
+            hostRepaint = repaint;
+            hostClose = close;
+            position = initialPosition;
+            if (isWindowEnabled)
+            {
+                if (openWelcome)
+                    ShowWelcomeScreen();
+                return;
+            }
+
             isWindowEnabled = true;
             ApplyThemeIcon();
             ApplyStartupPreferences();
@@ -223,6 +241,9 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 operationStatus = GitOperationService.RecoveryWarning;
                 operationStatusType = MessageType.Warning;
             }
+
+            if (openWelcome)
+                ShowWelcomeScreen();
         }
 
         private void ApplyStartupPreferences()
@@ -244,22 +265,20 @@ namespace MartinCalander.GitSubmoduleManager.Editor
 
         internal void ApplyThemeIcon()
         {
-            var iconFileName = EditorGUIUtility.isProSkin
-                ? "GitEditorWindowIcon.png"
-                : "GitEditorWindowIconLight.png";
-            UnityEditor.PackageManager.PackageInfo package =
-                UnityEditor.PackageManager.PackageInfo.FindForAssembly(
-                    typeof(GitSubmoduleManagerWindow).Assembly);
-            string packagePath = string.IsNullOrWhiteSpace(package?.assetPath)
-                ? CurrentPackagePath
-                : GitUtility.NormalizePath(package.assetPath);
-            var icon = AssetDatabase.LoadAssetAtPath<Texture2D>(
-                $"{packagePath}/Editor/{iconFileName}");
-            titleContent = new GUIContent("Git Submodule Manager", icon);
+            titleContent = new GUIContent(
+                "Git Submodule Manager",
+                GitSubmoduleManagerIcons.GitIcon);
         }
 
-        private void OnDisable()
+        internal void DetachFromHost()
         {
+            if (!isWindowEnabled)
+            {
+                hostRepaint = null;
+                hostClose = null;
+                return;
+            }
+
             isWindowEnabled = false;
             deferredRepositoryMutation.Clear();
             ReleaseGitHubAuthentication();
@@ -288,10 +307,20 @@ namespace MartinCalander.GitSubmoduleManager.Editor
 
             repositoryCoordinator.Dispose();
             discoveryCoordinator.Dispose();
+            hostRepaint = null;
+            hostClose = null;
         }
 
-        private void Update()
+        private void OnDisable()
         {
+            DetachFromHost();
+        }
+
+        internal void Tick()
+        {
+            if (!isWindowEnabled)
+                return;
+
             UpdateGitHubAuthentication();
             UpdateDeferredRepositoryMutation();
 
@@ -347,8 +376,12 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             }
         }
 
-        private void OnGUI()
+        internal void Render(Rect contentRect)
         {
+            if (!isWindowEnabled)
+                return;
+
+            position = contentRect;
             Styles.Initialize();
 
             if (showWelcomeScreen)
@@ -404,6 +437,16 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             EditorGUILayout.EndHorizontal();
 
             EditorGUILayout.EndVertical();
+        }
+
+        private void Repaint()
+        {
+            hostRepaint?.Invoke();
+        }
+
+        private void Close()
+        {
+            hostClose?.Invoke();
         }
 
         internal void RefreshPackages()

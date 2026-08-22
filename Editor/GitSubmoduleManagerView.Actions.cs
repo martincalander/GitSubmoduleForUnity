@@ -1,13 +1,12 @@
 using System;
 using System.Collections.Generic;
-using System.IO;
 using System.Threading;
 using UnityEditor;
 using UnityEngine;
 
 namespace MartinCalander.GitSubmoduleManager.Editor
 {
-    public partial class GitSubmoduleManagerWindow
+    internal partial class GitSubmoduleManagerView
     {
         internal enum InitialLoadStage
         {
@@ -44,13 +43,6 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             public List<GitPackageInfo> Packages;
             public string Error = string.Empty;
             public bool Success;
-        }
-
-        private sealed class AddTaskState
-        {
-            public GitOperationCompletionOutcome Outcome = GitOperationCompletionOutcome.FailedUnsafe;
-            public string Message = string.Empty;
-            public bool AddedSuccessfully;
         }
 
         private sealed class UpdatePreviewTaskState
@@ -1876,29 +1868,20 @@ namespace MartinCalander.GitSubmoduleManager.Editor
 
         private string ValidatePackageInput(string url, string packageName, string branch)
         {
-            if (string.IsNullOrWhiteSpace(url))
-                return "Git URL is required.";
+            string validationError = GitSubmoduleAddService.ValidateInput(
+                url,
+                packageName,
+                branch);
+            if (!string.IsNullOrEmpty(validationError))
+                return validationError;
 
-            if (!GitUtility.IsValidRepositoryUrl(url))
-                return "Use a secure HTTPS, SSH, or explicit local repository URL without embedded credentials. Plain HTTP and git:// transports are blocked.";
-
-            if (!GitUtility.IsValidUpmPackageName(packageName))
-                return PackageNameRule;
-
-            if (!GitUtility.IsValidBranchName(branch))
-                return "Branch name is invalid. Leave it empty to use the repository default.";
-
-            string path = GetPackagePath(packageName);
+            string path = GitSubmoduleAddService.GetPackagePath(packageName);
 
             foreach (var package in installedPackages)
             {
                 if (string.Equals(package.Path, path, StringComparison.Ordinal))
                     return "This package is already installed.";
             }
-
-            string fullPath = Path.Combine(GitUtility.ProjectRoot, path);
-            if (Directory.Exists(fullPath) || File.Exists(fullPath))
-                return $"Package path already exists: {path}";
 
             return string.Empty;
         }
@@ -1947,7 +1930,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
 
             addStatus = $"Adding {packageName}...";
             addStatusType = MessageType.Info;
-            var state = new AddTaskState();
+            var state = new GitSubmoduleAddTaskState();
             StartTaskOperation(
                 $"Adding {packageName}...",
                 cancellationToken => RunAddSubmoduleTask(
@@ -1969,121 +1952,20 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             string branch,
             string packageName,
             string path,
-            AddTaskState state,
+            GitSubmoduleAddTaskState state,
             CancellationToken cancellationToken)
         {
-            cancellationToken.ThrowIfCancellationRequested();
-            if (!GitUtility.TryPrepareAddSubmodule(
-                    url,
-                    path,
-                    out AddSubmodulePlan plan,
-                    out string prepareError,
-                    cancellationToken))
-            {
-                state.Outcome = GitOperationCompletionOutcome.FailedButRolledBack;
-                state.Message = prepareError;
-                return SafeTaskFailure(prepareError);
-            }
-
-            if (!GitUtility.TryBuildAddSubmoduleArguments(
-                    url,
-                    path,
-                    branch,
-                    plan.ReuseExistingMetadata,
-                    out string arguments,
-                    out string argumentError))
-            {
-                state.Outcome = GitOperationCompletionOutcome.FailedButRolledBack;
-                state.Message = argumentError;
-                return SafeTaskFailure(argumentError);
-            }
-
-            plan.ExpectedBranch = branch?.Trim() ?? string.Empty;
-
-            cancellationToken.ThrowIfCancellationRequested();
-            CommandResult addResult = GitUtility.RunGit(
-                arguments,
-                GitUtility.ProjectRoot,
-                120000,
+            return GitSubmoduleAddService.RunAddSubmoduleTask(
+                url,
+                branch,
+                packageName,
+                path,
+                state,
                 cancellationToken);
-            if (addResult == null || !addResult.IsSuccess)
-            {
-                string message = GitUtility.BuildCommandError("Failed to add submodule", addResult);
-                if (addResult == null || !addResult.TerminationConfirmed)
-                {
-                    state.Outcome = GitOperationCompletionOutcome.FailedUnsafe;
-                    state.Message =
-                        message +
-                        " Process-tree termination could not be confirmed, so automatic cleanup was skipped. Inspect the destination and running Git/SSH processes before acknowledging recovery.";
-                    return addResult;
-                }
-
-                cancellationToken.ThrowIfCancellationRequested();
-                bool cleanupSucceeded = GitUtility.TryCleanupFailedAdd(
-                    plan,
-                    out string cleanupWarning,
-                    cancellationToken);
-                if (!string.IsNullOrWhiteSpace(cleanupWarning))
-                    message += cleanupSucceeded
-                        ? $" Recovery details: {cleanupWarning}"
-                        : $" Cleanup warning: {cleanupWarning}";
-                state.Message = message;
-                state.Outcome = cleanupSucceeded
-                    ? GitOperationCompletionOutcome.FailedButRolledBack
-                    : GitOperationCompletionOutcome.FailedUnsafe;
-                return addResult;
-            }
-
-            string packageJsonPath = Path.Combine(GitUtility.ProjectRoot, path, "package.json");
-            string validationError = string.Empty;
-            if (!GitUtility.TryReadValidPackageManifest(
-                    packageJsonPath,
-                    out string declaredName,
-                    out string manifestError,
-                    cancellationToken))
-                validationError = "Added submodule package.json is invalid: " + manifestError;
-            else if (!string.Equals(declaredName, packageName, StringComparison.Ordinal))
-                validationError = $"Package name mismatch. Expected {packageName}, got {declaredName}.";
-            else if (!GitUtility.TryVerifyAddedSubmodule(
-                         plan,
-                         url,
-                         branch,
-                         out string postconditionError,
-                         cancellationToken))
-                validationError = "Git reported success, but add verification failed: " + postconditionError;
-
-            if (!string.IsNullOrEmpty(validationError))
-            {
-                cancellationToken.ThrowIfCancellationRequested();
-                bool cleanupSucceeded = GitUtility.TryCleanupFailedAdd(
-                    plan,
-                    out string cleanupNotice,
-                    cancellationToken);
-                state.Message = cleanupSucceeded
-                    ? string.IsNullOrWhiteSpace(cleanupNotice)
-                        ? validationError + " The incomplete submodule was rolled back."
-                        : validationError + " The Git registration was rolled back. " + cleanupNotice
-                    : validationError + " Rollback failed: " + cleanupNotice;
-                state.Outcome = cleanupSucceeded
-                    ? GitOperationCompletionOutcome.FailedButRolledBack
-                    : GitOperationCompletionOutcome.FailedUnsafe;
-                return new CommandResult
-                {
-                    ExitCode = -1,
-                    StdOut = addResult.StdOut,
-                    StdErr = state.Message,
-                    TerminationConfirmed = true
-                };
-            }
-
-            state.AddedSuccessfully = true;
-            state.Outcome = GitOperationCompletionOutcome.Succeeded;
-            state.Message = $"Successfully added {packageName}.";
-            return addResult;
         }
 
         private void NotifyAddSubmoduleComplete(
-            AddTaskState state,
+            GitSubmoduleAddTaskState state,
             CommandResult result,
             GitOperationCompletionOutcome effectiveOutcome)
         {

@@ -15,9 +15,9 @@ git --version
 ```
 
 Official downloads are available at [git-scm.com](https://git-scm.com/downloads).
-If Git is missing, the editor window offers platform-appropriate installation
-help. On supported macOS and Windows setups it can run the displayed native
-installer command only after you explicitly approve it.
+If Git is missing, the management workspace offers platform-appropriate
+installation help. On supported macOS and Windows setups it can run the
+displayed native installer command only after you explicitly approve it.
 
 ### GitHub CLI
 
@@ -47,11 +47,27 @@ leaves that choice interactive.
 
 ## First Open
 
-Open **Window > Package Management > Git Submodule Manager**. A one-time welcome
-page checks Git, GitHub CLI, and GitHub authentication for the current user. Its
-shown flag is stored per user and project under Unity's ignored
-`UserSettings/` directory. The page can be opened again manually from
-**Welcome & Setup...** in the window menu.
+On Unity versions with extension-page support, open **Window > Package Manager**
+and select **GitHub** under **Sources**. The native package list incrementally
+adds valid UPM packages discovered from every repository page owned by the
+authenticated user and their visible organizations, alongside installed GitHub
+submodules. Native search, sorting, selection, and details work across the
+combined list. Select a discovered package and choose **Add as Submodule** to
+install its default branch, or choose **Refresh** to rescan.
+
+If GitHub CLI is missing or authentication fails, installed GitHub submodules
+remain visible and the management workspace remains available for direct URL
+installation and installed-package operations.
+
+Open **Window > Package Management > Git Submodule Manager** for the full
+management, discovery, add, initialize, update, retarget, and remove workspace.
+On older supported Unity versions, that menu opens the workspace embedded in
+Package Manager, including its authenticated discovery workflow.
+
+The first management-workspace open shows a one-time welcome page that checks
+Git, GitHub CLI, and GitHub authentication for the current user. Its shown flag
+is stored per user and project under Unity's ignored `UserSettings/` directory.
+Open it again from **Welcome & Setup...** in the management workspace's menu.
 
 The same per-user file stores the Git Submodule Manager options shown under
 Unity's **Preferences > Git Submodule Manager** page. That page also provides an
@@ -85,8 +101,9 @@ For an existing clone:
 git submodule update --init --recursive
 ```
 
-The editor window never initializes all submodules automatically. Uninitialized
-packages are shown explicitly and can be initialized one at a time.
+The management workspace never initializes all submodules automatically.
+Uninitialized packages are shown explicitly and can be initialized one at a
+time.
 
 ## Compatibility
 
@@ -113,9 +130,10 @@ Manage Git Submodule Manager itself from Unity's Package Manager. Review
 
 ### Migrating from Git Package Manager
 
-The rename changes the UPM package, assembly, namespace, and public window type
-identities. Existing Git URL installations must replace the dependency key in
-`Packages/manifest.json`; changing only the tag is not sufficient:
+The rename changes the UPM package, assembly, namespace, and legacy public
+window type identities. Existing Git URL installations must replace the
+dependency key in `Packages/manifest.json`; changing only the tag is not
+sufficient:
 
 ```json
 {
@@ -136,10 +154,12 @@ and `.gitmodules` path from
 `Packages/com.martincalander.gitsubmodulemanager`, then run
 `git submodule sync --recursive`. Update downstream assembly definition
 references from `MartinCalander.GitPackageManager.Editor` to
-`MartinCalander.GitSubmoduleManager.Editor`, source namespaces from
+`MartinCalander.GitSubmoduleManager.Editor`, and source namespaces from
 `MartinCalander.GitPackageManager.Editor` to
-`MartinCalander.GitSubmoduleManager.Editor`, and window references from
-`GitPackageManagerWindow` to `GitSubmoduleManagerWindow`.
+`MartinCalander.GitSubmoduleManager.Editor`. The public
+`GitSubmoduleManagerWindow` type remains only as a compatibility redirect to
+the Package Manager integration; new integrations should use the package menu
+instead of depending on the window type.
 
 Serialized editor types carry Unity migration metadata. Per-user preferences
 are copied non-destructively to `UserSettings/GitSubmoduleManagerSettings.asset`,

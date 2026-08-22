@@ -24,6 +24,8 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         public PackageManifestState ManifestState;
         public string PackageManifestMessage;
         public string DeclaredPackageName;
+        public string DeclaredDisplayName;
+        public string DeclaredVersion;
         public string PackageManifestBlobOid;
 
         public bool HasPackageJson => ManifestState == PackageManifestState.Valid;

@@ -5,7 +5,7 @@ using UnityEngine;
 
 namespace MartinCalander.GitSubmoduleManager.Editor
 {
-    public partial class GitSubmoduleManagerWindow
+    internal partial class GitSubmoduleManagerView
     {
         private void DrawListPane()
         {

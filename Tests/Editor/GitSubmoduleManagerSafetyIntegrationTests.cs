@@ -4,6 +4,7 @@ using System.IO;
 using System.Runtime.InteropServices;
 using System.Threading;
 using NUnit.Framework;
+using GitSubmoduleManagerView = MartinCalander.GitSubmoduleManager.Editor.GitSubmoduleManagerView;
 
 namespace MartinCalander.GitSubmoduleManager.Editor.Tests
 {
@@ -260,20 +261,20 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
             };
 
             Assert.That(
-                GitSubmoduleManagerWindow.BuildInstalledPackageIdentity(refreshedSamePackage),
-                Is.EqualTo(GitSubmoduleManagerWindow.BuildInstalledPackageIdentity(original)));
+                GitSubmoduleManagerView.BuildInstalledPackageIdentity(refreshedSamePackage),
+                Is.EqualTo(GitSubmoduleManagerView.BuildInstalledPackageIdentity(original)));
             Assert.That(
-                GitSubmoduleManagerWindow.BuildInstalledPackageIdentity(replacementAtSameIndex),
-                Is.Not.EqualTo(GitSubmoduleManagerWindow.BuildInstalledPackageIdentity(original)));
+                GitSubmoduleManagerView.BuildInstalledPackageIdentity(replacementAtSameIndex),
+                Is.Not.EqualTo(GitSubmoduleManagerView.BuildInstalledPackageIdentity(original)));
         }
 
         [Test]
         public void InstalledBranchPresentation_DoesNotInventMainForRepositoryDefault()
         {
-            Assert.That(GitSubmoduleManagerWindow.NormalizeInstalledBranch(null), Is.Empty);
-            Assert.That(GitSubmoduleManagerWindow.NormalizeInstalledBranch("   "), Is.Empty);
-            Assert.That(GitSubmoduleManagerWindow.GetInstalledBranchLabel(string.Empty), Is.EqualTo("repository default"));
-            Assert.That(GitSubmoduleManagerWindow.GetInstalledBranchLabel(" feature/test "), Is.EqualTo("feature/test"));
+            Assert.That(GitSubmoduleManagerView.NormalizeInstalledBranch(null), Is.Empty);
+            Assert.That(GitSubmoduleManagerView.NormalizeInstalledBranch("   "), Is.Empty);
+            Assert.That(GitSubmoduleManagerView.GetInstalledBranchLabel(string.Empty), Is.EqualTo("repository default"));
+            Assert.That(GitSubmoduleManagerView.GetInstalledBranchLabel(" feature/test "), Is.EqualTo("feature/test"));
         }
     }
 

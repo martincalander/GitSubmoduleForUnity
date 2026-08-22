@@ -14,6 +14,30 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Package Manager presentation for installed package submodules, including a
+  **Submodule** tag and **GitHub** source with the existing themed Git icon.
+- A fully native **GitHub** page under Package Manager's **Sources** section on
+  Editors with extension-page support. It uses Unity's package list, search,
+  sort, selection, and details UI for installed GitHub submodules and valid UPM
+  packages discovered incrementally across every authenticated personal and
+  organization repository page. Results are grouped as **Organization -
+  _owner_**, carry **Public** or **Private** repository badges, and use Package
+  Manager's native loading message and spinner while discovery is running.
+- A native **Add as Submodule** action for discovered packages. It installs the
+  repository's default branch through the shared validated add transaction and
+  rolls back failed clones or postcondition checks when process termination and
+  cleanup ownership can be proven.
+- A Package Manager **+ > Install package as Git Submodule...** command that is
+  available from every Package Manager page. A Git-only remote probe discovers
+  branches, the default branch, and the exact root `package.json` name before
+  enabling those inputs, then uses the existing trust confirmation and
+  validated add transaction with safe rollback.
+- The complete management, discovery, add, update, retarget, and remove
+  workspace remains available from **Window > Package Management > Git
+  Submodule Manager**, with an embedded fallback for older Package Manager
+  layouts.
+- Editor-only Harmony 2.4.1 integration with guarded hooks for supported Unity
+  Package Manager internals.
 - Public project documentation, contribution templates, security guidance, and
   UPM manual.
 - Repository sanity checks and tagged-release packaging workflows.
@@ -38,6 +62,9 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- Moved the complete management workspace from its standalone Editor window
+  into Unity's existing Package Manager. The explicit package menu opens that
+  workspace, while the former public window redirects to it for compatibility.
 - Renamed the product from Git Package Manager to Git Submodule Manager,
   including the UPM package ID, editor and test assemblies, namespaces,
   serialized editor types, menu and Preferences UI, documentation, and tests.
@@ -68,6 +95,9 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Initial loading publishes required Git state before optional GitHub state,
   keeps navigation responsive, and queues one exact mutation while stale
   repository readers drain.
+- Package Manager refresh now rescans both installed submodules and the remote
+  GitHub catalogue. Missing or unauthenticated GitHub CLI state leaves installed
+  packages and the embedded management fallback usable.
 
 ### Fixed
 

@@ -3,7 +3,7 @@ using UnityEngine;
 
 namespace MartinCalander.GitSubmoduleManager.Editor
 {
-    public partial class GitSubmoduleManagerWindow
+    internal partial class GitSubmoduleManagerView
     {
         private string lastAutoDerivedPackageName = string.Empty;
 
@@ -93,10 +93,10 @@ namespace MartinCalander.GitSubmoduleManager.Editor
 
         private sealed class AddFromUrlPopup : PopupWindowContent
         {
-            private readonly GitSubmoduleManagerWindow owner;
+            private readonly GitSubmoduleManagerView owner;
             private Vector2 scrollPosition;
 
-            public AddFromUrlPopup(GitSubmoduleManagerWindow owner)
+            public AddFromUrlPopup(GitSubmoduleManagerView owner)
             {
                 this.owner = owner;
             }

@@ -178,8 +178,8 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                     return RetiredHandles.Any(handle =>
                         handle != null &&
                         handle.IsComplete &&
-                        handle.Result != null &&
-                        !handle.Result.TerminationConfirmed);
+                        (handle.Result == null ||
+                         !handle.Result.TerminationConfirmed));
                 }
             }
         }
@@ -194,8 +194,8 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                     if (RetiredHandles.Any(handle =>
                             handle != null &&
                             handle.IsComplete &&
-                            handle.Result != null &&
-                            !handle.Result.TerminationConfirmed))
+                            (handle.Result == null ||
+                             !handle.Result.TerminationConfirmed)))
                     {
                         return "A previous command could not confirm that every process stopped. " +
                                "Save your work and restart Unity before retrying repository discovery.";

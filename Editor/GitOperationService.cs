@@ -107,6 +107,18 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             return File.Exists(currentPath) && File.Exists(legacyPath);
         }
 
+        internal static bool ShouldBlockMutationForReaders(
+            bool managerReadersDraining,
+            bool packageManagerSnapshotReaderActive,
+            bool installProbeReaderActive,
+            bool commandDrainActive)
+        {
+            return managerReadersDraining ||
+                   packageManagerSnapshotReaderActive ||
+                   installProbeReaderActive ||
+                   commandDrainActive;
+        }
+
         internal static string RecoveryWarning
         {
             get
@@ -629,10 +641,14 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             GitOperationMetadata metadata,
             out string error)
         {
-            if (GitSubmoduleManagerWindow.AreBackgroundLoadsDraining)
+            if (ShouldBlockMutationForReaders(
+                    GitSubmoduleManagerView.AreBackgroundLoadsDraining,
+                    PackageManagerSubmoduleSnapshot.IsReaderActive,
+                    GitSubmoduleInstallProbe.IsReaderActive,
+                    AsyncCommandDrainRegistry.IsDraining))
             {
                 error =
-                    "A package scan is still stopping. Wait for it to finish before starting a repository mutation.";
+                    "A package scan is still running or stopping. Wait for it to finish before starting a repository mutation.";
                 return false;
             }
 

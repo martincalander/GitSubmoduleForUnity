@@ -4,7 +4,7 @@ using UnityEngine;
 
 namespace MartinCalander.GitSubmoduleManager.Editor
 {
-    public partial class GitSubmoduleManagerWindow
+    internal partial class GitSubmoduleManagerView
     {
         private const string ValidPackageFilterTooltip =
             "Only show repositories whose root package.json declares a valid UPM package name and SemVer version.";

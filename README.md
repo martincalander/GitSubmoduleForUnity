@@ -27,13 +27,34 @@ Manage Unity packages as real Git submodules, directly from the Editor.
 </p>
 
 Git Submodule Manager is an editor-only Unity package for installing and managing
-UPM packages as Git submodules under `Packages/`. It provides a focused UI for
-the Git operations while keeping the resulting repository structure completely
+UPM packages as Git submodules under `Packages/`. Supported Unity versions add a
+native GitHub source to Package Manager, while a focused management workspace
+handles Git operations. The resulting repository structure remains completely
 standard and visible to normal Git tooling.
 
 ## What It Does
 
-- Lists Git submodules installed directly under `Packages/`.
+- Adds a native **Sources > GitHub** page on Unity versions that support Package
+  Manager extension pages. It incrementally discovers valid UPM packages across
+  the authenticated user's repositories and organizations, combines them with
+  installed GitHub submodules, and uses Unity's package list, search, sort,
+  selection, and details UI.
+- Adds a discovered package as a submodule from the native details pane. The
+  action uses the repository's default branch and retains the same validation,
+  postcondition checks, and safe rollback as the management workspace.
+- Adds **+ > Install package as Git Submodule...** to Package Manager wherever
+  it is open. After a repository URL is entered, a Git-only probe fills the
+  root `package.json` package name and default branch and offers the remote
+  branches without requiring GitHub CLI. A trust confirmation precedes the
+  shared transaction; failed additions are rolled back whenever cleanup
+  ownership can be proven.
+- Labels those packages as **Submodule** in Package Manager and identifies
+  GitHub-hosted repositories as the **GitHub** source with the Git icon.
+- Keeps the full installed-package management, GitHub discovery, add, update,
+  retarget, and remove workspace at **Window > Package Management > Git
+  Submodule Manager**.
+- Falls back to that workspace embedded in Package Manager on older supported
+  Unity versions.
 - Adds a package from a secure HTTPS or SSH repository URL, or from an explicit
   local repository path.
 - Discovers repositories from GitHub users and organizations when `gh` is
@@ -61,11 +82,12 @@ shows an official installation link and a platform-specific command. On
 supported macOS and Windows setups, it can run that native command only after
 showing it and receiving your explicit confirmation. Linux installation stays
 in your terminal so administrator prompts remain visible. The first time the
-window is opened in a project, a guided setup page checks both tools and offers
-the same install actions. If `gh` is installed but not authenticated, the page
-can start GitHub CLI's device login, open GitHub's device page, and verify the
-resulting session. One-click login requires GitHub CLI 2.79.0 or newer; older
-versions keep a compatible visible-terminal command available.
+management workspace is opened in a project, a guided setup page checks both
+tools and offers the same install actions. If `gh` is installed but not
+authenticated, the page can start GitHub CLI's device login, open GitHub's
+device page, and verify the resulting session. One-click login requires GitHub
+CLI 2.79.0 or newer; older versions keep a compatible visible-terminal command
+available.
 
 ## Installation
 
@@ -81,23 +103,41 @@ managed by the tool are still added to the project as Git submodules.
 
 ## Usage
 
-1. Open **Window > Package Management > Git Submodule Manager**.
-2. Complete the one-time setup page. Git is required; GitHub CLI is optional
+1. On supported Unity versions, open **Window > Package Manager** and select
+   **GitHub** under **Sources**. Valid packages discovered from your personal
+   repositories and organizations appear incrementally beside installed GitHub
+   submodules in Unity's native package list and details UI. Organization
+   headers, **Public**/**Private** badges, and Unity's native loading indicator
+   make the catalogue state visible while it is being populated.
+2. Select a discovered package and choose **Add as Submodule** to install its
+   default branch, or use **Refresh** to rescan GitHub and the project.
+3. Open **Window > Package Management > Git Submodule Manager** for the full
+   management, discovery, add, update, retarget, and remove workspace. On older
+   Unity versions, this menu opens the embedded Package Manager fallback.
+4. Complete the one-time setup page. Git is required; GitHub CLI is optional
    but recommended for repository discovery.
-3. If prompted, install Git or GitHub CLI with explicit approval, then choose
+5. If prompted, install Git or GitHub CLI with explicit approval, then choose
    **Authenticate with GitHub...** to complete the browser login.
-4. Use **In Project** to manage installed package submodules.
-5. Use **GitHub** to find package repositories visible to your account.
-6. Use the **+** menu to add a repository directly by URL.
+6. Use **In Project** to manage installed package submodules.
+7. From any open Package Manager page, choose **+ > Install package as Git
+   Submodule...** to add a repository directly by URL. Git inspects the remote
+   package name, default branch, and available branches before enabling those
+   fields.
 
-Every mutating operation requires an explicit action in the window. Progress,
+Every mutating operation requires an explicit action and confirmation. Progress,
 command failures, validation results, and recovery instructions are reported in
 the Editor.
 
 ## Repository Discovery
 
-GitHub discovery is designed for accounts and organizations with hundreds of
-repositories:
+The native **Sources > GitHub** catalogue walks every repository page for the
+authenticated user and each visible organization. It validates root
+`package.json` files in bounded batches and publishes only confirmed UPM
+packages as results become available. **Refresh** starts a new project and
+GitHub scan.
+
+The embedded management workspace retains its interactive discovery controls
+for older Unity versions and detailed repository browsing:
 
 - results are requested 50 repositories at a time;
 - searches execute through the GitHub API rather than filtering a full local
@@ -109,8 +149,10 @@ repositories:
 - branch information is loaded only when requested.
 
 Without GitHub CLI, direct Git URLs and installed-submodule management remain
-available. Git is the only dependency used by the **+ > Add Submodule...**
-workflow; `gh` is required only for the **GitHub** discovery tab.
+available. The native GitHub source continues to show installed submodules when
+remote discovery cannot start, and the embedded management fallback remains
+available. Git is the only dependency used by direct URL installation; `gh` is
+required only for authenticated repository discovery.
 
 ## Safety Model
 

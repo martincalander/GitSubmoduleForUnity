@@ -1,8 +1,37 @@
 # Third-Party Notices
 
-Git Submodule Manager does not bundle third-party source code, binaries, Git, or
-GitHub CLI. It integrates with software supplied separately by the user or Unity
-Editor. The package includes the Git logomark described below.
+Git Submodule Manager bundles the third-party library and artwork described
+below. Git and GitHub CLI remain external tools supplied separately by the user.
+
+## Bundled Software
+
+### Harmony 2.4.1
+
+- File: `ThirdParty/GitSubmoduleManager.Harmony.dll`
+- Project: [Harmony](https://github.com/pardeike/Harmony)
+- License: MIT License
+- Copyright: Copyright (c) Andreas Pardeike
+- Role: defensive Editor-only patching of Unity Package Manager presentation
+
+#### MIT License
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
 
 ## Bundled Artwork
 
@@ -15,7 +44,7 @@ Editor. The package includes the Git logomark described below.
 - License: [Creative Commons Attribution 3.0 Unported](https://creativecommons.org/licenses/by/3.0/)
 - Use: the official full-color Git icon for package artwork and one-color
   variants recolored to Unity's built-in dark- and light-skin icon values for
-  the Editor window tab
+  the embedded Package Manager view, Sources row, and source presentation
 
 ## External Tools
 
@@ -38,7 +67,7 @@ Editor. The package includes the Git logomark described below.
 
 - Package: `com.unity.modules.imgui`
 - License: Unity Companion License
-- Role: editor window rendering
+- Role: rendering the embedded Git Submodule Manager view
 
 The Unity module is provided by the Unity Editor installation and is not
 redistributed by this repository.
