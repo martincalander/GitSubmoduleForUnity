@@ -479,25 +479,41 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                         "could not match its final state. Use Refresh to retry.");
                 }
 
-                string validationError = selectedInstallMode ==
-                                         PackageManagerGitInstallMode.ReadOnlyPackage
-                    ? PackageManagerReadOnlyGitInstallService.ValidateInput(
-                        repository.Url,
-                        selectedBranch,
-                        repository.PackageName)
-                    : GitSubmoduleAddService.ValidateInput(
+                string gitSubmoduleValidationError =
+                    GitSubmoduleAddService.ValidateInput(
                         repository.Url,
                         repository.PackageName,
                         selectedBranch);
-                bool enabled = string.IsNullOrWhiteSpace(validationError) &&
-                               CanStartDependencyInstallPipeline();
-                string tooltip = enabled
+                string readOnlyPackageValidationError =
+                    PackageManagerReadOnlyGitInstallService.ValidateInput(
+                        repository.Url,
+                        selectedBranch,
+                        repository.PackageName);
+                bool canStart = CanStartDependencyInstallPipeline();
+                bool gitSubmoduleEnabled =
+                    string.IsNullOrWhiteSpace(gitSubmoduleValidationError) &&
+                    canStart;
+                bool readOnlyPackageEnabled =
+                    string.IsNullOrWhiteSpace(readOnlyPackageValidationError) &&
+                    canStart;
+                string gitSubmoduleTooltip = gitSubmoduleEnabled
                     ? BuildEnabledTooltip(
                         repository,
                         selectedBranch,
-                        selectedInstallMode)
-                    : BuildDisabledTooltip(validationError);
-                entry.Details.SetInstallState(true, enabled, tooltip);
+                        PackageManagerGitInstallMode.GitSubmodule)
+                    : BuildDisabledTooltip(gitSubmoduleValidationError);
+                string readOnlyPackageTooltip = readOnlyPackageEnabled
+                    ? BuildEnabledTooltip(
+                        repository,
+                        selectedBranch,
+                        PackageManagerGitInstallMode.ReadOnlyPackage)
+                    : BuildDisabledTooltip(readOnlyPackageValidationError);
+                entry.Details.SetInstallState(
+                    true,
+                    gitSubmoduleEnabled,
+                    gitSubmoduleTooltip,
+                    readOnlyPackageEnabled,
+                    readOnlyPackageTooltip);
             }
             catch
             {

@@ -15,6 +15,12 @@ namespace MartinCalander.GitSubmoduleManager.Editor
     [InitializeOnLoad]
     internal static class GitSubmoduleManagerPackageManagerHost
     {
+        internal enum DetachedWindowAction
+        {
+            Repair,
+            Release
+        }
+
         internal const string HarmonyId =
             "com.martincalander.gitsubmodulemanager.package-manager-host";
         internal const string PackageManagerWindowTypeName =
@@ -277,6 +283,37 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             return false;
         }
 
+        internal static DetachedWindowAction GetDetachedWindowAction(
+            bool windowAlive)
+        {
+            if (!windowAlive)
+                return DetachedWindowAction.Release;
+
+            // Root-owned menus/actions also observe DetachFromPanel and retire
+            // themselves. Even if Unity has already reattached the panel by our
+            // delayed callback, run one repair pass to remount those controls.
+            return DetachedWindowAction.Repair;
+        }
+
+        internal static bool ShouldPollHostSession(
+            bool isDisposed,
+            bool windowAlive,
+            bool panelAttached,
+            bool isAttached,
+            bool withinRepairWindow)
+        {
+            if (isDisposed)
+                return false;
+
+            // Poll a destroyed reference once more so CleanupDeadSessions can
+            // remove its dictionary entry. A live detached tab must continue
+            // being observed even after the bounded visual-repair window.
+            if (!windowAlive || !panelAttached)
+                return true;
+
+            return !isAttached && withinRepairWindow;
+        }
+
         internal static bool IsSidebarExtensionRefreshPatchApplied()
         {
             Type sidebarType = FindType(PackageManagerSubmoduleNativePage.SidebarTypeName);
@@ -501,16 +538,6 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             bool attached = session.TryAttachVisualTree();
             UpdateSubscription();
             return attached ? session : null;
-        }
-
-        private static void ReleaseWindow(EditorWindow window)
-        {
-            if (window == null || !Sessions.TryGetValue(window, out HostSession session))
-                return;
-
-            Sessions.Remove(window);
-            session.Dispose();
-            UpdateSubscription();
         }
 
         private static void CleanupDeadSessions()
@@ -770,13 +797,25 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             internal EditorWindow Window { get; }
             internal bool IsAttached =>
                 !isDisposed &&
+                Window != null &&
+                Window.rootVisualElement.panel != null &&
                 retainedRoot != null &&
                 projectionRetained &&
                 installMenuMounted &&
                 nativeActionsMounted;
-            internal bool RequiresPolling =>
-                !IsAttached &&
-                EditorApplication.timeSinceStartup < repairDeadline;
+            internal bool RequiresPolling
+            {
+                get
+                {
+                    bool windowAlive = Window != null;
+                    return ShouldPollHostSession(
+                        isDisposed,
+                        windowAlive,
+                        windowAlive && Window.rootVisualElement.panel != null,
+                        IsAttached,
+                        EditorApplication.timeSinceStartup < repairDeadline);
+                }
+            }
 
             internal void RestartRepairWindow()
             {
@@ -790,18 +829,28 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 if (isDisposed || Window == null)
                     return false;
 
+                // An inactive dock tab can temporarily have no panel while its
+                // existing visual tree is still the correct host. Do not probe
+                // or release that tree until Unity attaches it again.
+                if (Window.rootVisualElement.panel == null)
+                    return false;
+
                 VisualElement packageManagerRoot =
                     FindPackageManagerRoot(Window.rootVisualElement);
                 if (packageManagerRoot == null)
-                {
-                    ReleaseRoot();
                     return false;
-                }
 
                 if (!ReferenceEquals(retainedRoot, packageManagerRoot))
                 {
+                    // Retain the replacement first. Releasing the previous root
+                    // then cannot look like a final-host teardown or briefly
+                    // withdraw the projected GitHub rows.
+                    bool projectionTransferred = projectionRetained &&
+                        PackageManagerGitHubPackageProjection.RetainHost(
+                            packageManagerRoot);
                     ReleaseRoot();
                     retainedRoot = packageManagerRoot;
+                    projectionRetained = projectionTransferred;
                 }
 
                 if (!PackageManagerSubmoduleNativePage.TryRegisterForRoot(
@@ -896,8 +945,24 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                     return;
                 }
 
-                PackageManagerGitSubmoduleInstallMenu.ReleaseForRoot(root);
-                PackageManagerGitHubNativeActions.ReleaseForRoot(root);
+                try
+                {
+                    PackageManagerGitSubmoduleInstallMenu.ReleaseForRoot(root);
+                }
+                catch
+                {
+                    // A stale root must not interrupt projection-host transfer.
+                }
+
+                try
+                {
+                    PackageManagerGitHubNativeActions.ReleaseForRoot(root);
+                }
+                catch
+                {
+                    // Native controls may already be tearing down with the panel.
+                }
+
                 if (projectionRetained)
                 {
                     try
@@ -919,8 +984,23 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             {
                 EditorApplication.delayCall += () =>
                 {
-                    if (Window == null || Window.rootVisualElement.panel == null)
-                        ReleaseWindow(Window);
+                    if (isDisposed)
+                        return;
+
+                    bool windowAlive = Window != null;
+                    DetachedWindowAction action = GetDetachedWindowAction(
+                        windowAlive);
+                    if (action == DetachedWindowAction.Release)
+                    {
+                        CleanupDeadSessions();
+                        return;
+                    }
+
+                    // Dock/tab switches temporarily detach a live EditorWindow's
+                    // panel. Keep its projection host; the low-frequency session
+                    // scan observes either reattachment or genuine destruction.
+                    if (action == DetachedWindowAction.Repair)
+                        RestartRepairWindow();
                 };
             }
         }

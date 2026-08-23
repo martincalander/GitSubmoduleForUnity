@@ -46,8 +46,8 @@ adds valid UPM packages discovered from every repository page owned by the
 authenticated user and their visible organizations, alongside installed GitHub
 submodules. Native search, sorting, selection, and details work across the
 combined list. Select a discovered package, use **Repository** to review its
-website, select a branch and either **Git Submodule** or **Read-Only Package**,
-and choose **Install**. Choose **Refresh** to rescan.
+website, select a branch, then open **Install** and choose **Install as Git
+Submodule** or **Install as Read-Only Package**. Choose **Refresh** to rescan.
 
 If GitHub CLI is missing or authentication fails, installed GitHub submodules
 remain visible, and direct URL installation remains available from Package

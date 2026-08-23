@@ -583,6 +583,49 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
             Assert.That(coordinator.DisplayedRepos.Count(repo => repo.ManifestState == PackageManifestState.Invalid), Is.EqualTo(16));
             Assert.That(coordinator.DisplayedRepos.Where(repo => repo.ManifestState == PackageManifestState.Valid)
                 .All(repo => repo.DeclaredPackageName.StartsWith("com.example.repo", StringComparison.Ordinal)), Is.True);
+            Assert.That(coordinator.DisplayedRepos.Where(repo => repo.ManifestState == PackageManifestState.Valid)
+                .All(repo => repo.DeclaredLicense == "MIT"), Is.True);
+        }
+
+        [Test]
+        public void ValidPackageFilter_CachedManifestRetainsLicenseMetadata()
+        {
+            int graphQlCalls = 0;
+            var runner = new RecordingRunner(spec =>
+            {
+                string arguments = GetArguments(spec);
+                if (arguments.Contains("user/repos"))
+                    return Success(BuildRepositoryPageJson(1));
+
+                if (IsGraphQlCall(spec))
+                {
+                    int call = Interlocked.Increment(ref graphQlCalls);
+                    return call == 1
+                        ? Success(BuildManifestGraphQlResponse(GetGraphQlNodeIds(spec)))
+                        : Success(BuildManifestGraphQlResponseWithoutText("R_repo_0"));
+                }
+
+                return Success(string.Empty);
+            });
+            CliCommandRunner.CurrentRunner = runner;
+            using var coordinator = new DiscoveryCoordinator();
+
+            coordinator.LoadInitialPage();
+            TickUntil(coordinator, () => coordinator.DisplayedRepos.Count == 1);
+            coordinator.SetValidPackageFilterEnabled(true);
+            TickUntil(coordinator, () => !coordinator.IsValidatingPackageManifests);
+
+            Assert.That(coordinator.DisplayedRepos.Single().DeclaredLicense, Is.EqualTo("MIT"));
+
+            coordinator.ReloadCurrentPage();
+            TickUntil(
+                coordinator,
+                () => Volatile.Read(ref graphQlCalls) == 2 &&
+                      !coordinator.IsValidatingPackageManifests &&
+                      coordinator.DisplayedRepos.Single().ManifestState ==
+                      PackageManifestState.Valid);
+
+            Assert.That(coordinator.DisplayedRepos.Single().DeclaredLicense, Is.EqualTo("MIT"));
         }
 
         [Test]
@@ -1189,7 +1232,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
 
                 string manifest = index % 3 == 2
                     ? $"{{\"name\":\"com.example.repo{index}\",\"version\":\"01.0.0\"}}"
-                    : $"{{\"name\":\"com.example.repo{index}\",\"version\":\"1.0.{index}\"}}";
+                    : $"{{\"name\":\"com.example.repo{index}\",\"version\":\"1.0.{index}\",\"license\":\"MIT\"}}";
                 string escapedManifest = manifest.Replace("\\", "\\\\").Replace("\"", "\\\"");
                 string oid = index.ToString("x40");
                 nodes.Add(
@@ -1207,6 +1250,21 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
 
             return "{\"data\":{\"nodes\":[" + string.Join(",", nodes) +
                    "],\"rateLimit\":{\"cost\":1,\"remaining\":4999,\"resetAt\":\"2026-07-13T01:00:00Z\"}}}";
+        }
+
+        private static string BuildManifestGraphQlResponseWithoutText(string nodeId)
+        {
+            return "{\"data\":{\"nodes\":[{" +
+                   $"\"id\":\"{nodeId}\"," +
+                   "\"packageManifest\":{" +
+                   "\"__typename\":\"Blob\"," +
+                   "\"oid\":\"0000000000000000000000000000000000000000\"," +
+                   "\"byteSize\":70," +
+                   "\"isBinary\":false," +
+                   "\"isTruncated\":false," +
+                   "\"text\":null}}]," +
+                   "\"rateLimit\":{\"cost\":1,\"remaining\":4999," +
+                   "\"resetAt\":\"2026-07-13T01:00:00Z\"}}}";
         }
 
         private static void TickUntil(DiscoveryCoordinator coordinator, Func<bool> condition)

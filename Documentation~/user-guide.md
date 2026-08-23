@@ -118,10 +118,11 @@ Select an uninstalled result in **Sources > GitHub**:
    link.
 2. Choose a branch. `main` is selected when it exists; otherwise the remote
    default branch is selected. Git loads other remote branches on demand.
-3. Choose **Git Submodule** for an editable checkout under `Packages/`, or
-   **Read-Only Package** for a normal UPM Git dependency.
-4. Choose **Install** and review the repository, revision, install mode, and any
-   dependency plan before confirming.
+3. Open **Install** and choose **Install as Git Submodule** for an editable
+   checkout under `Packages/`, or **Install as Read-Only Package** for a normal
+   UPM Git dependency.
+4. Review the repository, revision, install mode, and any dependency plan before
+   confirming.
 
 The submodule mode clones to `Packages/<package-name>` and validates the root
 manifest, Git registration, origin, branch, and package identity. The read-only

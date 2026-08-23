@@ -30,6 +30,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         public string DeclaredDescription;
         public string DeclaredMinimumUnityVersion;
         public string DeclaredAuthorName;
+        public string DeclaredLicense;
         public string DeclaredDocumentationUrl;
         public string DeclaredChangelogUrl;
         public string DeclaredLicensesUrl;

@@ -372,6 +372,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                 DeclaredDescription = "Manifest package description",
                 DeclaredMinimumUnityVersion = "2021.3.0f1",
                 DeclaredAuthorName = "Manifest Author",
+                DeclaredLicense = "MIT",
                 DeclaredDocumentationUrl = "https://example.com/docs",
                 DeclaredChangelogUrl = "https://example.com/changelog",
                 DeclaredLicensesUrl = "https://example.com/license",
@@ -395,6 +396,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
             source.DeclaredDescription = "Mutated manifest description";
             source.DeclaredMinimumUnityVersion = "6000.0.0f1";
             source.DeclaredAuthorName = "Mutated Author";
+            source.DeclaredLicense = "Apache-2.0";
             source.DeclaredDependencies = Array.Empty<PackageManifestDependency>();
 
             PackageManagerGitHubDiscoverySnapshot projectionSnapshot =
@@ -1000,6 +1002,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                 repository.MinimumUnityVersion,
                 Is.EqualTo("2021.3.0f1"));
             Assert.That(repository.AuthorName, Is.EqualTo("Manifest Author"));
+            Assert.That(repository.License, Is.EqualTo("MIT"));
             Assert.That(repository.DocumentationUrl, Is.EqualTo("https://example.com/docs"));
             Assert.That(repository.ChangelogUrl, Is.EqualTo("https://example.com/changelog"));
             Assert.That(repository.LicensesUrl, Is.EqualTo("https://example.com/license"));

@@ -45,6 +45,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                 DeclaredDescription = "Package description",
                 DeclaredMinimumUnityVersion = "2021.3.0f1",
                 DeclaredAuthorName = "Package Author",
+                DeclaredLicense = "MIT",
                 DeclaredDocumentationUrl = "https://example.com/docs",
                 DeclaredChangelogUrl = "https://example.com/changelog",
                 DeclaredLicensesUrl = "https://example.com/license",
@@ -67,6 +68,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
             source.DeclaredDescription = "Changed description";
             source.DeclaredMinimumUnityVersion = "6000.0.0f1";
             source.DeclaredAuthorName = "Changed Author";
+            source.DeclaredLicense = "Apache-2.0";
             source.DeclaredDocumentationUrl = "https://changed.example.com/docs";
             source.DeclaredChangelogUrl = "https://changed.example.com/changelog";
             source.DeclaredLicensesUrl = "https://changed.example.com/license";
@@ -80,6 +82,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
             Assert.That(copy.PackageDescription, Is.EqualTo("Package description"));
             Assert.That(copy.MinimumUnityVersion, Is.EqualTo("2021.3.0f1"));
             Assert.That(copy.AuthorName, Is.EqualTo("Package Author"));
+            Assert.That(copy.License, Is.EqualTo("MIT"));
             Assert.That(copy.DocumentationUrl, Is.EqualTo("https://example.com/docs"));
             Assert.That(copy.ChangelogUrl, Is.EqualTo("https://example.com/changelog"));
             Assert.That(copy.LicensesUrl, Is.EqualTo("https://example.com/license"));
@@ -110,6 +113,75 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
             {
                 PackageManagerGitHubDiscovery.SnapshotChanged -= TryRestart;
             }
+        }
+
+        [Test]
+        public void Suspend_PreservesCompletedCatalogueAcrossHostReactivation()
+        {
+            RetainIsolatedDiscoveryOrIgnore();
+
+            var runner = new CatalogueRunner
+            {
+                ReturnNoOrganizations = true
+            };
+            CliCommandRunner.CurrentRunner = runner;
+            PackageManagerGitHubDiscovery.Refresh();
+            WaitForCatalogue();
+
+            IReadOnlyList<PackageManagerGitHubRepository> completedRepositories =
+                PackageManagerGitHubDiscovery.Current.Repositories;
+            Assert.That(completedRepositories, Has.Count.EqualTo(1));
+
+            var lifecycleSnapshots =
+                new List<PackageManagerGitHubDiscoverySnapshot>();
+            void CaptureSnapshot() => lifecycleSnapshots.Add(
+                PackageManagerGitHubDiscovery.Current);
+            PackageManagerGitHubDiscovery.SnapshotChanged += CaptureSnapshot;
+            try
+            {
+                PackageManagerGitHubDiscovery.Suspend();
+
+                PackageManagerGitHubDiscoverySnapshot suspended =
+                    PackageManagerGitHubDiscovery.Current;
+                Assert.That(PackageManagerGitHubDiscovery.IsStarted, Is.False);
+                Assert.That(suspended.IsLoading, Is.False);
+                Assert.That(suspended.IsShowingRetainedRepositories, Is.True);
+                Assert.That(suspended.Repositories, Is.SameAs(completedRepositories));
+
+                PackageManagerGitHubDiscovery.EnsureStarted();
+
+                PackageManagerGitHubDiscoverySnapshot reactivated =
+                    PackageManagerGitHubDiscovery.Current;
+                Assert.That(reactivated.IsLoading, Is.True);
+                Assert.That(reactivated.IsShowingRetainedRepositories, Is.True);
+                Assert.That(reactivated.Repositories, Is.SameAs(completedRepositories));
+                WaitForCatalogue();
+            }
+            finally
+            {
+                PackageManagerGitHubDiscovery.SnapshotChanged -= CaptureSnapshot;
+            }
+
+            Assert.That(
+                PackageManagerGitHubDiscovery.Current.Repositories,
+                Is.SameAs(completedRepositories),
+                "An identical refresh after reactivation should reuse the catalogue.");
+            Assert.That(lifecycleSnapshots, Is.Not.Empty);
+            Assert.That(
+                lifecycleSnapshots.All(snapshot =>
+                    ReferenceEquals(snapshot.Repositories, completedRepositories)),
+                Is.True,
+                "Suspension and reactivation must never publish an empty catalogue.");
+
+            PackageManagerGitHubDiscovery.Suspend();
+            PackageManagerGitHubDiscovery.PrepareForHost(
+                EditorApplication.timeSinceStartup +
+                PackageManagerGitHubDiscovery.RetainedCatalogueDurationSeconds +
+                1d);
+            Assert.That(
+                PackageManagerGitHubDiscovery.Current.Repositories,
+                Is.Empty,
+                "An expired suspended catalogue must be cleared before a new host projects it.");
         }
 
         [Test]
@@ -338,7 +410,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
         }
 
         [Test]
-        public void Dispose_LetsActiveOrganizationReadsDrainWithoutCancellation()
+        public void Suspend_LetsActiveOrganizationReadsDrainWithoutCancellation()
         {
             RetainIsolatedDiscoveryOrIgnore();
 
@@ -352,7 +424,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
 
             try
             {
-                PackageManagerGitHubDiscovery.Dispose();
+                PackageManagerGitHubDiscovery.Suspend();
 
                 Assert.That(PackageManagerGitHubDiscovery.IsStarted, Is.True,
                     "An ordinary close should retain ownership until active reads settle.");
@@ -367,7 +439,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                 // Reopen and close while the same reads are draining. The most
                 // recent host state must win, so completion must still stop.
                 PackageManagerGitHubDiscovery.EnsureStarted();
-                PackageManagerGitHubDiscovery.Dispose();
+                PackageManagerGitHubDiscovery.Suspend();
 
                 runner.ReleaseAllOrganizations();
                 WaitForCondition(
@@ -474,7 +546,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                     () => runner.PersonalRepositoryRequestStarted,
                     "The personal repository request did not start.");
 
-                PackageManagerGitHubDiscovery.Dispose();
+                PackageManagerGitHubDiscovery.Suspend();
                 PackageManagerGitHubDiscovery.EnsureStarted();
                 runner.ReleasePersonalRepositoryRequest();
                 WaitForCatalogue();

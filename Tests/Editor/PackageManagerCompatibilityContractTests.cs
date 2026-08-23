@@ -427,6 +427,9 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                     .GetTechnicalNameTargets();
             IReadOnlyList<MethodInfo> authorTargets =
                 PackageManagerGitHubNativePresentationPatch.GetAuthorTargets();
+            MethodInfo detailsInformationCardsTarget =
+                PackageManagerGitHubNativePresentationPatch
+                    .GetDetailsInformationCardsTarget();
             IReadOnlyList<MethodInfo> refreshTargets =
                 PackageManagerGitHubNativePresentationPatch
                     .GetPageRefreshTargets();
@@ -457,6 +460,9 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                     .PackageAuthorLabelTypeName);
             report.Observe("TechnicalNameCard hooks", DescribeMethods(technicalTargets));
             report.Observe("PackageAuthorLabel hooks", DescribeMethods(authorTargets));
+            report.Observe(
+                "Details information-card hook",
+                DescribeMethod(detailsInformationCardsTarget));
             report.Observe("Page refresh hooks", DescribeMethods(refreshTargets));
             report.Observe("Page activation hooks", DescribeMethods(activationTargets));
             report.Observe("Page loading hooks", DescribeMethods(loadingTargets));
@@ -503,6 +509,10 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                     authorType == null || authorTargets.Count > 0,
                     "PackageAuthorLabel exists, but " +
                     "Refresh(IPackageVersion) is missing.");
+                report.Require(
+                    detailsInformationCardsTarget != null,
+                    "PackageDetailsDetailsTab.RefreshContent(IPackageVersion) " +
+                    "is missing; License and Default Branch cards cannot mount.");
                 report.Require(refreshTargets.Count > 0,
                     "PageRefreshHandler.Refresh(IPage) is missing.");
                 report.Require(activationTargets.Count > 0,
@@ -556,6 +566,11 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                     authorTargets,
                     PackageManagerGitHubNativePresentationPatch
                         .GetAuthorPostfix());
+                RequireOwnedPostfixes(
+                    report,
+                    new[] { detailsInformationCardsTarget },
+                    PackageManagerGitHubNativePresentationPatch
+                        .GetDetailsInformationCardsPostfix());
                 RequireOwnedPostfixes(
                     report,
                     refreshTargets,
@@ -633,6 +648,12 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                 report,
                 PackageManagerGitHubNativePresentationPatch
                     .GetPageActivationPostfix(),
+                "__0");
+            RequireParameterNames(
+                report,
+                PackageManagerGitHubNativePresentationPatch
+                    .GetDetailsInformationCardsPostfix(),
+                "__instance",
                 "__0");
             RequireParameterNames(
                 report,

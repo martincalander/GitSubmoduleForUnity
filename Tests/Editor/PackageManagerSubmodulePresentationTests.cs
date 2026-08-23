@@ -1175,6 +1175,132 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
         }
 
         [Test]
+        public void GitHubDetailsInformationCards_UseNativeLayoutAndSurviveRecycling()
+        {
+            var detailsTab = new VisualElement();
+            var informationCards = new VisualElement
+            {
+                name = PackageManagerGitHubNativePresentationPatch
+                    .DetailsInformationCardsContainerName
+            };
+            detailsTab.Add(informationCards);
+            var firstRepository = new PackageManagerGitHubRepository(
+                new GitHubRepo
+                {
+                    DefaultBranch = " main ",
+                    DeclaredLicense = " SEE LICENSE IN LICENSE.md "
+                });
+
+            Assert.That(
+                PackageManagerGitHubNativePresentationPatch
+                    .ApplyRepositoryInformationCards(
+                        detailsTab,
+                        firstRepository),
+                Is.True);
+
+            VisualElement licenseCard = informationCards.Q<VisualElement>(
+                PackageManagerGitHubNativePresentationPatch
+                    .LicenseInformationCardName);
+            VisualElement defaultBranchCard = informationCards.Q<VisualElement>(
+                PackageManagerGitHubNativePresentationPatch
+                    .DefaultBranchInformationCardName);
+            AssertInformationCard(
+                licenseCard,
+                informationCards,
+                "License",
+                "SEE LICENSE IN LICENSE.md",
+                "SEE LICENSE IN LICENSE.md");
+            AssertInformationCard(
+                defaultBranchCard,
+                informationCards,
+                "Default Branch",
+                "main");
+
+            var changedRepository = new PackageManagerGitHubRepository(
+                new GitHubRepo
+                {
+                    DefaultBranch = "develop",
+                    DeclaredLicense = "Apache-2.0"
+                });
+            Assert.That(
+                PackageManagerGitHubNativePresentationPatch
+                    .ApplyRepositoryInformationCards(
+                        detailsTab,
+                        changedRepository),
+                Is.True);
+            Assert.That(
+                informationCards.Q<VisualElement>(
+                    PackageManagerGitHubNativePresentationPatch
+                        .LicenseInformationCardName),
+                Is.SameAs(licenseCard));
+            Assert.That(
+                informationCards.Query<VisualElement>(
+                    name: PackageManagerGitHubNativePresentationPatch
+                        .LicenseInformationCardName).ToList(),
+                Has.Count.EqualTo(1));
+            Assert.That(
+                informationCards.Query<VisualElement>(
+                    name: PackageManagerGitHubNativePresentationPatch
+                        .DefaultBranchInformationCardName).ToList(),
+                Has.Count.EqualTo(1));
+            AssertInformationCard(
+                licenseCard,
+                informationCards,
+                "License",
+                "Apache-2.0",
+                "Apache-2.0");
+            AssertInformationCard(
+                defaultBranchCard,
+                informationCards,
+                "Default Branch",
+                "develop");
+
+            informationCards.Clear();
+            Assert.That(
+                PackageManagerGitHubNativePresentationPatch
+                    .ApplyRepositoryInformationCards(
+                        detailsTab,
+                        new PackageManagerGitHubRepository(new GitHubRepo())),
+                Is.True);
+            AssertInformationCard(
+                informationCards.Q<VisualElement>(
+                    PackageManagerGitHubNativePresentationPatch
+                        .LicenseInformationCardName),
+                informationCards,
+                "License",
+                UnityEditor.L10n.Tr("Not set"),
+                UnityEditor.L10n.Tr("Not set"));
+            AssertInformationCard(
+                informationCards.Q<VisualElement>(
+                    PackageManagerGitHubNativePresentationPatch
+                        .DefaultBranchInformationCardName),
+                informationCards,
+                "Default Branch",
+                UnityEditor.L10n.Tr("Not set"));
+
+            Assert.That(
+                PackageManagerGitHubNativePresentationPatch
+                    .ApplyRepositoryInformationCards(detailsTab, null),
+                Is.True);
+            Assert.That(
+                informationCards.Q<VisualElement>(
+                    PackageManagerGitHubNativePresentationPatch
+                        .LicenseInformationCardName),
+                Is.Null);
+            Assert.That(
+                informationCards.Q<VisualElement>(
+                    PackageManagerGitHubNativePresentationPatch
+                        .DefaultBranchInformationCardName),
+                Is.Null);
+            Assert.That(
+                PackageManagerGitHubNativePresentationPatch
+                    .ApplyRepositoryInformationCards(
+                        new VisualElement(),
+                        firstRepository),
+                Is.False);
+        }
+
+        [Test]
         public void NativeDiscoveryHooks_RegisterForAvailableDetailsAndRefreshContracts()
         {
             IReadOnlyList<MethodInfo> technicalTargets =
@@ -1187,6 +1313,9 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
             IReadOnlyList<MethodInfo> dependenciesTabTargets =
                 PackageManagerGitHubNativePresentationPatch
                     .GetDependenciesTabValidityTargets();
+            MethodInfo detailsInformationCardsTarget =
+                PackageManagerGitHubNativePresentationPatch
+                    .GetDetailsInformationCardsTarget();
             IReadOnlyList<MethodInfo> packageLinkTargets =
                 PackageManagerGitHubNativePresentationPatch
                     .GetPackageLinkTargets();
@@ -1207,6 +1336,18 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
             Assert.That(authorTargets, Is.Not.Empty);
             Assert.That(dependenciesGetter, Is.Not.Null);
             Assert.That(dependenciesTabTargets, Is.Not.Empty);
+            Assert.That(detailsInformationCardsTarget, Is.Not.Null);
+            Assert.That(
+                detailsInformationCardsTarget.DeclaringType?.FullName,
+                Is.EqualTo(PackageManagerGitHubNativePresentationPatch
+                    .PackageDetailsDetailsTabTypeName));
+            Assert.That(detailsInformationCardsTarget.ReturnType, Is.EqualTo(typeof(void)));
+            Assert.That(detailsInformationCardsTarget.GetParameters(), Has.Length.EqualTo(1));
+            Assert.That(
+                detailsInformationCardsTarget.GetParameters()[0]
+                    .ParameterType.FullName,
+                Is.EqualTo(PackageManagerGitHubNativePresentationPatch
+                    .PackageVersionInterfaceTypeName));
             Assert.That(packageLinkTargets, Has.Count.EqualTo(3));
             Assert.That(refreshTargets, Is.Not.Empty);
             Assert.That(activationTargets, Is.Not.Empty);
@@ -1264,6 +1405,13 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                     Is.True);
             }
 
+            Assert.That(
+                PackageManagerGitHubNativePresentationPatch.IsPatchApplied(
+                    detailsInformationCardsTarget,
+                    PackageManagerGitHubNativePresentationPatch
+                        .GetDetailsInformationCardsPostfix()),
+                Is.True);
+
             foreach (MethodInfo target in packageLinkTargets)
             {
                 Assert.That(
@@ -1316,6 +1464,43 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                     PackageManagerGitHubNativePresentationPatch
                         .GetPageSupportedFiltersRefreshPostfix()),
                 Is.True);
+        }
+
+        private static void AssertInformationCard(
+            VisualElement card,
+            VisualElement expectedParent,
+            string expectedTitle,
+            string expectedValue,
+            string expectedTooltip = "")
+        {
+            Assert.That(card, Is.Not.Null);
+            Assert.That(card.parent, Is.SameAs(expectedParent));
+            Assert.That(
+                card.ClassListContains(
+                    PackageManagerGitHubNativePresentationPatch
+                        .InformationCardClassName),
+                Is.True);
+            Assert.That(
+                card.ClassListContains(
+                    PackageManagerGitHubNativePresentationPatch
+                        .InformationCardSmallClassName),
+                Is.True);
+
+            Label title = card.Q<Label>(
+                className: PackageManagerGitHubNativePresentationPatch
+                    .InformationCardTitleClassName);
+            Label value = card.Q<Label>(
+                className: PackageManagerSubmodulePresentation
+                    .InformationCardTextClassName);
+            Assert.That(title, Is.Not.Null);
+            Assert.That(value, Is.Not.Null);
+            Assert.That(
+                title.text,
+                Is.EqualTo(UnityEditor.L10n.Tr(expectedTitle)));
+            Assert.That(value.text, Is.EqualTo(expectedValue));
+            Assert.That(value.tooltip, Is.EqualTo(expectedTooltip));
+            Assert.That(title.enableRichText, Is.False);
+            Assert.That(value.enableRichText, Is.False);
         }
 
         [Test]

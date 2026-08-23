@@ -83,6 +83,12 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- Discovered GitHub package details now use one native **Install** dropdown with
+  **Install as Git Submodule** and **Install as Read-Only Package** actions
+  instead of a separate install-mode field and button.
+- Package Manager dock switches and visual-tree rebuilds now retain the loaded
+  GitHub catalogue and transfer projection ownership without publishing an
+  empty intermediate list.
 - GitHub catalogue refreshes now load two organizations concurrently while
   keeping each owner's pagination and manifest validation serialized. Refresh
   requests made during an active load are coalesced until the bounded reads

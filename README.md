@@ -42,10 +42,9 @@ remain completely standard and visible to normal Git tooling.
   installed GitHub submodules, and uses Unity's package list, search, sort,
   selection, and details UI.
 - Adds a **Repository** website link, a branch selector that prefers `main` and
-  falls back to the remote default when `main` is unavailable, an install-mode
-  selector for **Git Submodule** or
-  **Read-Only Package**, and a primary **Install** action to a discovered
-  package's native details pane.
+  falls back to the remote default when `main` is unavailable, and one primary
+  **Install** dropdown with **Install as Git Submodule** and **Install as
+  Read-Only Package** actions in a discovered package's native details pane.
 - Adds **+ > Install package as Git Submodule...** to Package Manager wherever
   it is open. After a repository URL is entered, a Git-only probe fills the
   root `package.json` package name and default branch and offers the remote
@@ -126,8 +125,9 @@ read-only UPM Git dependencies.
    **Private** repositories and, when desired, a specific **Organization -
    _owner_**.
 3. Select a discovered package, follow **Repository** to inspect it, choose a
-   branch and install mode, and choose **Install**. Review any missing-dependency
-   plan before continuing. Use **Refresh** to rescan GitHub and the project.
+   branch, then open **Install** and choose either install action. Review any
+   missing-dependency plan before continuing. Use **Refresh** to rescan GitHub
+   and the project.
 4. For an installed package, use Package Manager's native **Manage** menu to
    convert between eligible read-only Git packages and submodules, or to
    uninstall a submodule safely.

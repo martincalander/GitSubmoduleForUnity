@@ -30,6 +30,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             MinimumUnityVersion =
                 repository?.DeclaredMinimumUnityVersion ?? string.Empty;
             AuthorName = repository?.DeclaredAuthorName ?? string.Empty;
+            License = repository?.DeclaredLicense ?? string.Empty;
             DocumentationUrl = repository?.DeclaredDocumentationUrl ?? string.Empty;
             ChangelogUrl = repository?.DeclaredChangelogUrl ?? string.Empty;
             LicensesUrl = repository?.DeclaredLicensesUrl ?? string.Empty;
@@ -59,6 +60,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         internal string PackageDescription { get; }
         internal string MinimumUnityVersion { get; }
         internal string AuthorName { get; }
+        internal string License { get; }
         internal string DocumentationUrl { get; }
         internal string ChangelogUrl { get; }
         internal string LicensesUrl { get; }
@@ -82,6 +84,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 !string.Equals(PackageDescription, other.PackageDescription, StringComparison.Ordinal) ||
                 !string.Equals(MinimumUnityVersion, other.MinimumUnityVersion, StringComparison.Ordinal) ||
                 !string.Equals(AuthorName, other.AuthorName, StringComparison.Ordinal) ||
+                !string.Equals(License, other.License, StringComparison.Ordinal) ||
                 !string.Equals(DocumentationUrl, other.DocumentationUrl, StringComparison.Ordinal) ||
                 !string.Equals(ChangelogUrl, other.ChangelogUrl, StringComparison.Ordinal) ||
                 !string.Equals(LicensesUrl, other.LicensesUrl, StringComparison.Ordinal) ||
@@ -267,6 +270,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         private static bool refreshQueued;
         private static bool gracefulStopRequested;
         private static bool restartAfterGracefulStop;
+        private static bool preserveCompletedCatalogueAfterGracefulStop;
         private static bool isShuttingDown;
         private static bool isStopping;
         private static int completedPages;
@@ -378,12 +382,52 @@ namespace MartinCalander.GitSubmoduleManager.Editor
 
         internal static void Dispose()
         {
+            RequestStop(preserveCompletedCatalogue: false);
+        }
+
+        /// <summary>
+        /// Retires background discovery when the final Package Manager visual
+        /// host disappears without withdrawing the last completed catalogue.
+        /// Package Manager rebuilds and dock changes can replace their visual
+        /// roots while the window itself remains alive, so visual-host lifetime
+        /// must not also be catalogue lifetime.
+        /// </summary>
+        internal static void Suspend()
+        {
+            RequestStop(preserveCompletedCatalogue: true);
+        }
+
+        /// <summary>
+        /// Enforces the bounded retention window before a newly attached host
+        /// synchronously projects the cached catalogue.
+        /// </summary>
+        internal static void PrepareForHost()
+        {
+            PrepareForHost(EditorApplication.timeSinceStartup);
+        }
+
+        internal static void PrepareForHost(double currentTime)
+        {
+            if (isStarted ||
+                !isShowingRetainedRepositories ||
+                currentTime < retainedCatalogueExpiresAt)
+            {
+                return;
+            }
+
+            RequestStop(preserveCompletedCatalogue: false);
+        }
+
+        private static void RequestStop(bool preserveCompletedCatalogue)
+        {
             if (gracefulStopRequested)
             {
                 // A host may reopen and close again while the previous reads
                 // are draining. The latest host state wins: do not restart an
                 // owner scan after that second close.
                 restartAfterGracefulStop = false;
+                preserveCompletedCatalogueAfterGracefulStop =
+                    preserveCompletedCatalogue;
                 return;
             }
 
@@ -399,6 +443,8 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 // not inherit an unconfirmed forced process-tree cancellation.
                 gracefulStopRequested = true;
                 restartAfterGracefulStop = false;
+                preserveCompletedCatalogueAfterGracefulStop =
+                    preserveCompletedCatalogue;
                 refreshQueued = false;
                 PendingOrganizations.Clear();
                 SubscribeUpdate();
@@ -407,7 +453,9 @@ namespace MartinCalander.GitSubmoduleManager.Editor
 
             try
             {
-                Stop(publishEmptySnapshot: true);
+                Stop(
+                    publishEmptySnapshot: true,
+                    preserveCompletedCatalogue: preserveCompletedCatalogue);
             }
             finally
             {
@@ -1309,11 +1357,16 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 return;
 
             bool restart = restartAfterGracefulStop;
+            bool preserveCompletedCatalogue =
+                preserveCompletedCatalogueAfterGracefulStop;
             gracefulStopRequested = false;
             restartAfterGracefulStop = false;
+            preserveCompletedCatalogueAfterGracefulStop = false;
             try
             {
-                Stop(publishEmptySnapshot: true);
+                Stop(
+                    publishEmptySnapshot: true,
+                    preserveCompletedCatalogue: preserveCompletedCatalogue);
             }
             finally
             {
@@ -1324,17 +1377,43 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 EnsureStarted();
         }
 
-        private static void Stop(bool publishEmptySnapshot)
+        private static void Stop(
+            bool publishEmptySnapshot,
+            bool preserveCompletedCatalogue = false)
         {
+            IReadOnlyList<PackageManagerGitHubRepository> completedCatalogue =
+                preserveCompletedCatalogue
+                    ? lastSuccessfulRepositories
+                    : PackageManagerGitHubDiscoverySnapshot.Empty.Repositories;
             gracefulStopRequested = false;
             restartAfterGracefulStop = false;
+            preserveCompletedCatalogueAfterGracefulStop = false;
             UnsubscribeUpdate();
             isStarted = false;
             DisposeCoordinators();
             ResetAggregation();
-            isShowingRetainedRepositories = false;
-            retainedCatalogueExpiresAt = 0d;
-            lastSuccessfulRepositories = PackageManagerGitHubDiscoverySnapshot.Empty.Repositories;
+
+            bool hasCompletedCatalogue = completedCatalogue.Count > 0;
+            if (hasCompletedCatalogue)
+            {
+                publishedRepositories = completedCatalogue;
+                lastSuccessfulRepositories = completedCatalogue;
+                repositoriesDirty = false;
+                isShowingRetainedRepositories = true;
+                retainedCatalogueExpiresAt =
+                    EditorApplication.timeSinceStartup +
+                    RetainedCatalogueDurationSeconds;
+                statusMessage =
+                    "Previously loaded GitHub packages remain available while " +
+                    "Package Manager reconnects.";
+            }
+            else
+            {
+                isShowingRetainedRepositories = false;
+                retainedCatalogueExpiresAt = 0d;
+                lastSuccessfulRepositories =
+                    PackageManagerGitHubDiscoverySnapshot.Empty.Repositories;
+            }
 
             if (publishEmptySnapshot && !isShuttingDown)
                 PublishSnapshot();

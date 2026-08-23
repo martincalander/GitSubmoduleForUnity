@@ -84,6 +84,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             public string Description;
             public string MinimumUnityVersion;
             public string AuthorName;
+            public string License;
             public string DocumentationUrl;
             public string ChangelogUrl;
             public string LicensesUrl;
@@ -938,6 +939,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                     cached.Description,
                     cached.MinimumUnityVersion,
                     cached.AuthorName,
+                    cached.License,
                     cached.DocumentationUrl,
                     cached.ChangelogUrl,
                     cached.LicensesUrl,
@@ -970,6 +972,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                     metadata.Description,
                     metadata.MinimumUnityVersion,
                     metadata.AuthorName,
+                    metadata.License,
                     metadata.DocumentationUrl,
                     metadata.ChangelogUrl,
                     metadata.LicensesUrl,
@@ -1013,6 +1016,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                         metadata.Description,
                         metadata.MinimumUnityVersion,
                         metadata.AuthorName,
+                        metadata.License,
                         metadata.DocumentationUrl,
                         metadata.ChangelogUrl,
                         metadata.LicensesUrl,
@@ -1053,6 +1057,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 Description = repo.DeclaredDescription,
                 MinimumUnityVersion = repo.DeclaredMinimumUnityVersion,
                 AuthorName = repo.DeclaredAuthorName,
+                License = repo.DeclaredLicense,
                 DocumentationUrl = repo.DeclaredDocumentationUrl,
                 ChangelogUrl = repo.DeclaredChangelogUrl,
                 LicensesUrl = repo.DeclaredLicensesUrl,
@@ -1072,6 +1077,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             string description = "",
             string minimumUnityVersion = "",
             string authorName = "",
+            string license = "",
             string documentationUrl = "",
             string changelogUrl = "",
             string licensesUrl = "",
@@ -1088,6 +1094,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             repo.DeclaredDescription = description ?? string.Empty;
             repo.DeclaredMinimumUnityVersion = minimumUnityVersion ?? string.Empty;
             repo.DeclaredAuthorName = authorName ?? string.Empty;
+            repo.DeclaredLicense = license ?? string.Empty;
             repo.DeclaredDocumentationUrl = documentationUrl ?? string.Empty;
             repo.DeclaredChangelogUrl = changelogUrl ?? string.Empty;
             repo.DeclaredLicensesUrl = licensesUrl ?? string.Empty;

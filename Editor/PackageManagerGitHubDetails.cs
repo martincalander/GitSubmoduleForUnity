@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using UnityEditor;
+using UnityEditor.UIElements;
 using UnityEngine;
 using UnityEngine.UIElements;
 
@@ -27,10 +28,10 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             "git-submodule-manager-github-primary-actions";
         internal const string BranchFieldElementName =
             "git-submodule-manager-github-branch";
-        internal const string InstallModeFieldElementName =
-            "git-submodule-manager-github-install-mode";
         internal const string InstallActionElementName =
             "git-submodule-manager-install-action";
+        internal const string InstallStateActionElementName =
+            "git-submodule-manager-install-state-action";
         internal const string CancelInstallActionElementName =
             "git-submodule-manager-cancel-install-action";
         internal const string InstallFeedbackElementName =
@@ -46,6 +47,10 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         internal const string GitSubmoduleInstallModeText = "Git Submodule";
         internal const string ReadOnlyPackageInstallModeText =
             "Read-Only Package";
+        internal const string InstallAsGitSubmoduleText =
+            "Install as Git Submodule";
+        internal const string InstallAsReadOnlyPackageText =
+            "Install as Read-Only Package";
         internal const string PreferredBranch = "main";
 
         private const string UpmLinksContainerName = "upmLinksContainer";
@@ -60,7 +65,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         private readonly VisualElement detailsLinksContainer;
         private readonly VisualElement controls;
         private readonly DropdownField branchField;
-        private readonly DropdownField installModeField;
+        private readonly ToolbarMenu installMenu;
         private readonly Button installButton;
         private readonly Button cancelInstallButton;
         private readonly HelpBox installFeedback;
@@ -84,10 +89,15 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         private string observedDefaultBranch = string.Empty;
         private string confirmationSelectionIdentity = string.Empty;
         private string installAvailabilityTooltip = string.Empty;
+        private string gitSubmoduleInstallTooltip = string.Empty;
+        private string readOnlyPackageInstallTooltip = string.Empty;
         private PackageManagerGitInstallMode selectedInstallMode =
             PackageManagerGitInstallMode.GitSubmodule;
         private bool userSelectedBranch;
         private bool installActionEnabled;
+        private bool gitSubmoduleInstallEnabled;
+        private bool readOnlyPackageInstallEnabled;
+        private bool installControlsVisible;
         private bool branchUpdateSubscribed;
         private bool isDisposed;
         private InstallUiState installUiState;
@@ -135,36 +145,39 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             branchField.RegisterValueChangedCallback(OnBranchChanged);
             controls.Add(branchField);
 
-            var installModeLabel = new Label(L10n.Tr("Install as"));
-            installModeLabel.style.marginRight = 4f;
-            controls.Add(installModeLabel);
-
-            installModeField = new DropdownField
+            installMenu = new ToolbarMenu
             {
-                name = InstallModeFieldElementName,
-                choices = BuildInstallModeChoices()
+                name = InstallActionElementName,
+                text = L10n.Tr(InstallText),
+                variant = ToolbarMenu.Variant.Popup,
+                focusable = true,
+                tabIndex = 0
             };
-            installModeField.SetValueWithoutNotify(
-                GetInstallModeDisplayName(selectedInstallMode));
-            installModeField.style.minWidth = 120f;
-            installModeField.style.maxWidth = 180f;
-            installModeField.style.flexShrink = 1f;
-            installModeField.style.marginRight = 4f;
-            installModeField.RegisterValueChangedCallback(OnInstallModeChanged);
-            controls.Add(installModeField);
-
-            if (!installModeSelectionEnabled)
-            {
-                installModeLabel.style.display = DisplayStyle.None;
-                installModeField.style.display = DisplayStyle.None;
-                installModeField.SetEnabled(false);
-            }
+            installMenu.style.flexShrink = 0f;
+            installMenu.menu.AppendAction(
+                GetInstallMenuActionText(
+                    PackageManagerGitInstallMode.GitSubmodule),
+                _ => ChooseInstallMode(
+                    PackageManagerGitInstallMode.GitSubmodule),
+                _ => GetInstallMenuActionStatus(
+                    PackageManagerGitInstallMode.GitSubmodule));
+            installMenu.menu.AppendAction(
+                GetInstallMenuActionText(
+                    PackageManagerGitInstallMode.ReadOnlyPackage),
+                _ => ChooseInstallMode(
+                    PackageManagerGitInstallMode.ReadOnlyPackage),
+                _ => GetInstallMenuActionStatus(
+                    PackageManagerGitInstallMode.ReadOnlyPackage));
+            installMenu.RegisterCallback<NavigationSubmitEvent>(
+                OnInstallMenuNavigationSubmit);
+            controls.Add(installMenu);
 
             installButton = new Button(OnInstallClicked)
             {
-                name = InstallActionElementName,
+                name = InstallStateActionElementName,
                 text = InstallText
             };
+            installButton.style.display = DisplayStyle.None;
             controls.Add(installButton);
 
             cancelInstallButton = new Button(CancelInstallConfirmation)
@@ -204,7 +217,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
 
         internal VisualElement Controls => controls;
         internal DropdownField BranchField => branchField;
-        internal DropdownField InstallModeField => installModeField;
+        internal ToolbarMenu InstallMenu => installMenu;
         internal Button InstallButton => installButton;
         internal Button CancelInstallButton => cancelInstallButton;
         internal HelpBox InstallFeedback => installFeedback;
@@ -315,13 +328,14 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             EnsureInstallFeedbackMounted();
             if (repository == null)
             {
-                ResetInstallUi();
                 currentRepository = null;
                 currentRepositoryIdentity = string.Empty;
                 selectedBranch = string.Empty;
                 observedDefaultBranch = string.Empty;
                 userSelectedBranch = false;
                 ResetInstallModeSelection();
+                ClearInstallAvailability();
+                ResetInstallUi();
                 branchField.choices = new List<string>();
                 branchField.SetValueWithoutNotify(string.Empty);
                 repositoryCoordinator?.ClearAllBranchCaches();
@@ -345,10 +359,11 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             currentRepositoryIdentity = identity;
             if (changedRepository)
             {
-                ResetInstallUi();
                 selectedBranch = PreferredBranch;
                 userSelectedBranch = false;
                 ResetInstallModeSelection();
+                ClearInstallAvailability();
+                ResetInstallUi();
             }
             else if (changedDefaultBranch && !userSelectedBranch)
             {
@@ -375,11 +390,30 @@ namespace MartinCalander.GitSubmoduleManager.Editor
 
         internal void SetInstallState(bool visible, bool enabled, string tooltip)
         {
+            SetInstallState(
+                visible,
+                enabled,
+                tooltip,
+                enabled,
+                tooltip);
+        }
+
+        internal void SetInstallState(
+            bool visible,
+            bool gitSubmoduleEnabled,
+            string gitSubmoduleTooltip,
+            bool readOnlyPackageEnabled,
+            string readOnlyPackageTooltip)
+        {
             if (isDisposed)
                 return;
 
-            installActionEnabled = visible && enabled;
-            installAvailabilityTooltip = tooltip ?? string.Empty;
+            gitSubmoduleInstallEnabled = visible && gitSubmoduleEnabled;
+            readOnlyPackageInstallEnabled = visible && readOnlyPackageEnabled;
+            gitSubmoduleInstallTooltip = gitSubmoduleTooltip ?? string.Empty;
+            readOnlyPackageInstallTooltip =
+                readOnlyPackageTooltip ?? string.Empty;
+            UpdateSelectedInstallAvailability();
             if (!visible)
                 ResetInstallUi();
             SetVisible(visible);
@@ -465,8 +499,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 return;
 
             selectedInstallMode = installMode;
-            installModeField.SetValueWithoutNotify(
-                GetInstallModeDisplayName(selectedInstallMode));
+            UpdateSelectedInstallAvailability();
             UpdateBranchTooltip();
             ResetInstallUi();
         }
@@ -600,7 +633,8 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             isDisposed = true;
             UnsubscribeBranchPolling();
             branchField.UnregisterValueChangedCallback(OnBranchChanged);
-            installModeField.UnregisterValueChangedCallback(OnInstallModeChanged);
+            installMenu.UnregisterCallback<NavigationSubmitEvent>(
+                OnInstallMenuNavigationSubmit);
             repositoryCoordinator?.Dispose();
             RemoveRepositoryLink();
             installFeedback.RemoveFromHierarchy();
@@ -755,25 +789,81 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             InstallSelectionChanged?.Invoke();
         }
 
-        private void OnInstallModeChanged(ChangeEvent<string> changeEvent)
+        private void OnInstallMenuNavigationSubmit(
+            NavigationSubmitEvent submitEvent)
         {
-            if (!installModeSelectionEnabled ||
-                !TryGetInstallMode(changeEvent?.newValue, out var installMode))
+            if (!CanChooseInstallMode())
+                return;
+
+            installMenu.ShowMenu();
+            submitEvent.StopPropagation();
+        }
+
+        private DropdownMenuAction.Status GetInstallMenuActionStatus(
+            PackageManagerGitInstallMode installMode)
+        {
+            if (!CanChooseInstallMode() ||
+                !IsInstallModeEnabled(installMode))
             {
-                installModeField.SetValueWithoutNotify(
-                    GetInstallModeDisplayName(selectedInstallMode));
+                return DropdownMenuAction.Status.Disabled;
+            }
+
+            // These entries execute an install choice immediately; they are
+            // commands, not a persistent mode selector, so neither is checked.
+            return DropdownMenuAction.Status.Normal;
+        }
+
+        private bool CanChooseInstallMode()
+        {
+            return !isDisposed &&
+                   installModeSelectionEnabled &&
+                   installControlsVisible &&
+                   currentRepository != null &&
+                   HasAvailableInstallMode() &&
+                   (installUiState == InstallUiState.Idle ||
+                    installUiState == InstallUiState.Error);
+        }
+
+        private void ChooseInstallMode(
+            PackageManagerGitInstallMode installMode)
+        {
+            if (!CanChooseInstallMode() ||
+                !IsInstallModeEnabled(installMode))
+            {
                 return;
             }
 
+            string requestedSelectionIdentity = GetInstallSelectionIdentity(
+                currentRepository,
+                selectedBranch,
+                installMode);
             ApplyInstallModeSelection(installMode);
+            if (!CanChooseInstallMode() ||
+                selectedInstallMode != installMode ||
+                string.IsNullOrEmpty(requestedSelectionIdentity) ||
+                !string.Equals(
+                    requestedSelectionIdentity,
+                    GetInstallSelectionIdentity(
+                        currentRepository,
+                        selectedBranch,
+                        selectedInstallMode),
+                    StringComparison.Ordinal))
+            {
+                return;
+            }
+
+            if (!installActionEnabled)
+                return;
+
+            BeginInstallConfirmation();
+            FocusInstallButtonSoon();
         }
 
         private void ApplyInstallModeSelection(
             PackageManagerGitInstallMode installMode)
         {
             selectedInstallMode = installMode;
-            installModeField.SetValueWithoutNotify(
-                GetInstallModeDisplayName(selectedInstallMode));
+            UpdateSelectedInstallAvailability();
             UpdateBranchTooltip();
             ResetInstallUi();
             InstallSelectionChanged?.Invoke();
@@ -837,6 +927,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 return;
 
             ResetInstallUi();
+            FocusIdleInstallActionSoon();
         }
 
         private bool ConfirmationMatchesCurrentSelection()
@@ -933,47 +1024,171 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             switch (installUiState)
             {
                 case InstallUiState.Confirming:
+                    ShowInstallMenu(false);
+                    ShowInstallButton(true);
                     installButton.text = L10n.Tr(ConfirmInstallText);
                     installButton.tooltip = installFeedback.text;
                     installButton.SetEnabled(installActionEnabled);
                     cancelInstallButton.style.display = DisplayStyle.Flex;
                     cancelInstallButton.SetEnabled(true);
                     branchField.SetEnabled(false);
-                    installModeField.SetEnabled(false);
                     break;
                 case InstallUiState.Installing:
+                    ShowInstallMenu(false);
+                    ShowInstallButton(true);
                     installButton.text = L10n.Tr(InstallingText);
                     installButton.tooltip = installFeedback.text;
                     installButton.SetEnabled(false);
                     cancelInstallButton.style.display = DisplayStyle.None;
                     branchField.SetEnabled(false);
-                    installModeField.SetEnabled(false);
                     break;
                 case InstallUiState.Error:
-                    installButton.text = L10n.Tr(RetryInstallText);
-                    installButton.tooltip = installFeedback.text;
-                    installButton.SetEnabled(installActionEnabled);
+                    if (installModeSelectionEnabled)
+                    {
+                        ShowInstallButton(false);
+                        ShowInstallMenu(true);
+                        installMenu.text = L10n.Tr(RetryInstallText);
+                        installMenu.tooltip = installFeedback.text;
+                        installMenu.SetEnabled(CanChooseInstallMode());
+                    }
+                    else
+                    {
+                        ShowInstallMenu(false);
+                        ShowInstallButton(true);
+                        installButton.text = L10n.Tr(RetryInstallText);
+                        installButton.tooltip = installFeedback.text;
+                        installButton.SetEnabled(installActionEnabled);
+                    }
                     cancelInstallButton.style.display = DisplayStyle.None;
                     branchField.SetEnabled(hasBranches);
-                    installModeField.SetEnabled(installModeSelectionEnabled);
                     break;
                 case InstallUiState.Completed:
+                    ShowInstallMenu(false);
+                    ShowInstallButton(true);
                     installButton.text = L10n.Tr(InstalledText);
                     installButton.tooltip = installFeedback.text;
                     installButton.SetEnabled(false);
                     cancelInstallButton.style.display = DisplayStyle.None;
                     branchField.SetEnabled(false);
-                    installModeField.SetEnabled(false);
                     break;
                 default:
-                    installButton.text = L10n.Tr(InstallText);
-                    installButton.tooltip = installAvailabilityTooltip;
-                    installButton.SetEnabled(installActionEnabled);
+                    if (installModeSelectionEnabled)
+                    {
+                        ShowInstallButton(false);
+                        ShowInstallMenu(true);
+                        installMenu.text = L10n.Tr(InstallText);
+                        installMenu.tooltip = GetInstallMenuTooltip();
+                        installMenu.SetEnabled(CanChooseInstallMode());
+                    }
+                    else
+                    {
+                        ShowInstallMenu(false);
+                        ShowInstallButton(true);
+                        installButton.text = L10n.Tr(InstallText);
+                        installButton.tooltip = installAvailabilityTooltip;
+                        installButton.SetEnabled(installActionEnabled);
+                    }
                     cancelInstallButton.style.display = DisplayStyle.None;
                     branchField.SetEnabled(hasBranches);
-                    installModeField.SetEnabled(installModeSelectionEnabled);
                     break;
             }
+        }
+
+        private void ShowInstallMenu(bool visible)
+        {
+            installMenu.style.display = visible
+                ? DisplayStyle.Flex
+                : DisplayStyle.None;
+            if (!visible)
+                installMenu.SetEnabled(false);
+        }
+
+        private void ShowInstallButton(bool visible)
+        {
+            installButton.style.display = visible
+                ? DisplayStyle.Flex
+                : DisplayStyle.None;
+            if (!visible)
+                installButton.SetEnabled(false);
+        }
+
+        private bool HasAvailableInstallMode()
+        {
+            return gitSubmoduleInstallEnabled || readOnlyPackageInstallEnabled;
+        }
+
+        private bool IsInstallModeEnabled(
+            PackageManagerGitInstallMode installMode)
+        {
+            return installMode == PackageManagerGitInstallMode.ReadOnlyPackage
+                ? readOnlyPackageInstallEnabled
+                : gitSubmoduleInstallEnabled;
+        }
+
+        private string GetInstallModeTooltip(
+            PackageManagerGitInstallMode installMode)
+        {
+            return installMode == PackageManagerGitInstallMode.ReadOnlyPackage
+                ? readOnlyPackageInstallTooltip
+                : gitSubmoduleInstallTooltip;
+        }
+
+        private string GetInstallMenuTooltip()
+        {
+            if (installActionEnabled)
+                return installAvailabilityTooltip;
+            if (gitSubmoduleInstallEnabled)
+                return gitSubmoduleInstallTooltip;
+            if (readOnlyPackageInstallEnabled)
+                return readOnlyPackageInstallTooltip;
+            return installAvailabilityTooltip;
+        }
+
+        private void UpdateSelectedInstallAvailability()
+        {
+            installActionEnabled = IsInstallModeEnabled(selectedInstallMode);
+            installAvailabilityTooltip =
+                GetInstallModeTooltip(selectedInstallMode);
+        }
+
+        private void ClearInstallAvailability()
+        {
+            gitSubmoduleInstallEnabled = false;
+            readOnlyPackageInstallEnabled = false;
+            gitSubmoduleInstallTooltip = string.Empty;
+            readOnlyPackageInstallTooltip = string.Empty;
+            UpdateSelectedInstallAvailability();
+        }
+
+        private void FocusInstallButtonSoon()
+        {
+            installButton.schedule.Execute(() =>
+            {
+                if (!isDisposed &&
+                    installControlsVisible &&
+                    installButton.enabledSelf &&
+                    installButton.style.display.value == DisplayStyle.Flex)
+                {
+                    installButton.Focus();
+                }
+            });
+        }
+
+        private void FocusIdleInstallActionSoon()
+        {
+            VisualElement target = installModeSelectionEnabled
+                ? installMenu
+                : installButton;
+            target.schedule.Execute(() =>
+            {
+                if (!isDisposed &&
+                    installControlsVisible &&
+                    target.enabledSelf &&
+                    target.style.display.value == DisplayStyle.Flex)
+                {
+                    target.Focus();
+                }
+            });
         }
 
         private void ShowInstallFeedback(string message, HelpBoxMessageType type)
@@ -1116,13 +1331,14 @@ namespace MartinCalander.GitSubmoduleManager.Editor
 
         private void SetVisible(bool visible)
         {
+            installControlsVisible = visible;
             controls.style.display = visible
                 ? DisplayStyle.Flex
                 : DisplayStyle.None;
             if (!visible)
             {
+                installMenu.SetEnabled(false);
                 installButton.SetEnabled(false);
-                installModeField.SetEnabled(false);
                 cancelInstallButton.style.display = DisplayStyle.None;
                 HideInstallFeedback();
             }
@@ -1132,55 +1348,15 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         {
             selectedInstallMode = GitSubmoduleManagerUserSettings.Instance
                 .DefaultInstallMode;
-            installModeField.SetValueWithoutNotify(
-                GetInstallModeDisplayName(selectedInstallMode));
+            UpdateSelectedInstallAvailability();
         }
 
-        private static List<string> BuildInstallModeChoices()
-        {
-            return new List<string>
-            {
-                GetInstallModeDisplayName(
-                    PackageManagerGitInstallMode.GitSubmodule),
-                GetInstallModeDisplayName(
-                    PackageManagerGitInstallMode.ReadOnlyPackage)
-            };
-        }
-
-        private static string GetInstallModeDisplayName(
+        internal static string GetInstallMenuActionText(
             PackageManagerGitInstallMode installMode)
         {
             return installMode == PackageManagerGitInstallMode.ReadOnlyPackage
-                ? L10n.Tr(ReadOnlyPackageInstallModeText)
-                : L10n.Tr(GitSubmoduleInstallModeText);
-        }
-
-        private static bool TryGetInstallMode(
-            string displayName,
-            out PackageManagerGitInstallMode installMode)
-        {
-            if (string.Equals(
-                    displayName,
-                    GetInstallModeDisplayName(
-                        PackageManagerGitInstallMode.GitSubmodule),
-                    StringComparison.Ordinal))
-            {
-                installMode = PackageManagerGitInstallMode.GitSubmodule;
-                return true;
-            }
-
-            if (string.Equals(
-                    displayName,
-                    GetInstallModeDisplayName(
-                        PackageManagerGitInstallMode.ReadOnlyPackage),
-                    StringComparison.Ordinal))
-            {
-                installMode = PackageManagerGitInstallMode.ReadOnlyPackage;
-                return true;
-            }
-
-            installMode = PackageManagerGitInstallMode.GitSubmodule;
-            return false;
+                ? L10n.Tr(InstallAsReadOnlyPackageText)
+                : L10n.Tr(InstallAsGitSubmoduleText);
         }
 
         private static void AddValidBranchChoice(

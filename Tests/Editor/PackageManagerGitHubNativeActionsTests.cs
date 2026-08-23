@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.Reflection;
 using NUnit.Framework;
 using UnityEditor;
+using UnityEditor.UIElements;
 using UnityEngine;
 using UnityEngine.TestTools;
 using UnityEngine.UIElements;
@@ -154,8 +155,15 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                     details.SelectedInstallMode,
                     Is.EqualTo(PackageManagerGitInstallMode.GitSubmodule));
                 Assert.That(
-                    details.InstallModeField.style.display.value,
+                    details.InstallMenu.style.display.value,
                     Is.EqualTo(DisplayStyle.None));
+                Assert.That(
+                    details.InstallButton.style.display.value,
+                    Is.EqualTo(DisplayStyle.Flex));
+                Assert.That(
+                    details.InstallButton.text,
+                    Is.EqualTo(L10n.Tr(
+                        PackageManagerGitHubDetails.InstallText)));
 
                 details.TriggerInstall();
                 details.TriggerInstall();
@@ -194,7 +202,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
         }
 
         [Test]
-        public void PrimaryAction_IsExactlyInstallAndNeverUsesExtensionsOverflow()
+        public void PrimaryAction_IsSingleInstallDropdownAndNeverUsesExtensionsOverflow()
         {
             using PackageManagerGitHubDetails details = CreateDetails(
                 out VisualElement primaryActions,
@@ -207,40 +215,62 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
 
             Assert.That(PackageManagerGitHubDetails.InstallText, Is.EqualTo("Install"));
             Assert.That(
-                details.InstallButton.text,
+                details.InstallMenu.text,
                 Is.EqualTo(PackageManagerGitHubDetails.InstallText));
-            Assert.That(details.InstallButton.parent, Is.SameAs(details.Controls));
+            Assert.That(details.InstallMenu.parent, Is.SameAs(details.Controls));
             Assert.That(details.Controls.parent, Is.SameAs(primaryActions));
             var controlsInOrder = new List<VisualElement>(
                 details.Controls.Children());
             Assert.That(
                 controlsInOrder.IndexOf(details.BranchField),
-                Is.LessThan(controlsInOrder.IndexOf(details.InstallModeField)));
+                Is.LessThan(controlsInOrder.IndexOf(details.InstallMenu)));
             Assert.That(
-                controlsInOrder.IndexOf(details.InstallModeField),
+                controlsInOrder.IndexOf(details.InstallMenu),
                 Is.LessThan(controlsInOrder.IndexOf(details.InstallButton)));
             Assert.That(
-                details.InstallModeField.choices,
+                details.Controls.Query<DropdownField>().ToList().Count,
+                Is.EqualTo(1));
+            IReadOnlyList<DropdownMenuItem> menuItems =
+                details.InstallMenu.menu.MenuItems();
+            Assert.That(
+                menuItems.Count,
+                Is.EqualTo(2));
+            var firstMenuAction = menuItems[0] as DropdownMenuAction;
+            var secondMenuAction = menuItems[1] as DropdownMenuAction;
+            Assert.That(firstMenuAction, Is.Not.Null);
+            Assert.That(secondMenuAction, Is.Not.Null);
+            firstMenuAction.UpdateActionStatus(null);
+            secondMenuAction.UpdateActionStatus(null);
+            Assert.That(
+                new[] { firstMenuAction.name, secondMenuAction.name },
                 Is.EqualTo(new[]
                 {
-                    L10n.Tr(
-                        PackageManagerGitHubDetails.GitSubmoduleInstallModeText),
-                    L10n.Tr(
-                        PackageManagerGitHubDetails.ReadOnlyPackageInstallModeText)
+                    L10n.Tr(PackageManagerGitHubDetails
+                        .InstallAsGitSubmoduleText),
+                    L10n.Tr(PackageManagerGitHubDetails
+                        .InstallAsReadOnlyPackageText)
                 }));
+            Assert.That(
+                firstMenuAction.status,
+                Is.EqualTo(DropdownMenuAction.Status.Normal));
+            Assert.That(
+                secondMenuAction.status,
+                Is.EqualTo(DropdownMenuAction.Status.Normal));
             Assert.That(
                 details.SelectedInstallMode,
                 Is.EqualTo(PackageManagerGitInstallMode.GitSubmodule));
             Assert.That(
-                details.InstallModeField.value,
-                Is.EqualTo(L10n.Tr(
-                    PackageManagerGitHubDetails.GitSubmoduleInstallModeText)));
+                details.InstallMenu.style.display.value,
+                Is.EqualTo(DisplayStyle.Flex));
             Assert.That(
-                primaryActions.Q<Button>(
+                details.InstallButton.style.display.value,
+                Is.EqualTo(DisplayStyle.None));
+            Assert.That(
+                primaryActions.Q<ToolbarMenu>(
                     PackageManagerGitHubDetails.InstallActionElementName),
-                Is.SameAs(details.InstallButton));
+                Is.SameAs(details.InstallMenu));
             Assert.That(
-                extensionItems.Q<Button>(
+                extensionItems.Q<ToolbarMenu>(
                     PackageManagerGitHubDetails.InstallActionElementName),
                 Is.Null);
             Assert.That(
@@ -252,6 +282,60 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
             Assert.That(
                 details.InstallFeedback.parent?.name,
                 Is.EqualTo(PackageManagerGitHubDetails.NativeHelpBoxContainerName));
+        }
+
+        [Test]
+        public void InstallDropdown_DisablesOnlyTheUnavailableInstallMode()
+        {
+            int installCount = 0;
+            using PackageManagerGitHubDetails details = CreateDetails(
+                out _,
+                out _,
+                out _,
+                (_, _, _) => installCount++,
+                _ => { });
+            details.Refresh(CreateRepository("repository", "main"));
+            details.SetInstallState(
+                true,
+                false,
+                "Git submodules are unavailable.",
+                true,
+                "Read-only install is ready.");
+
+            Assert.That(details.InstallMenu.enabledSelf, Is.True);
+            DropdownMenuAction gitSubmoduleAction = FindInstallMenuAction(
+                details,
+                PackageManagerGitInstallMode.GitSubmodule);
+            DropdownMenuAction readOnlyPackageAction = FindInstallMenuAction(
+                details,
+                PackageManagerGitInstallMode.ReadOnlyPackage);
+            gitSubmoduleAction.UpdateActionStatus(null);
+            readOnlyPackageAction.UpdateActionStatus(null);
+
+            Assert.That(
+                gitSubmoduleAction.status,
+                Is.EqualTo(DropdownMenuAction.Status.Disabled));
+            Assert.That(
+                readOnlyPackageAction.status,
+                Is.EqualTo(DropdownMenuAction.Status.Normal));
+
+            gitSubmoduleAction.Execute();
+
+            Assert.That(installCount, Is.Zero);
+            Assert.That(details.IsInstallConfirmationPending, Is.False);
+            Assert.That(
+                details.InstallFeedback.style.display.value,
+                Is.EqualTo(DisplayStyle.None));
+
+            readOnlyPackageAction.Execute();
+
+            Assert.That(details.IsInstallConfirmationPending, Is.True);
+            Assert.That(
+                details.SelectedInstallMode,
+                Is.EqualTo(PackageManagerGitInstallMode.ReadOnlyPackage));
+            Assert.That(
+                details.InstallFeedback.text,
+                Does.Contain("read-only Package Manager Git dependency"));
         }
 
         [TestCase(
@@ -459,7 +543,11 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                 yield return null;
 
                 Assert.That(details.SelectedBranch, Is.EqualTo("release"));
-                SendNavigationSubmit(details.InstallButton);
+                details.InstallMenu.Focus();
+                ExecuteInstallMenuAction(
+                    details,
+                    PackageManagerGitInstallMode.GitSubmodule);
+                yield return null;
 
                 Assert.That(installedRepository, Is.Null);
                 Assert.That(installedBranch, Is.Empty);
@@ -482,6 +570,15 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                 Assert.That(feedbackLabel, Is.Not.Null);
                 Assert.That(feedbackLabel.enableRichText, Is.False);
                 Assert.That(details.BranchField.enabledSelf, Is.False);
+                Assert.That(
+                    details.InstallMenu.style.display.value,
+                    Is.EqualTo(DisplayStyle.None));
+                Assert.That(
+                    details.InstallButton.style.display.value,
+                    Is.EqualTo(DisplayStyle.Flex));
+                Assert.That(
+                    host.rootVisualElement.focusController.focusedElement,
+                    Is.SameAs(details.InstallButton));
 
                 SendNavigationSubmit(details.InstallButton);
 
@@ -526,16 +623,21 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
             details.Refresh(repository);
             details.SetInstallState(true, true, "Ready");
 
-            details.SelectInstallModeForTests(
+            ExecuteInstallMenuAction(
+                details,
                 PackageManagerGitInstallMode.ReadOnlyPackage);
 
             Assert.That(
                 details.SelectedInstallMode,
                 Is.EqualTo(PackageManagerGitInstallMode.ReadOnlyPackage));
-            details.TriggerInstall();
 
             Assert.That(details.IsInstallConfirmationPending, Is.True);
-            Assert.That(details.InstallModeField.enabledSelf, Is.False);
+            Assert.That(
+                details.InstallMenu.style.display.value,
+                Is.EqualTo(DisplayStyle.None));
+            Assert.That(
+                details.InstallButton.style.display.value,
+                Is.EqualTo(DisplayStyle.Flex));
             Assert.That(
                 details.InstallFeedback.text,
                 Does.Contain("read-only Package Manager Git dependency"));
@@ -555,7 +657,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
             Assert.That(
                 details.InstallFeedback.text,
                 Does.Contain("as a read-only Package Manager package"));
-            Assert.That(details.InstallModeField.enabledSelf, Is.False);
+            Assert.That(details.InstallMenu.enabledSelf, Is.False);
 
             details.ShowInstallCompleted(string.Empty);
 
@@ -587,9 +689,12 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                 details.SelectedInstallMode,
                 Is.EqualTo(PackageManagerGitInstallMode.GitSubmodule));
             Assert.That(
-                details.InstallModeField.value,
+                details.InstallMenu.style.display.value,
+                Is.EqualTo(DisplayStyle.Flex));
+            Assert.That(
+                details.InstallMenu.text,
                 Is.EqualTo(L10n.Tr(
-                    PackageManagerGitHubDetails.GitSubmoduleInstallModeText)));
+                    PackageManagerGitHubDetails.InstallText)));
         }
 
         [UnityTest]
@@ -614,18 +719,28 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
 
                 details.Refresh(CreateRepository("repository", "main"));
                 details.SetInstallState(true, true, "Ready");
-                SendNavigationSubmit(details.InstallButton);
+                ExecuteInstallMenuAction(
+                    details,
+                    PackageManagerGitInstallMode.GitSubmodule);
+                yield return null;
                 Assert.That(details.IsInstallConfirmationPending, Is.True);
 
                 SendNavigationSubmit(details.CancelInstallButton);
+                yield return null;
 
                 Assert.That(installCount, Is.Zero);
                 Assert.That(details.IsInstallConfirmationPending, Is.False);
                 Assert.That(
-                    details.InstallButton.text,
+                    details.InstallMenu.text,
                     Is.EqualTo(L10n.Tr(
                         PackageManagerGitHubDetails.InstallText)));
-                Assert.That(details.InstallButton.enabledSelf, Is.True);
+                Assert.That(details.InstallMenu.enabledSelf, Is.True);
+                Assert.That(
+                    details.InstallMenu.style.display.value,
+                    Is.EqualTo(DisplayStyle.Flex));
+                Assert.That(
+                    details.InstallButton.style.display.value,
+                    Is.EqualTo(DisplayStyle.None));
                 Assert.That(details.BranchField.enabledSelf, Is.True);
                 Assert.That(
                     details.CancelInstallButton.style.display.value,
@@ -633,6 +748,9 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                 Assert.That(
                     details.InstallFeedback.style.display.value,
                     Is.EqualTo(DisplayStyle.None));
+                Assert.That(
+                    host.rootVisualElement.focusController.focusedElement,
+                    Is.SameAs(details.InstallMenu));
             }
             finally
             {
@@ -672,8 +790,11 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
 
             Assert.That(details.IsInstallConfirmationPending, Is.False);
             Assert.That(
-                details.InstallButton.text,
+                details.InstallMenu.text,
                 Is.EqualTo(L10n.Tr(PackageManagerGitHubDetails.InstallText)));
+            Assert.That(
+                details.InstallMenu.style.display.value,
+                Is.EqualTo(DisplayStyle.Flex));
             Assert.That(installRequests, Is.Empty);
 
             details.TriggerInstall();
@@ -708,8 +829,11 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
 
             Assert.That(details.IsInstallConfirmationPending, Is.False);
             Assert.That(
-                details.InstallButton.text,
+                details.InstallMenu.text,
                 Is.EqualTo(L10n.Tr(PackageManagerGitHubDetails.InstallText)));
+            Assert.That(
+                details.InstallMenu.style.display.value,
+                Is.EqualTo(DisplayStyle.Flex));
             Assert.That(
                 details.InstallFeedback.style.display.value,
                 Is.EqualTo(DisplayStyle.None));
@@ -748,9 +872,12 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                 Assert.That(details.SelectedBranch, Is.EqualTo("main"));
                 Assert.That(details.IsInstallConfirmationPending, Is.False);
                 Assert.That(
-                    details.InstallButton.text,
+                    details.InstallMenu.text,
                     Is.EqualTo(L10n.Tr(
                         PackageManagerGitHubDetails.InstallText)));
+                Assert.That(
+                    details.InstallMenu.style.display.value,
+                    Is.EqualTo(DisplayStyle.Flex));
             }
             finally
             {
@@ -1025,7 +1152,13 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                 Is.EqualTo(HelpBoxMessageType.Info));
             Assert.That(details.InstallButton.enabledSelf, Is.False);
             Assert.That(details.BranchField.enabledSelf, Is.False);
-            Assert.That(details.InstallModeField.enabledSelf, Is.False);
+            Assert.That(details.InstallMenu.enabledSelf, Is.False);
+            Assert.That(
+                details.InstallMenu.style.display.value,
+                Is.EqualTo(DisplayStyle.None));
+            Assert.That(
+                details.InstallButton.style.display.value,
+                Is.EqualTo(DisplayStyle.Flex));
             Assert.That(
                 details.CancelInstallButton.style.display.value,
                 Is.EqualTo(DisplayStyle.None));
@@ -1039,7 +1172,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                 Is.EqualTo(L10n.Tr(PackageManagerGitHubDetails.InstalledText)));
             Assert.That(details.InstallButton.enabledSelf, Is.False);
             Assert.That(details.BranchField.enabledSelf, Is.False);
-            Assert.That(details.InstallModeField.enabledSelf, Is.False);
+            Assert.That(details.InstallMenu.enabledSelf, Is.False);
             Assert.That(
                 details.InstallFeedback.messageType,
                 Is.EqualTo(HelpBoxMessageType.Info));
@@ -1054,11 +1187,16 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
             Assert.That(feedbackLabel.enableRichText, Is.False);
             Assert.That(details.InstallFeedback.text, Does.Contain("<size=0>"));
             Assert.That(
-                details.InstallButton.text,
+                details.InstallMenu.text,
                 Is.EqualTo(L10n.Tr(PackageManagerGitHubDetails.RetryInstallText)));
-            Assert.That(details.InstallButton.enabledSelf, Is.True);
+            Assert.That(details.InstallMenu.enabledSelf, Is.True);
+            Assert.That(
+                details.InstallMenu.style.display.value,
+                Is.EqualTo(DisplayStyle.Flex));
+            Assert.That(
+                details.InstallButton.style.display.value,
+                Is.EqualTo(DisplayStyle.None));
             Assert.That(details.BranchField.enabledSelf, Is.True);
-            Assert.That(details.InstallModeField.enabledSelf, Is.True);
             Assert.That(
                 details.InstallFeedback.messageType,
                 Is.EqualTo(HelpBoxMessageType.Error));
@@ -1108,13 +1246,14 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
             details.Refresh(CreateRepository("repository", "main"));
             details.SetInstallState(true, true, "Ready");
             Assert.That(links.Contains(details.RepositoryLinkButton), Is.True);
-            Assert.That(details.InstallButton.enabledSelf, Is.True);
+            Assert.That(details.InstallMenu.enabledSelf, Is.True);
 
             details.Refresh(null);
 
             Assert.That(details.CurrentRepository, Is.Null);
             Assert.That(details.SelectedBranch, Is.Empty);
             Assert.That(details.RepositoryLinkButton.parent, Is.Null);
+            Assert.That(details.InstallMenu.enabledSelf, Is.False);
             Assert.That(details.InstallButton.enabledSelf, Is.False);
             Assert.That(
                 details.Controls.style.display.value,
@@ -1610,6 +1749,37 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
             {
                 submit.Dispose();
             }
+        }
+
+        private static void ExecuteInstallMenuAction(
+            PackageManagerGitHubDetails details,
+            PackageManagerGitInstallMode installMode)
+        {
+            FindInstallMenuAction(details, installMode).Execute();
+        }
+
+        private static DropdownMenuAction FindInstallMenuAction(
+            PackageManagerGitHubDetails details,
+            PackageManagerGitInstallMode installMode)
+        {
+            string actionName = PackageManagerGitHubDetails
+                .GetInstallMenuActionText(installMode);
+            DropdownMenuAction action = null;
+            foreach (DropdownMenuItem item in details.InstallMenu.menu.MenuItems())
+            {
+                if (item is DropdownMenuAction candidate &&
+                    string.Equals(
+                        candidate.name,
+                        actionName,
+                        StringComparison.Ordinal))
+                {
+                    action = candidate;
+                    break;
+                }
+            }
+
+            Assert.That(action, Is.Not.Null);
+            return action;
         }
 
         private static PackageManagerGitHubRepository CreateRepository(

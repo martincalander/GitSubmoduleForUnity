@@ -50,6 +50,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             string description,
             string minimumUnityVersion,
             string authorName,
+            string license,
             string documentationUrl,
             string changelogUrl,
             string licensesUrl,
@@ -61,6 +62,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             Description = description ?? string.Empty;
             MinimumUnityVersion = minimumUnityVersion ?? string.Empty;
             AuthorName = authorName ?? string.Empty;
+            License = license ?? string.Empty;
             DocumentationUrl = documentationUrl ?? string.Empty;
             ChangelogUrl = changelogUrl ?? string.Empty;
             LicensesUrl = licensesUrl ?? string.Empty;
@@ -83,6 +85,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         internal string Description { get; }
         internal string MinimumUnityVersion { get; }
         internal string AuthorName { get; }
+        internal string License { get; }
         internal string DocumentationUrl { get; }
         internal string ChangelogUrl { get; }
         internal string LicensesUrl { get; }
@@ -202,6 +205,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         private const int MaxPackageManifestDepth = 32;
         private const int MaxPackageDependencyCount = 512;
         private const int MaxPackageDependencyVersionLength = 1024;
+        private const int MaxPackageLicenseLength = 256;
         private static readonly Encoding StrictUtf8Encoding = new UTF8Encoding(false, true);
         private static readonly Regex PackageNameRegex = new Regex(@"^[a-z0-9]+(?:[._-][a-z0-9]+)+$", RegexOptions.Compiled);
         private static readonly Regex BranchNameRegex = new Regex(@"^[A-Za-z0-9][A-Za-z0-9._/-]*$", RegexOptions.Compiled);
@@ -918,6 +922,8 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 description,
                 minimumUnityVersion,
                 ReadManifestAuthorName(manifest["author"]),
+                NormalizeManifestLicense(
+                    ReadManifestString(manifest, "license")),
                 NormalizeSafeManifestUrl(
                     ReadManifestString(manifest, "documentationUrl")),
                 NormalizeSafeManifestUrl(
@@ -1067,6 +1073,24 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             return normalized.Length <= 10000
                 ? normalized
                 : normalized.Substring(0, 10000);
+        }
+
+        private static string NormalizeManifestLicense(string license)
+        {
+            if (string.IsNullOrWhiteSpace(license))
+                return string.Empty;
+
+            string normalized = license.Trim();
+            if (normalized.Length > MaxPackageLicenseLength)
+                return string.Empty;
+
+            foreach (char character in normalized)
+            {
+                if (char.IsControl(character))
+                    return string.Empty;
+            }
+
+            return normalized;
         }
 
         private static string BuildMinimumUnityVersion(

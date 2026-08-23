@@ -221,6 +221,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                 string.Empty,
                 string.Empty,
                 string.Empty,
+                string.Empty,
                 new[]
                 {
                     new PackageManifestDependency("com.example.child", "2.0.0")
@@ -262,6 +263,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
             var success = GitUtility.TryReadPackageManifestMetadataFromJson(
                 "{\"name\":\"com.example.details\",\"version\":\"1.0.0\"," +
                 "\"author\":{\"name\":\"Package Author\"}," +
+                "\"license\":\"  See LICENSE.md file  \"," +
                 "\"documentationUrl\":\"https://example.com/docs\"," +
                 "\"changelogUrl\":\"https://example.com/changelog\"," +
                 "\"licensesUrl\":\"https://example.com/license\"," +
@@ -274,6 +276,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
             Assert.That(success, Is.True, error);
             Assert.That(metadata, Is.Not.Null);
             Assert.That(metadata.AuthorName, Is.EqualTo("Package Author"));
+            Assert.That(metadata.License, Is.EqualTo("See LICENSE.md file"));
             Assert.That(metadata.DocumentationUrl, Is.EqualTo("https://example.com/docs"));
             Assert.That(metadata.ChangelogUrl, Is.EqualTo("https://example.com/changelog"));
             Assert.That(metadata.LicensesUrl, Is.EqualTo("https://example.com/license"));
@@ -282,6 +285,33 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
             Assert.That(metadata.Dependencies[0].Version, Is.EqualTo("1.0.0"));
             Assert.That(metadata.Dependencies[1].Name, Is.EqualTo("com.example.zeta"));
             Assert.That(metadata.Dependencies[1].Version, Is.EqualTo("2.0.0"));
+        }
+
+        [Test]
+        public void TryReadValidPackageManifestFromJson_IgnoresUnsafeOptionalLicense()
+        {
+            const string controlCharacterJson =
+                "{\"name\":\"com.example.package\",\"version\":\"1.0.0\"," +
+                "\"license\":\"MIT\\nInjected\"}";
+            bool controlCharacterSuccess =
+                GitUtility.TryReadPackageManifestMetadataFromJson(
+                    controlCharacterJson,
+                    out PackageManifestMetadata controlCharacterMetadata,
+                    out string controlCharacterError);
+
+            Assert.That(controlCharacterSuccess, Is.True, controlCharacterError);
+            Assert.That(controlCharacterMetadata.License, Is.Empty);
+
+            string oversizedJson =
+                "{\"name\":\"com.example.package\",\"version\":\"1.0.0\"," +
+                "\"license\":\"" + new string('x', 257) + "\"}";
+            bool oversizedSuccess = GitUtility.TryReadPackageManifestMetadataFromJson(
+                oversizedJson,
+                out PackageManifestMetadata oversizedMetadata,
+                out string oversizedError);
+
+            Assert.That(oversizedSuccess, Is.True, oversizedError);
+            Assert.That(oversizedMetadata.License, Is.Empty);
         }
 
         [TestCase("[]", "JSON object")]
@@ -1076,6 +1106,48 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                     .GetSupportedLifecycleMethods(typeof(HostWithOnEnable))
                     .Select(method => method.Name),
                 Is.EqualTo(new[] { "OnEnable" }));
+        }
+
+        [Test]
+        public void PackageManagerHostLifecycle_LivePanelDetachRequestsRepairInsteadOfRelease()
+        {
+            Assert.That(
+                GitSubmoduleManagerPackageManagerHost.GetDetachedWindowAction(
+                    windowAlive: true),
+                Is.EqualTo(
+                    GitSubmoduleManagerPackageManagerHost.DetachedWindowAction.Repair));
+            Assert.That(
+                GitSubmoduleManagerPackageManagerHost.GetDetachedWindowAction(
+                    windowAlive: false),
+                Is.EqualTo(
+                    GitSubmoduleManagerPackageManagerHost.DetachedWindowAction.Release));
+
+            Assert.That(
+                GitSubmoduleManagerPackageManagerHost.ShouldPollHostSession(
+                    isDisposed: false,
+                    windowAlive: true,
+                    panelAttached: false,
+                    isAttached: false,
+                    withinRepairWindow: false),
+                Is.True,
+                "A long-inactive detached tab still needs a low-frequency close observer.");
+            Assert.That(
+                GitSubmoduleManagerPackageManagerHost.ShouldPollHostSession(
+                    isDisposed: false,
+                    windowAlive: false,
+                    panelAttached: false,
+                    isAttached: false,
+                    withinRepairWindow: false),
+                Is.True,
+                "A destroyed Unity object needs one final poll for dictionary cleanup.");
+            Assert.That(
+                GitSubmoduleManagerPackageManagerHost.ShouldPollHostSession(
+                    isDisposed: false,
+                    windowAlive: true,
+                    panelAttached: true,
+                    isAttached: true,
+                    withinRepairWindow: false),
+                Is.False);
         }
 
         [Test]

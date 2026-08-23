@@ -15,8 +15,9 @@ normal read-only Git dependencies.
    repositories.
 3. Use Package Manager's native **Filters** control for visibility and
    organization. Select a discovered package, inspect its **Repository** link,
-   choose a branch and install mode, and choose **Install**. Review any missing
-   dependency plan, then choose **Refresh** whenever you need to rescan.
+   choose a branch, then open **Install** and choose the submodule or read-only
+   action. Review any missing dependency plan, then choose **Refresh** whenever
+   you need to rescan.
 4. Use an installed package's native **Manage** menu to convert eligible Git
    packages or safely uninstall a submodule. The Package Manager **+** menu adds
    **Install package as Git Submodule...** for direct URL installation.

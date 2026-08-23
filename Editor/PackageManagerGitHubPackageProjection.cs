@@ -92,6 +92,8 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             if (packageManagerRoot == null)
                 return false;
 
+            PackageManagerGitHubDiscovery.PrepareForHost();
+
             bool firstHost;
             lock (Gate)
             {
@@ -116,7 +118,8 @@ namespace MartinCalander.GitSubmoduleManager.Editor
 
         /// <summary>
         /// Releases a Package Manager visual root by reference. When the final
-        /// root closes, all projected packages and the discovery process retire.
+        /// root closes, root-owned placeholders retire while the immutable
+        /// completed catalogue remains available for a replacement visual root.
         /// </summary>
         internal static bool ReleaseHost(object packageManagerRoot)
         {
@@ -136,7 +139,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             bool removed = RemoveOwnedPackages();
             try
             {
-                PackageManagerGitHubDiscovery.Dispose();
+                PackageManagerGitHubDiscovery.Suspend();
             }
             catch
             {
@@ -655,6 +658,10 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                    string.Equals(
                        left.AuthorName,
                        right.AuthorName,
+                       StringComparison.Ordinal) &&
+                   string.Equals(
+                       left.License,
+                       right.License,
                        StringComparison.Ordinal) &&
                    string.Equals(
                        left.DocumentationUrl,

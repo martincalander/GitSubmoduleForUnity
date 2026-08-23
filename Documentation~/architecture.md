@@ -22,7 +22,7 @@ Editor/
 ├── PackageManagerGitHubPackageProjection.cs
 │                               transient native package-list projection
 ├── PackageManagerGitHubDetails.cs
-│                               branch, install-mode, and install controls
+│                               branch and install-dropdown controls
 ├── PackageManagerGitSubmoduleInstallMenu.cs
 │                               native Package Manager + menu extension
 ├── PackageManagerSubmoduleManageMenu.cs
@@ -78,11 +78,11 @@ so Unity can render and search the discovery result. It is never written to
 as installed.
 
 Selecting a discovery result mounts a **Repository** link, a branch selector,
-an install-mode selector, and a primary **Install** action in Unity's native
-details regions. The selector prefers `main`, falls back to the remote default
-when `main` is unavailable, and uses `git ls-remote --heads` for additional
-choices. Install mode is either an
-editable Git submodule or a normal read-only UPM Git dependency.
+and one primary **Install** dropdown in Unity's native details regions. The
+branch selector prefers `main`, falls back to the remote default when `main` is
+unavailable, and uses `git ls-remote --heads` for additional choices. The
+install dropdown offers an editable Git submodule or a normal read-only UPM Git
+dependency.
 
 The package extends Package Manager's native **+** menu with **Install package
 as Git Submodule...**. Its Git-only probe reads the repository's default branch,

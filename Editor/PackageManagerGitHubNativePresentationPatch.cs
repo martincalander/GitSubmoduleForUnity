@@ -5,6 +5,7 @@ using HarmonyLib;
 using UnityEditor;
 using UnityEditor.PackageManager;
 using UnityEngine;
+using UnityEngine.UIElements;
 
 namespace MartinCalander.GitSubmoduleManager.Editor
 {
@@ -26,6 +27,8 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             "UnityEditor.PackageManager.UI.Internal.BasePackageVersion";
         internal const string PackageDetailsDependenciesTabTypeName =
             "UnityEditor.PackageManager.UI.Internal.PackageDetailsDependenciesTab";
+        internal const string PackageDetailsDetailsTabTypeName =
+            "UnityEditor.PackageManager.UI.Internal.PackageDetailsDetailsTab";
         internal const string PackageLinkFactoryTypeName =
             "UnityEditor.PackageManager.UI.Internal.PackageLinkFactory";
         internal const string PackageLinkTypeName =
@@ -44,6 +47,18 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             "UnityEditor.PackageManager.UI.Internal.IPage";
         internal const string SimplePageWithPackagesTypeName =
             "UnityEditor.PackageManager.UI.Internal.SimplePageWithPackages";
+        internal const string DetailsInformationCardsContainerName =
+            "detailInformationCardsContainer";
+        internal const string LicenseInformationCardName =
+            "git-submodule-manager-license-information-card";
+        internal const string DefaultBranchInformationCardName =
+            "git-submodule-manager-default-branch-information-card";
+        internal const string InformationCardClassName = "informationCard";
+        internal const string InformationCardSmallClassName = "small";
+        internal const string InformationCardTitleClassName =
+            "informationCardTitle";
+        internal const string InformationCardContentClassName =
+            "informationCardContent";
 
         private const BindingFlags AnyInstance =
             BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
@@ -105,6 +120,16 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                     PatchPostfixIfNeeded(
                         target,
                         GetDependenciesTabValidityPostfix());
+                }
+
+                MethodInfo detailsInformationCardsTarget =
+                    GetDetailsInformationCardsTarget();
+                if (detailsInformationCardsTarget != null)
+                {
+                    foundTarget = true;
+                    PatchPostfixIfNeeded(
+                        detailsInformationCardsTarget,
+                        GetDetailsInformationCardsPostfix());
                 }
 
                 foreach (MethodInfo target in GetPackageLinkTargets())
@@ -194,6 +219,22 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 "IsValid",
                 typeof(bool),
                 PackageVersionInterfaceTypeName);
+        }
+
+        internal static MethodInfo GetDetailsInformationCardsTarget()
+        {
+            IReadOnlyList<MethodInfo> targets = FindSingleArgumentTargets(
+                PackageDetailsDetailsTabTypeName,
+                "RefreshContent",
+                typeof(void),
+                PackageVersionInterfaceTypeName);
+            return targets.Count == 1 &&
+                   string.Equals(
+                       targets[0].DeclaringType?.FullName,
+                       PackageDetailsDetailsTabTypeName,
+                       StringComparison.Ordinal)
+                ? targets[0]
+                : null;
         }
 
         internal static IReadOnlyList<MethodInfo> GetPackageLinkTargets()
@@ -450,6 +491,13 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         {
             return typeof(PackageManagerGitHubNativePresentationPatch).GetMethod(
                 nameof(DependenciesTabValidityPostfix),
+                AnyStatic);
+        }
+
+        internal static MethodInfo GetDetailsInformationCardsPostfix()
+        {
+            return typeof(PackageManagerGitHubNativePresentationPatch).GetMethod(
+                nameof(DetailsInformationCardsPostfix),
                 AnyStatic);
         }
 
@@ -915,6 +963,207 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             {
                 // Preserve Unity's native tab visibility on contract drift.
             }
+        }
+
+        private static void DetailsInformationCardsPostfix(
+            object __instance,
+            object __0)
+        {
+            try
+            {
+                PackageManagerGitHubPackageProjection.TryGetRepository(
+                    __0,
+                    out PackageManagerGitHubRepository repository);
+                ApplyRepositoryInformationCards(__instance, repository);
+            }
+            catch
+            {
+                // Preserve Unity's native Details tab on contract drift.
+            }
+        }
+
+        internal static bool ApplyRepositoryInformationCards(
+            object detailsTab,
+            PackageManagerGitHubRepository repository)
+        {
+            if (!(detailsTab is VisualElement tab))
+                return false;
+
+            VisualElement container = tab.Q<VisualElement>(
+                DetailsInformationCardsContainerName);
+            if (container == null)
+            {
+                tab.Q<VisualElement>(LicenseInformationCardName)
+                    ?.RemoveFromHierarchy();
+                tab.Q<VisualElement>(DefaultBranchInformationCardName)
+                    ?.RemoveFromHierarchy();
+                return false;
+            }
+
+            RemoveDuplicateOwnedInformationCards(
+                container,
+                LicenseInformationCardName);
+            RemoveDuplicateOwnedInformationCards(
+                container,
+                DefaultBranchInformationCardName);
+
+            if (repository == null)
+            {
+                RemoveOwnedInformationCard(
+                    container,
+                    LicenseInformationCardName);
+                RemoveOwnedInformationCard(
+                    container,
+                    DefaultBranchInformationCardName);
+                return true;
+            }
+
+            string license = NormalizeInformationCardValue(repository.License);
+            UpsertInformationCard(
+                container,
+                LicenseInformationCardName,
+                L10n.Tr("License"),
+                license,
+                license);
+            UpsertInformationCard(
+                container,
+                DefaultBranchInformationCardName,
+                L10n.Tr("Default Branch"),
+                NormalizeInformationCardValue(repository.DefaultBranch),
+                string.Empty);
+            return true;
+        }
+
+        private static void UpsertInformationCard(
+            VisualElement container,
+            string cardName,
+            string titleText,
+            string contentText,
+            string contentTooltip)
+        {
+            VisualElement card = FindDirectChild(container, cardName);
+            if (card == null)
+            {
+                card = new VisualElement
+                {
+                    name = cardName
+                };
+                card.AddToClassList(InformationCardClassName);
+                card.AddToClassList(InformationCardSmallClassName);
+
+                var title = new Label
+                {
+                    enableRichText = false
+                };
+                title.AddToClassList(InformationCardTitleClassName);
+                card.Add(title);
+
+                var content = new VisualElement();
+                content.AddToClassList(InformationCardContentClassName);
+                var icon = new VisualElement();
+                icon.AddToClassList(
+                    PackageManagerSubmodulePresentation
+                        .InformationCardIconClassName);
+                icon.style.display = DisplayStyle.None;
+                content.Add(icon);
+                var contentLabel = new Label
+                {
+                    enableRichText = false
+                };
+                contentLabel.AddToClassList(
+                    PackageManagerSubmodulePresentation
+                        .InformationCardTextClassName);
+                content.Add(contentLabel);
+                card.Add(content);
+                container.Add(card);
+            }
+
+            Label titleLabel = card.Q<Label>(
+                className: InformationCardTitleClassName);
+            Label valueLabel = card.Q<Label>(
+                className: PackageManagerSubmodulePresentation
+                    .InformationCardTextClassName);
+            if (titleLabel == null || valueLabel == null)
+            {
+                card.RemoveFromHierarchy();
+                UpsertInformationCard(
+                    container,
+                    cardName,
+                    titleText,
+                    contentText,
+                    contentTooltip);
+                return;
+            }
+
+            titleLabel.text = titleText;
+            titleLabel.tooltip = titleText;
+            valueLabel.text = contentText;
+            valueLabel.tooltip = contentTooltip;
+            card.style.display = DisplayStyle.Flex;
+        }
+
+        private static string NormalizeInformationCardValue(string value)
+        {
+            if (string.IsNullOrWhiteSpace(value))
+                return L10n.Tr("Not set");
+
+            string normalized = value.Trim();
+            if (normalized.Length > 256)
+                return L10n.Tr("Not set");
+
+            foreach (char character in normalized)
+            {
+                if (char.IsControl(character))
+                    return L10n.Tr("Not set");
+            }
+
+            return normalized;
+        }
+
+        private static void RemoveDuplicateOwnedInformationCards(
+            VisualElement container,
+            string cardName)
+        {
+            VisualElement retained = null;
+            var duplicates = new List<VisualElement>();
+            foreach (VisualElement child in container.Children())
+            {
+                if (!string.Equals(child.name, cardName, StringComparison.Ordinal))
+                    continue;
+
+                if (retained == null)
+                    retained = child;
+                else
+                    duplicates.Add(child);
+            }
+
+            foreach (VisualElement duplicate in duplicates)
+                duplicate.RemoveFromHierarchy();
+        }
+
+        private static void RemoveOwnedInformationCard(
+            VisualElement container,
+            string cardName)
+        {
+            FindDirectChild(container, cardName)?.RemoveFromHierarchy();
+        }
+
+        private static VisualElement FindDirectChild(
+            VisualElement container,
+            string childName)
+        {
+            foreach (VisualElement child in container.Children())
+            {
+                if (string.Equals(
+                        child.name,
+                        childName,
+                        StringComparison.Ordinal))
+                {
+                    return child;
+                }
+            }
+
+            return null;
         }
 
         private static void PackageLinkPostfix(
