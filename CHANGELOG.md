@@ -30,9 +30,11 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   organization discovery proves absence; incomplete catalogue coverage fails
   closed.
 - Package Manager's native **Filters** control now filters **Sources > GitHub**
-  by repository visibility and organization. Per-user Preferences provide the
-  initial visibility, organization, and install-mode defaults: all repositories,
-  all owners, and Git submodule respectively.
+  by downloaded state, repository visibility, and organization. **Status >
+  Downloaded** retains packages installed as either Git submodules or read-only
+  Git dependencies. Per-user Preferences provide the initial visibility,
+  organization, and install-mode defaults: all repositories, all owners, and Git
+  submodule respectively.
 - Package Manager presentation for installed package submodules, including a
   **Submodule** tag and **GitHub** source with the existing themed Git icon.
 - A fully native **GitHub** page under Package Manager's **Sources** section on
@@ -67,8 +69,9 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   authentication command that runs only in the user's visible terminal.
 - Dependency-gate, installer-failure, local-repository, and branch-fetch
   regression coverage.
-- A persistent self-removal warning and a second explicit confirmation before
-  Git Submodule Manager can remove its own submodule.
+- A non-suppressible self-removal fallback warning for the read-only UPM
+  installation, alongside guarded confirmation and transactional Git cleanup
+  for installed submodules.
 - Dirty-work, local-only commit, interrupted-operation, process cancellation,
   linked-worktree, and cross-platform repository integration coverage.
 - A project-wide operation journal for recovery after an interrupted mutation.

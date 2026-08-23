@@ -1,4 +1,5 @@
 using System;
+using System.Collections;
 using System.Collections.Generic;
 using System.Reflection;
 using System.Runtime.CompilerServices;
@@ -26,6 +27,8 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             "UnityEditor.PackageManager.UI.Internal.PackageToolbar";
         internal const string RemoveCustomActionTypeName =
             "UnityEditor.PackageManager.UI.Internal.RemoveCustomAction";
+        internal const string RemoveActionTypeName =
+            "UnityEditor.PackageManager.UI.Internal.RemoveAction";
         internal const string PackageOperationDispatcherTypeName =
             "UnityEditor.PackageManager.UI.Internal.PackageOperationDispatcher";
         internal const string PackageInterfaceTypeName =
@@ -37,6 +40,19 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         internal const string TriggerActionImplementationMethodName =
             "TriggerActionImplementation";
         internal const string RemoveEmbeddedMethodName = "RemoveEmbedded";
+        internal const string SkipRemoveConfirmationPropertyName =
+            "skipRemoveConfirmation";
+        internal const string SkipMultiSelectRemoveConfirmationPropertyName =
+            "skipMultiSelectRemoveConfirmation";
+        internal const string SelfRemovalWarningTitle =
+            "Remove Git Submodule Manager?";
+        internal const string SelfRemovalWarningMessage =
+            "Removing Git Submodule Manager will disable this project's GitHub " +
+            "Package Manager integration and Git submodule tools after Unity " +
+            "reloads. Existing packages and submodules will remain in place. " +
+            "Continue?";
+        internal const string SelfRemovalWarningAcceptText = "Remove";
+        internal const string SelfRemovalWarningCancelText = "Cancel";
         internal const string PackageManagerRootFieldName = "m_Root";
         internal const string PageManagerFieldName = "m_PageManager";
         internal const string PageManagerPropertyName = "pageManager";
@@ -103,6 +119,23 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                     PatchPrefixIfNeeded(
                         removeCustomActionTarget,
                         GetRemoveCustomActionPrefixMethod());
+                }
+
+                MethodInfo removeActionTarget = GetRemoveActionTargetMethod();
+                if (removeActionTarget != null)
+                {
+                    PatchPrefixIfNeeded(
+                        removeActionTarget,
+                        GetRemoveActionPrefixMethod());
+                }
+
+                MethodInfo removeActionCollectionTarget =
+                    GetRemoveActionCollectionTargetMethod();
+                if (removeActionCollectionTarget != null)
+                {
+                    PatchPrefixIfNeeded(
+                        removeActionCollectionTarget,
+                        GetRemoveActionCollectionPrefixMethod());
                 }
 
                 MethodInfo removeEmbeddedTarget =
@@ -223,6 +256,52 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             return null;
         }
 
+        internal static MethodInfo GetRemoveActionTargetMethod()
+        {
+            Type actionType = FindLoadedType(RemoveActionTypeName);
+            if (actionType == null)
+                return null;
+
+            foreach (MethodInfo method in actionType.GetMethods(
+                         AnyInstance | BindingFlags.DeclaredOnly))
+            {
+                ParameterInfo[] parameters = method.GetParameters();
+                if (method.Name == TriggerActionImplementationMethodName &&
+                    !method.IsStatic &&
+                    method.ReturnType == typeof(bool) &&
+                    parameters.Length == 1 &&
+                    IsPackageVersionParameter(parameters[0]))
+                {
+                    return method;
+                }
+            }
+
+            return null;
+        }
+
+        internal static MethodInfo GetRemoveActionCollectionTargetMethod()
+        {
+            Type actionType = FindLoadedType(RemoveActionTypeName);
+            if (actionType == null)
+                return null;
+
+            foreach (MethodInfo method in actionType.GetMethods(
+                         AnyInstance | BindingFlags.DeclaredOnly))
+            {
+                ParameterInfo[] parameters = method.GetParameters();
+                if (method.Name == TriggerActionImplementationMethodName &&
+                    !method.IsStatic &&
+                    method.ReturnType == typeof(bool) &&
+                    parameters.Length == 1 &&
+                    IsPackageCollectionParameter(parameters[0]))
+                {
+                    return method;
+                }
+            }
+
+            return null;
+        }
+
         internal static MethodInfo
             GetPackageOperationDispatcherRemoveEmbeddedTargetMethod()
         {
@@ -305,6 +384,20 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 AnyStatic);
         }
 
+        internal static MethodInfo GetRemoveActionPrefixMethod()
+        {
+            return typeof(PackageManagerSubmoduleHarmonyPatch).GetMethod(
+                nameof(RemoveActionPrefix),
+                AnyStatic);
+        }
+
+        internal static MethodInfo GetRemoveActionCollectionPrefixMethod()
+        {
+            return typeof(PackageManagerSubmoduleHarmonyPatch).GetMethod(
+                nameof(RemoveActionCollectionPrefix),
+                AnyStatic);
+        }
+
         internal static MethodInfo
             GetPackageOperationDispatcherRemoveEmbeddedPrefixMethod()
         {
@@ -354,6 +447,20 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             return IsPrefixApplied(
                 GetRemoveCustomActionTargetMethod(),
                 GetRemoveCustomActionPrefixMethod());
+        }
+
+        internal static bool IsRemoveActionPatchApplied()
+        {
+            return IsPrefixApplied(
+                GetRemoveActionTargetMethod(),
+                GetRemoveActionPrefixMethod());
+        }
+
+        internal static bool IsRemoveActionCollectionPatchApplied()
+        {
+            return IsPrefixApplied(
+                GetRemoveActionCollectionTargetMethod(),
+                GetRemoveActionCollectionPrefixMethod());
         }
 
         internal static bool
@@ -501,6 +608,19 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         {
             return parameter != null &&
                    parameter.ParameterType.FullName == PackageVersionInterfaceTypeName;
+        }
+
+        private static bool IsPackageCollectionParameter(ParameterInfo parameter)
+        {
+            if (parameter == null || !parameter.ParameterType.IsGenericType)
+                return false;
+
+            Type parameterType = parameter.ParameterType;
+            Type[] arguments = parameterType.GetGenericArguments();
+            return parameterType.GetGenericTypeDefinition() ==
+                   typeof(IReadOnlyCollection<>) &&
+                   arguments.Length == 1 &&
+                   arguments[0].FullName == PackageInterfaceTypeName;
         }
 
         private static object GetFieldValue(object instance, string fieldName)
@@ -1104,6 +1224,205 @@ namespace MartinCalander.GitSubmoduleManager.Editor
 
                 return true;
             }
+        }
+
+        private static bool RemoveActionPrefix(
+            object __instance,
+            object __0,
+            ref bool __result)
+        {
+            return ShouldRunReadOnlySelfRemoval(
+                __instance,
+                __0,
+                false,
+                ShowSelfRemovalWarning,
+                ref __result);
+        }
+
+        private static bool RemoveActionCollectionPrefix(
+            object __instance,
+            object __0,
+            ref bool __result)
+        {
+            return ShouldRunReadOnlySelfRemoval(
+                __instance,
+                __0,
+                true,
+                ShowSelfRemovalWarning,
+                ref __result);
+        }
+
+        /// <summary>
+        /// Keeps Unity's own confirmation and uninstall flow authoritative. A
+        /// dedicated, non-suppressible warning is used only when the selected
+        /// action contains this manager and Unity's corresponding warning has
+        /// been disabled or can no longer be verified through reflection.
+        /// </summary>
+        internal static bool ShouldRunReadOnlySelfRemoval(
+            object removeAction,
+            object selection,
+            bool isMultiSelect,
+            Func<bool> showFallbackWarning,
+            ref bool actionResult)
+        {
+            bool includesManager;
+            try
+            {
+                includesManager = SelectionIncludesManager(selection);
+            }
+            catch
+            {
+                // An unrecognized Package Manager argument remains Unity-owned.
+                return true;
+            }
+
+            if (!includesManager)
+                return true;
+
+            try
+            {
+                if (UnityWillShowRemovalWarning(
+                        removeAction,
+                        selection,
+                        isMultiSelect))
+                {
+                    return true;
+                }
+
+                if (showFallbackWarning != null && showFallbackWarning())
+                    return true;
+            }
+            catch
+            {
+                // Once this exact package is identified, dialog or reflected
+                // contract failures preserve it instead of silently removing it.
+            }
+
+            actionResult = false;
+            return false;
+        }
+
+        internal static bool SelectionIncludesManager(object selection)
+        {
+            if (IsManagerPackage(selection))
+                return true;
+            if (!(selection is IEnumerable packages) || selection is string)
+                return false;
+
+            foreach (object package in packages)
+            {
+                if (IsManagerPackage(package))
+                    return true;
+            }
+
+            return false;
+        }
+
+        private static bool IsManagerPackage(object candidate)
+        {
+            return PackageManagerReadOnlyGitPackage.TryResolveSelectedPackageName(
+                       candidate,
+                       out string packageName) &&
+                   string.Equals(
+                       packageName,
+                       GitPackageConversionService.ManagerPackageName,
+                       StringComparison.Ordinal);
+        }
+
+        private static bool UnityWillShowRemovalWarning(
+            object removeAction,
+            object selection,
+            bool isMultiSelect)
+        {
+            // Native modal APIs are not a warning guarantee in batch mode.
+            // Route through the fallback, which deliberately fails closed.
+            if (Application.isBatchMode)
+                return false;
+
+            if (!isMultiSelect &&
+                TryReadIsUsedByFeature(
+                    removeAction,
+                    selection,
+                    out bool isUsedByFeature) &&
+                isUsedByFeature)
+            {
+                return true;
+            }
+
+            if (!TryGetFieldValue(
+                    removeAction,
+                    "m_PackageManagerPrefs",
+                    out object preferences) ||
+                preferences == null)
+            {
+                return false;
+            }
+
+            string propertyName = isMultiSelect
+                ? SkipMultiSelectRemoveConfirmationPropertyName
+                : SkipRemoveConfirmationPropertyName;
+            return TryGetPropertyValue(
+                       preferences,
+                       propertyName,
+                       out object skipValue) &&
+                   skipValue is bool skipConfirmation &&
+                   !skipConfirmation;
+        }
+
+        private static bool TryReadIsUsedByFeature(
+            object removeAction,
+            object packageVersion,
+            out bool isUsedByFeature)
+        {
+            isUsedByFeature = false;
+            if (packageVersion == null ||
+                !TryGetFieldValue(
+                    removeAction,
+                    "m_PackageDatabase",
+                    out object packageDatabase) ||
+                packageDatabase == null)
+            {
+                return false;
+            }
+
+            try
+            {
+                foreach (MethodInfo method in packageDatabase.GetType().GetMethods(
+                             AnyInstance))
+                {
+                    ParameterInfo[] parameters = method.GetParameters();
+                    if (method.Name != "IsUsedByFeature" ||
+                        method.ReturnType != typeof(bool) ||
+                        parameters.Length != 1 ||
+                        !parameters[0].ParameterType.IsInstanceOfType(packageVersion))
+                    {
+                        continue;
+                    }
+
+                    isUsedByFeature = (bool)method.Invoke(
+                        packageDatabase,
+                        new[] { packageVersion });
+                    return true;
+                }
+            }
+            catch
+            {
+                return false;
+            }
+
+            return false;
+        }
+
+        private static bool ShowSelfRemovalWarning()
+        {
+            if (Application.isBatchMode)
+                return false;
+
+            return EditorUtility.DisplayDialog(
+                SelfRemovalWarningTitle,
+                SelfRemovalWarningMessage,
+                SelfRemovalWarningAcceptText,
+                SelfRemovalWarningCancelText);
         }
 
         private static bool PackageOperationDispatcherRemoveEmbeddedPrefix(

@@ -122,11 +122,13 @@ fallback is injected.
 
 ## Native Filters and Defaults
 
-The GitHub extension contributes repository visibility and organization values
-to Package Manager's native **Filters** control. Visibility accepts all, public,
-or private repositories. Organization values use the localized presentation
-form **Organization - _owner_** while the saved user preference stores only a
-sanitized GitHub login.
+The GitHub extension contributes downloaded status, repository visibility, and
+organization values to Package Manager's native **Filters** control. The native
+**Downloaded** status is enforced against the installed primary package version
+because Unity's extension-page predicate does not evaluate that status itself.
+Visibility accepts all, public, or private repositories. Organization values use
+the localized presentation form **Organization - _owner_** while the saved user
+preference stores only a sanitized GitHub login.
 
 Per-user Preferences provide default visibility, organization, and install mode.
 The safe defaults are all repositories, no owner restriction, and **Git

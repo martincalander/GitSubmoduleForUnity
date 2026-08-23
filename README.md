@@ -63,11 +63,12 @@ remain completely standard and visible to normal Git tooling.
 - Resolves missing package dependencies before installation. A complete,
   unambiguous plan is shown for confirmation; unresolved or ambiguous sources
   stop the install instead of being guessed.
-- Adds native visibility and organization filters to the GitHub source. Their
-  defaults, the default install mode, dependency prompting, and routine clean
-  removal/conversion confirmation are configurable per user in **Preferences >
-  Git Submodule Manager**. Safe defaults show all repositories from all owners,
-  install as a Git submodule, and keep both confirmation prompts active.
+- Adds native downloaded-status, visibility, and organization filters to the
+  GitHub source. Visibility and organization defaults, the default install mode,
+  dependency prompting, and routine clean removal/conversion confirmation are
+  configurable per user in **Preferences > Git Submodule Manager**. Safe defaults
+  show all repositories from all owners, install as a Git submodule, and keep
+  both confirmation prompts active.
 - Provides shared setup cards in Preferences and the standalone Welcome window.
   They show Git and GitHub CLI versions, installation and authentication
   checkmarks, official install/help actions, and open **Sources > GitHub**.
@@ -121,9 +122,9 @@ read-only UPM Git dependencies.
    Organization headers, **Public**/**Private** badges, and Unity's native
    loading indicator make the catalogue state visible while it is being
    populated.
-2. Use Package Manager's **Filters** control to select **All**, **Public**, or
-   **Private** repositories and, when desired, a specific **Organization -
-   _owner_**.
+2. Use Package Manager's **Filters** control to show only **Downloaded** packages,
+   select **All**, **Public**, or **Private** repositories, and, when desired, a
+   specific **Organization - _owner_**.
 3. Select a discovered package, follow **Repository** to inspect it, choose a
    branch, then open **Install** and choose either install action. Review any
    missing-dependency plan before continuing. Use **Refresh** to rescan GitHub
@@ -154,11 +155,13 @@ only confirmed UPM packages as results become available. **Refresh** starts a
 new project and GitHub scan, or queues one replacement scan when a load is
 already active.
 
-Package Manager's native **Filters** menu can narrow the catalogue by repository
-visibility and organization. The per-user Preferences page supplies the initial
-visibility and organization when the page has no existing filter selection.
-Search uses Package Manager's native projected-package search, and branch
-information is loaded only when requested.
+Package Manager's native **Filters** menu can narrow the catalogue to downloaded
+packages and by repository visibility and organization. Here **Downloaded**
+means installed in the current project, whether as a Git submodule or read-only
+UPM Git dependency. The per-user Preferences page supplies the initial visibility
+and organization when the page has no existing filter selection. Search uses
+Package Manager's native projected-package search, and branch information is
+loaded only when requested.
 
 Without GitHub CLI, direct Git URLs and installed-submodule management remain
 available. The native GitHub source continues to show installed submodules when

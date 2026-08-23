@@ -99,10 +99,12 @@ GitHub reads finish.
 Use Unity's native **Filters** control in the Package Manager toolbar to narrow
 the page by:
 
+- status: any package or **Downloaded** packages installed in this project;
 - repository visibility: all, public, or private;
 - organization: all owners or one **Organization - _owner_** value.
 
-Search, sorting, and both filters remain Package Manager-native. Discovery keeps
+**Downloaded** includes both Git submodules and read-only UPM Git dependencies.
+Search, sorting, and all filters remain Package Manager-native. Discovery keeps
 only the current scan generation so stale owner, page, or refresh results cannot
 overwrite the newest state.
 

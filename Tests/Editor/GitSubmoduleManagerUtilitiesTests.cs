@@ -1203,6 +1203,14 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
             Assert.That(ReadField(args, "displayName"), Is.EqualTo("GitHub"));
             Assert.That(ReadField(args, "filter"), Is.InstanceOf<Delegate>());
             Assert.That(ReadField(args, "getGroupName"), Is.InstanceOf<Delegate>());
+            Array supportedStatuses = ReadField(
+                args,
+                "supportedStatusFilters") as Array;
+            Assert.That(supportedStatuses, Has.Length.EqualTo(1));
+            Assert.That(
+                supportedStatuses?.GetValue(0)?.ToString(),
+                Is.EqualTo(PackageManagerSubmoduleNativePage
+                    .DownloadedFilterStatusName));
             Assert.That(ReadField(args, "supportedSortOptions") as Array,
                 Has.Length.EqualTo(2));
             Assert.That(

@@ -394,6 +394,137 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
         }
 
         [Test]
+        public void RemoveAction_UsesExactOwnedSelfRemovalPrefixes()
+        {
+            var report = new CompatibilityReport(
+                "read-only manager self-removal interception");
+            Type actionType = PackageManagerSubmoduleHarmonyPatch.FindLoadedType(
+                PackageManagerSubmoduleHarmonyPatch.RemoveActionTypeName);
+            MethodInfo singleTarget = PackageManagerSubmoduleHarmonyPatch
+                .GetRemoveActionTargetMethod();
+            MethodInfo collectionTarget = PackageManagerSubmoduleHarmonyPatch
+                .GetRemoveActionCollectionTargetMethod();
+            MethodInfo singlePrefix = PackageManagerSubmoduleHarmonyPatch
+                .GetRemoveActionPrefixMethod();
+            MethodInfo collectionPrefix = PackageManagerSubmoduleHarmonyPatch
+                .GetRemoveActionCollectionPrefixMethod();
+
+            report.Observe(
+                "RemoveAction",
+                actionType == null ? "unresolved" : actionType.FullName);
+            report.Observe(
+                "single TriggerActionImplementation",
+                DescribeMethod(singleTarget));
+            report.Observe(
+                "collection TriggerActionImplementation",
+                DescribeMethod(collectionTarget));
+            report.Require(
+                actionType != null,
+                "Missing required type " +
+                PackageManagerSubmoduleHarmonyPatch.RemoveActionTypeName +
+                "; a read-only manager package could bypass its uninstall warning.");
+            report.Require(
+                singleTarget != null,
+                "RemoveAction exists, but the exact " +
+                "bool TriggerActionImplementation(IPackageVersion) override is " +
+                "unavailable.");
+            report.Require(
+                collectionTarget != null,
+                "RemoveAction exists, but the exact multi-select " +
+                "TriggerActionImplementation(IReadOnlyCollection<IPackage>) " +
+                "override is unavailable.");
+            RequireSelfRemovalPrefixShape(report, singlePrefix, "single");
+            RequireSelfRemovalPrefixShape(report, collectionPrefix, "collection");
+
+            if (singleTarget != null)
+            {
+                ParameterInfo[] parameters = singleTarget.GetParameters();
+                report.Require(
+                    singleTarget.DeclaringType == actionType &&
+                    singleTarget.ReturnType == typeof(bool) &&
+                    parameters.Length == 1 &&
+                    string.Equals(
+                        parameters[0].ParameterType.FullName,
+                        PackageManagerSubmoduleHarmonyPatch
+                            .PackageVersionInterfaceTypeName,
+                        StringComparison.Ordinal),
+                    "Unexpected single-package removal signature: " +
+                    DescribeMethod(singleTarget) + ".");
+            }
+
+            if (collectionTarget != null)
+            {
+                ParameterInfo[] parameters = collectionTarget.GetParameters();
+                Type parameterType = parameters[0].ParameterType;
+                Type[] arguments = parameterType.IsGenericType
+                    ? parameterType.GetGenericArguments()
+                    : Type.EmptyTypes;
+                report.Require(
+                    collectionTarget.DeclaringType == actionType &&
+                    collectionTarget.ReturnType == typeof(bool) &&
+                    parameters.Length == 1 &&
+                    parameterType.IsGenericType &&
+                    parameterType.GetGenericTypeDefinition() ==
+                    typeof(IReadOnlyCollection<>) &&
+                    arguments.Length == 1 &&
+                    string.Equals(
+                        arguments[0].FullName,
+                        PackageManagerSubmoduleHarmonyPatch
+                            .PackageInterfaceTypeName,
+                        StringComparison.Ordinal),
+                    "Unexpected multi-select removal signature: " +
+                    DescribeMethod(collectionTarget) + ".");
+            }
+
+            if (singleTarget != null && collectionTarget != null)
+            {
+                bool presentationPatched =
+                    PackageManagerSubmoduleHarmonyPatch.TryPatch();
+                report.Require(
+                    presentationPatched,
+                    "Package Manager Harmony registration failed: " +
+                    EmptyAsUnknown(
+                        PackageManagerSubmoduleHarmonyPatch.LastPatchError));
+                report.Require(
+                    PackageManagerSubmoduleHarmonyPatch
+                        .IsRemoveActionPatchApplied(),
+                    "RemoveAction's single-package overload lacks the prefix " +
+                    "owned by " +
+                    PackageManagerSubmoduleHarmonyPatch.HarmonyId + ".");
+                report.Require(
+                    PackageManagerSubmoduleHarmonyPatch
+                        .IsRemoveActionCollectionPatchApplied(),
+                    "RemoveAction's multi-select overload lacks the prefix owned " +
+                    "by " + PackageManagerSubmoduleHarmonyPatch.HarmonyId + ".");
+            }
+
+            Complete(report);
+        }
+
+        [Test]
+        public void RemoveActionPrefixes_NullSelection_FailOpen()
+        {
+            MethodInfo singlePrefix = PackageManagerSubmoduleHarmonyPatch
+                .GetRemoveActionPrefixMethod();
+            MethodInfo collectionPrefix = PackageManagerSubmoduleHarmonyPatch
+                .GetRemoveActionCollectionPrefixMethod();
+            Assert.That(singlePrefix, Is.Not.Null);
+            Assert.That(collectionPrefix, Is.Not.Null);
+
+            object[] singleArguments = { null, null, false };
+            object[] collectionArguments = { null, null, false };
+
+            Assert.That(
+                (bool)singlePrefix.Invoke(null, singleArguments),
+                Is.True);
+            Assert.That(
+                (bool)collectionPrefix.Invoke(null, collectionArguments),
+                Is.True);
+            Assert.That(singleArguments[2], Is.False);
+            Assert.That(collectionArguments[2], Is.False);
+        }
+
+        [Test]
         public void NativeGitHubPageContract_IsCompleteOnSupportingEditors()
         {
             var report = new CompatibilityReport("native Sources/GitHub seams");
@@ -448,6 +579,9 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
             PropertyInfo selectedCategories =
                 PackageManagerGitHubNativePresentationPatch
                     .GetPageFilterCategoriesProperty();
+            PropertyInfo selectedStatus =
+                PackageManagerGitHubNativePresentationPatch
+                    .GetPageFilterStatusProperty();
             PropertyInfo supportedCategories =
                 PackageManagerGitHubNativePresentationPatch
                     .GetPageFilterSupportedCategoriesProperty();
@@ -479,6 +613,9 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                 DescribeMethod(
                     PackageManagerSubmoduleNativePage
                         .GetUpdateSupportedCategoriesMethod()));
+            report.Observe(
+                "Selected status",
+                DescribeProperty(selectedStatus));
             report.Observe(
                 "Selected categories",
                 DescribeProperty(selectedCategories));
@@ -534,6 +671,14 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                         .GetUpdateSupportedCategoriesMethod() != null,
                     "BasePage.UpdateSupportedCategories(" +
                     "IReadOnlyList<string>, bool) is missing.");
+                report.Require(
+                    selectedStatus != null &&
+                    Enum.IsDefined(
+                        selectedStatus.PropertyType,
+                        PackageManagerSubmoduleNativePage
+                            .DownloadedFilterStatusName),
+                    "PageFilters.status is missing, is not a readable enum, or " +
+                    "does not define Downloaded.");
                 report.Require(
                     selectedCategories != null,
                     "PageFilters.categories is missing or is no longer a " +
@@ -637,6 +782,20 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                 report,
                 PackageManagerSubmoduleHarmonyPatch
                     .GetRemoveCustomActionPrefixMethod(),
+                "__0",
+                "__result");
+            RequireParameterNames(
+                report,
+                PackageManagerSubmoduleHarmonyPatch
+                    .GetRemoveActionPrefixMethod(),
+                "__instance",
+                "__0",
+                "__result");
+            RequireParameterNames(
+                report,
+                PackageManagerSubmoduleHarmonyPatch
+                    .GetRemoveActionCollectionPrefixMethod(),
+                "__instance",
                 "__0",
                 "__result");
             RequireParameterNames(
@@ -760,6 +919,30 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                 pageId.CanRead &&
                 pageId.PropertyType == typeof(string),
                 "IPage.id is missing or is no longer a readable string.");
+        }
+
+        private static void RequireSelfRemovalPrefixShape(
+            CompatibilityReport report,
+            MethodInfo prefix,
+            string label)
+        {
+            if (prefix == null)
+            {
+                report.Require(false,
+                    "The " + label + " self-removal prefix could not be resolved.");
+                return;
+            }
+
+            ParameterInfo[] parameters = prefix.GetParameters();
+            report.Require(
+                prefix.ReturnType == typeof(bool) &&
+                parameters.Length == 3 &&
+                parameters[0].ParameterType == typeof(object) &&
+                parameters[1].ParameterType == typeof(object) &&
+                parameters[2].ParameterType == typeof(bool).MakeByRefType(),
+                "The " + label + " self-removal prefix must return whether " +
+                "Unity should run, accept the action and selection objects, and " +
+                "expose its bool result by reference.");
         }
 
         private static void RequireParameterNames(

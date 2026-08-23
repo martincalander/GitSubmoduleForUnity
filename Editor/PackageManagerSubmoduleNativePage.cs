@@ -29,6 +29,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             "UnityEditor.PackageManager.UI.Internal.ServicesContainer";
         internal const string BasePageTypeName =
             "UnityEditor.PackageManager.UI.Internal.BasePage";
+        internal const string DownloadedFilterStatusName = "Downloaded";
         internal const string SidebarTypeName =
             "UnityEditor.PackageManager.UI.Internal.Sidebar";
         internal const string SidebarExtensionRowsUpdateMethodName =
@@ -194,7 +195,10 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                     "LocalInfo",
                     "ImportedAssets",
                     "ImportedSamples");
-                SetEmptyEnumArray(args, "supportedStatusFilters");
+                SetEnumArray(
+                    args,
+                    "supportedStatusFilters",
+                    DownloadedFilterStatusName);
                 SetEnumArray(
                     args,
                     "supportedSortOptions",
@@ -920,6 +924,28 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                        out _);
         }
 
+        internal static bool IsDownloadedPackage(object package)
+        {
+            if (package == null ||
+                PackageManagerGitHubPackageProjection.TryGetRepository(
+                    package,
+                    out _))
+            {
+                return false;
+            }
+
+            // Page membership has already admitted only exact GitHub submodules
+            // and direct read-only Git dependencies. The primary-version flag is
+            // therefore the cheapest authoritative distinction from projected
+            // discovery placeholders.
+            return PackageManagerSubmodulePresentation.TryGetVersionIdentity(
+                       GetPrimaryVersion(package),
+                       out _,
+                       out _,
+                       out bool isInstalled) &&
+                   isInstalled;
+        }
+
         internal static string GetGroupName(object package)
         {
             if (PackageManagerGitHubPackageProjection.TryGetRepository(
@@ -1055,7 +1081,13 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                     return false;
             }
 
-            return true;
+            FieldInfo supportedStatusFilters = argsType.GetField(
+                "supportedStatusFilters",
+                AnyInstance);
+            Type statusType = supportedStatusFilters?.FieldType.GetElementType();
+            return statusType != null &&
+                   statusType.IsEnum &&
+                   Enum.IsDefined(statusType, DownloadedFilterStatusName);
         }
 
         private static MethodInfo FindResolveMethod(Type servicesType)
@@ -1259,11 +1291,6 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             }
 
             field.SetValue(instance, Enum.ToObject(field.FieldType, value));
-        }
-
-        private static void SetEmptyEnumArray(object instance, string fieldName)
-        {
-            SetEnumArray(instance, fieldName, Array.Empty<string>());
         }
 
         private static void SetEnumArray(

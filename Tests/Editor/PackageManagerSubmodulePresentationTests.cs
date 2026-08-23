@@ -18,6 +18,16 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
             public bool isInstalled { get; set; }
         }
 
+        private sealed class FakePackageVersions
+        {
+            public object primary { get; set; }
+        }
+
+        private sealed class FakePackage
+        {
+            public FakePackageVersions versions { get; set; }
+        }
+
         private sealed class FakePage
         {
             public string id { get; set; }
@@ -1549,6 +1559,112 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                     .MatchesRepositoryVisibility(null, new[] { publicLabel }),
                 Is.False,
                 "A selected visibility must not guess the privacy of an unknown repository.");
+        }
+
+        [Test]
+        public void NativeDownloadedFilter_RetainsOnlyDownloadedPackagesWhenSelected()
+        {
+            Assert.That(
+                PackageManagerGitHubNativePresentationPatch
+                    .MatchesDownloadedFilter("None", false),
+                Is.True,
+                "The native Any status must not narrow the catalogue.");
+            Assert.That(
+                PackageManagerGitHubNativePresentationPatch
+                    .MatchesDownloadedFilter(
+                        PackageManagerSubmoduleNativePage
+                            .DownloadedFilterStatusName,
+                        true),
+                Is.True);
+            Assert.That(
+                PackageManagerGitHubNativePresentationPatch
+                    .MatchesDownloadedFilter(
+                        PackageManagerSubmoduleNativePage
+                            .DownloadedFilterStatusName,
+                        false),
+                Is.False);
+            Assert.That(
+                PackageManagerGitHubNativePresentationPatch
+                    .MatchesDownloadedFilter("FutureUnityStatus", false),
+                Is.True,
+                "Statuses not owned by this extension must remain Unity-owned.");
+        }
+
+        [Test]
+        public void NativeDownloadedFilter_UsesPrimaryInstalledState()
+        {
+            var package = new FakePackage
+            {
+                versions = new FakePackageVersions
+                {
+                    primary = new FakePackageVersion
+                    {
+                        name = "com.example.repository",
+                        isInstalled = true
+                    }
+                }
+            };
+
+            Assert.That(
+                PackageManagerSubmoduleNativePage.IsDownloadedPackage(package),
+                Is.True);
+
+            ((FakePackageVersion)package.versions.primary).isInstalled = false;
+            Assert.That(
+                PackageManagerSubmoduleNativePage.IsDownloadedPackage(package),
+                Is.False,
+                "A projected discovery row must not count as downloaded.");
+        }
+
+        [Test]
+        public void NativeDownloadedFilter_ComposesWithRepositoryFacetsUsingAndSemantics()
+        {
+            string publicLabel =
+                PackageManagerSubmodulePresentation.PublicRepositoryTagLabel;
+            string organization = PackageManagerSubmoduleNativePage
+                .CreateOrganizationFilterLabel("martincalander");
+
+            Assert.That(
+                PackageManagerGitHubNativePresentationPatch
+                    .MatchesDownloadedFilter(
+                        PackageManagerSubmoduleNativePage
+                            .DownloadedFilterStatusName,
+                        true) &&
+                PackageManagerGitHubNativePresentationPatch
+                    .MatchesRepositoryFilters(
+                        false,
+                        "martincalander",
+                        new[] { publicLabel },
+                        new[] { organization }),
+                Is.True);
+            Assert.That(
+                PackageManagerGitHubNativePresentationPatch
+                    .MatchesDownloadedFilter(
+                        PackageManagerSubmoduleNativePage
+                            .DownloadedFilterStatusName,
+                        false) &&
+                PackageManagerGitHubNativePresentationPatch
+                    .MatchesRepositoryFilters(
+                        false,
+                        "martincalander",
+                        new[] { publicLabel },
+                        new[] { organization }),
+                Is.False,
+                "A repository match must not override Downloaded.");
+            Assert.That(
+                PackageManagerGitHubNativePresentationPatch
+                    .MatchesDownloadedFilter(
+                        PackageManagerSubmoduleNativePage
+                            .DownloadedFilterStatusName,
+                        true) &&
+                PackageManagerGitHubNativePresentationPatch
+                    .MatchesRepositoryFilters(
+                        true,
+                        "martincalander",
+                        new[] { publicLabel },
+                        new[] { organization }),
+                Is.False,
+                "Downloaded must not override visibility or organization.");
         }
 
         [Test]

@@ -393,6 +393,22 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 : null;
         }
 
+        internal static PropertyInfo GetPageFilterStatusProperty()
+        {
+            Type filtersType = GetPageFiltersProperty()?.PropertyType;
+            PropertyInfo property = filtersType?.GetProperty("status", AnyInstance);
+            return property != null &&
+                   property.CanRead &&
+                   property.GetIndexParameters().Length == 0 &&
+                   property.PropertyType.IsEnum &&
+                   Enum.IsDefined(
+                       property.PropertyType,
+                       PackageManagerSubmoduleNativePage
+                           .DownloadedFilterStatusName)
+                ? property
+                : null;
+        }
+
         internal static PropertyInfo GetPageFilterCategoriesProperty()
         {
             Type filtersType = GetPageFiltersProperty()?.PropertyType;
@@ -458,6 +474,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                    GetPagePackageDatabaseField() != null &&
                    GetPagePackageLookupMethod() != null &&
                    GetPageFiltersProperty() != null &&
+                   GetPageFilterStatusProperty() != null &&
                    GetPageFilterLabelsProperty() != null &&
                    GetPageFilterCategoriesProperty() != null &&
                    GetPageFilterSupportedCategoriesProperty() != null &&
@@ -690,6 +707,18 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             }
 
             return !organizationSelected;
+        }
+
+        internal static bool MatchesDownloadedFilter(
+            string selectedStatusName,
+            bool isDownloaded)
+        {
+            return !string.Equals(
+                       selectedStatusName,
+                       PackageManagerSubmoduleNativePage
+                           .DownloadedFilterStatusName,
+                       StringComparison.Ordinal) ||
+                   isDownloaded;
         }
 
         internal static bool TryGetSupportedCategories(
@@ -1290,25 +1319,48 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         {
             try
             {
-                // Unity remains authoritative for search and its built-in status
-                // predicates. Our repository facets can only narrow a native match.
+                // Unity remains authoritative for search and its implemented
+                // status predicates. SimplePageWithPackages does not evaluate the
+                // native Downloaded status for extension pages, so that status and
+                // our repository facets only narrow an otherwise native match.
                 if (!__result || !IsGitHubPage(__instance) ||
+                    !TryGetSelectedStatusName(
+                        __instance,
+                        out string selectedStatusName) ||
                     !TryGetSelectedLabels(
                         __instance,
                         out IReadOnlyList<string> selectedLabels) ||
                     !TryGetSelectedCategories(
                         __instance,
-                        out IReadOnlyList<string> selectedCategories) ||
-                    MatchesRepositoryFilters(
-                        null,
-                        string.Empty,
-                        selectedLabels,
-                        selectedCategories))
+                        out IReadOnlyList<string> selectedCategories))
                 {
                     return;
                 }
 
+                bool repositoryFiltersInactive = MatchesRepositoryFilters(
+                    null,
+                    string.Empty,
+                    selectedLabels,
+                    selectedCategories);
+                bool downloadedFilterInactive = MatchesDownloadedFilter(
+                    selectedStatusName,
+                    false);
+                if (repositoryFiltersInactive && downloadedFilterInactive)
+                    return;
+
                 if (!TryGetPagePackage(__instance, __0, out object package))
+                    return;
+
+                if (!MatchesDownloadedFilter(
+                        selectedStatusName,
+                        PackageManagerSubmoduleNativePage.IsDownloadedPackage(
+                            package)))
+                {
+                    __result = false;
+                    return;
+                }
+
+                if (repositoryFiltersInactive)
                     return;
 
                 bool? isPrivate = TryGetPackageRepositoryPrivacy(
@@ -1363,6 +1415,28 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 page,
                 GetPageFilterLabelsProperty(),
                 out selectedLabels);
+        }
+
+        private static bool TryGetSelectedStatusName(
+            object page,
+            out string selectedStatusName)
+        {
+            selectedStatusName = string.Empty;
+            PropertyInfo filtersProperty = GetPageFiltersProperty();
+            PropertyInfo statusProperty = GetPageFilterStatusProperty();
+            if (page == null || filtersProperty == null || statusProperty == null)
+                return false;
+
+            object filters = filtersProperty.GetValue(page, null);
+            if (filters == null)
+                return false;
+
+            object status = statusProperty.GetValue(filters, null);
+            if (status == null)
+                return false;
+
+            selectedStatusName = status.ToString();
+            return true;
         }
 
         internal static bool TryGetSelectedCategories(
