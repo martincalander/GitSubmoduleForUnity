@@ -17,6 +17,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
         public void SetUp()
         {
             PackageManifestGitDependencyStore.BeforeInitialAtomicReplaceForTests = null;
+            PackageManifestGitDependencyStore.ResetReadCacheForTests();
             temporaryDirectory = Path.Combine(
                 Path.GetTempPath(),
                 "GitSubmoduleManagerManifestTests-" + Guid.NewGuid().ToString("N"));
@@ -29,11 +30,234 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
         public void TearDown()
         {
             PackageManifestGitDependencyStore.BeforeInitialAtomicReplaceForTests = null;
+            PackageManifestGitDependencyStore.ResetReadCacheForTests();
             if (!string.IsNullOrEmpty(temporaryDirectory) &&
                 Directory.Exists(temporaryDirectory))
             {
                 Directory.Delete(temporaryDirectory, true);
             }
+        }
+
+        [Test]
+        public void ReadIndex_ReusesOneManifestParseAcrossPackageLookups_AndReloadsOnChange()
+        {
+            File.WriteAllText(
+                manifestPath,
+                "{\n  \"dependencies\": {\n" +
+                "    \"com.example.first\": \"https://github.com/example/first.git#main\",\n" +
+                "    \"com.example.second\": \"https://github.com/example/second.git#main\"\n" +
+                "  }\n}\n",
+                new UTF8Encoding(false));
+            DateTime firstStamp = DateTime.UtcNow.AddMinutes(-10);
+            File.SetLastWriteTimeUtc(manifestPath, firstStamp);
+
+            Assert.That(
+                PackageManifestGitDependencyStore.TryGetCachedDependencyAtPath(
+                    manifestPath,
+                    "com.example.first",
+                    out PackageManifestGitDependency first,
+                    out string error),
+                Is.True,
+                error);
+            Assert.That(
+                PackageManifestGitDependencyStore.TryGetCachedDependencyAtPath(
+                    manifestPath,
+                    "com.example.second",
+                    out PackageManifestGitDependency second,
+                    out error),
+                Is.True,
+                error);
+            Assert.That(first.Revision, Is.EqualTo("main"));
+            Assert.That(second.Revision, Is.EqualTo("main"));
+            Assert.That(
+                PackageManifestGitDependencyStore.ReadIndexBuildCountForTests,
+                Is.EqualTo(1));
+
+            File.WriteAllText(
+                manifestPath,
+                "{\n  \"dependencies\": {\n" +
+                "    \"com.example.first\": \"https://github.com/example/first.git#next\",\n" +
+                "    \"com.example.second\": \"https://github.com/example/second.git#main\"\n" +
+                "  }\n}\n",
+                new UTF8Encoding(false));
+            File.SetLastWriteTimeUtc(manifestPath, firstStamp.AddMinutes(5));
+
+            Assert.That(
+                PackageManifestGitDependencyStore.TryGetCachedDependencyAtPath(
+                    manifestPath,
+                    "com.example.first",
+                    out PackageManifestGitDependency updated,
+                    out error),
+                Is.True,
+                error);
+            Assert.That(updated.Revision, Is.EqualTo("next"));
+            Assert.That(
+                PackageManifestGitDependencyStore.ReadIndexBuildCountForTests,
+                Is.EqualTo(2));
+        }
+
+        [Test]
+        public void ReadIndex_TransientReadFailureIsRetriedWithoutManifestStampChange()
+        {
+            File.WriteAllText(
+                manifestPath,
+                "{\n  \"dependencies\": {\n" +
+                "    \"com.example.retry\": \"https://github.com/example/retry.git#main\"\n" +
+                "  }\n}\n",
+                new UTF8Encoding(false));
+            DateTime unchangedStamp = DateTime.UtcNow.AddMinutes(-10);
+            File.SetLastWriteTimeUtc(manifestPath, unchangedStamp);
+
+            int readAttempts = 0;
+            PackageManifestGitDependencyStore.CachedReadFailureForTests = _ =>
+                ++readAttempts == 1
+                    ? "Packages/manifest.json could not be read safely: simulated sharing violation."
+                    : string.Empty;
+
+            Assert.That(
+                PackageManifestGitDependencyStore.TryGetCachedDependencyAtPath(
+                    manifestPath,
+                    "com.example.retry",
+                    out _,
+                    out string error),
+                Is.False);
+            Assert.That(error, Does.Contain("simulated sharing violation"));
+            Assert.That(
+                PackageManifestGitDependencyStore.ReadIndexBuildCountForTests,
+                Is.Zero,
+                "A failed presentation read must not become a cached index.");
+
+            Assert.That(
+                PackageManifestGitDependencyStore.TryGetCachedDependencyAtPath(
+                    manifestPath,
+                    "com.example.retry",
+                    out PackageManifestGitDependency dependency,
+                    out error),
+                Is.True,
+                error);
+            Assert.That(dependency.Revision, Is.EqualTo("main"));
+            Assert.That(readAttempts, Is.EqualTo(2));
+            Assert.That(
+                PackageManifestGitDependencyStore.ReadIndexBuildCountForTests,
+                Is.EqualTo(1));
+
+            Assert.That(
+                PackageManifestGitDependencyStore.TryGetCachedDependencyAtPath(
+                    manifestPath,
+                    "com.example.retry",
+                    out _,
+                    out error),
+                Is.True,
+                error);
+            Assert.That(readAttempts, Is.EqualTo(2),
+                "The successful retry should populate the presentation cache.");
+        }
+
+        [Test]
+        public void ReadIndex_ManifestMutationInvalidatesCachedDependencySpecs()
+        {
+            File.WriteAllText(
+                manifestPath,
+                "{\n  \"dependencies\": {\n" +
+                "    \"com.example.existing\": \"https://github.com/example/existing.git#main\"\n" +
+                "  }\n}\n",
+                new UTF8Encoding(false));
+
+            Assert.That(
+                PackageManifestGitDependencyStore.TryGetCachedDependencyAtPath(
+                    manifestPath,
+                    "com.example.existing",
+                    out _,
+                    out string error),
+                Is.True,
+                error);
+            Assert.That(
+                PackageManifestGitDependencyStore.ReadIndexBuildCountForTests,
+                Is.EqualTo(1));
+
+            Assert.That(
+                PackageManifestGitDependencyStore.TryAddDependencyAtPath(
+                    manifestPath,
+                    "com.example.added",
+                    "https://github.com/example/added.git#main",
+                    out _,
+                    out error),
+                Is.True,
+                error);
+            Assert.That(
+                PackageManifestGitDependencyStore.TryGetCachedDependencyAtPath(
+                    manifestPath,
+                    "com.example.added",
+                    out PackageManifestGitDependency added,
+                    out error),
+                Is.True,
+                error);
+            Assert.That(added.RepositoryUrl, Does.EndWith("/added.git"));
+            Assert.That(
+                PackageManifestGitDependencyStore.ReadIndexBuildCountForTests,
+                Is.EqualTo(2));
+        }
+
+        [Test]
+        public void ReadIndex_DoesNotCoerceNonStringDependencyValues()
+        {
+            File.WriteAllText(
+                manifestPath,
+                "{\n  \"dependencies\": {\n" +
+                "    \"com.example.invalid\": 42,\n" +
+                "    \"com.example.valid\": \"https://github.com/example/valid.git#main\"\n" +
+                "  }\n}\n",
+                new UTF8Encoding(false));
+
+            Assert.That(
+                PackageManifestGitDependencyStore.TryGetDependencyAtPath(
+                    manifestPath,
+                    "com.example.invalid",
+                    out _,
+                    out string error),
+                Is.False);
+            Assert.That(
+                error,
+                Is.EqualTo(
+                    "The direct dependency entry for com.example.invalid is not a string."));
+            Assert.That(
+                PackageManifestGitDependencyStore.TryGetDependencyAtPath(
+                    manifestPath,
+                    "com.example.valid",
+                    out _,
+                    out error),
+                Is.False);
+            Assert.That(
+                error,
+                Is.EqualTo(
+                    "Every Packages/manifest.json dependency value must be a string."));
+
+            Assert.That(
+                PackageManifestGitDependencyStore.TryGetCachedDependencyAtPath(
+                    manifestPath,
+                    "com.example.invalid",
+                    out _,
+                    out error),
+                Is.False);
+            Assert.That(
+                error,
+                Is.EqualTo(
+                    "The direct dependency entry for com.example.invalid is not a string."));
+
+            Assert.That(
+                PackageManifestGitDependencyStore.TryGetCachedDependencyAtPath(
+                    manifestPath,
+                    "com.example.valid",
+                    out _,
+                    out error),
+                Is.False);
+            Assert.That(
+                error,
+                Is.EqualTo(
+                    "Every Packages/manifest.json dependency value must be a string."));
+            Assert.That(
+                PackageManifestGitDependencyStore.ReadIndexBuildCountForTests,
+                Is.EqualTo(1));
         }
 
         [Test]

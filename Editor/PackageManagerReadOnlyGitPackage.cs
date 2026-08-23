@@ -1,6 +1,8 @@
 using System;
+using System.Collections.Generic;
 using System.Reflection;
 using UnityEditor.PackageManager;
+using UpmPackageInfo = UnityEditor.PackageManager.PackageInfo;
 
 namespace MartinCalander.GitSubmoduleManager.Editor
 {
@@ -17,7 +19,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             string manifestSpec,
             string revision,
             string resolvedHash,
-            PackageInfo packageInfo)
+            UpmPackageInfo packageInfo)
             : this(
                 packageName,
                 repositoryUrl,
@@ -36,7 +38,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             string revision,
             string resolvedHash,
             string packageSubfolder,
-            PackageInfo packageInfo)
+            UpmPackageInfo packageInfo)
         {
             PackageName = packageName ?? string.Empty;
             RepositoryUrl = repositoryUrl ?? string.Empty;
@@ -55,7 +57,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         internal string PackageSubfolder { get; }
         internal bool IsRepositoryRootPackage =>
             string.IsNullOrEmpty(PackageSubfolder);
-        internal PackageInfo PackageInfo { get; }
+        internal UpmPackageInfo PackageInfo { get; }
     }
 
     /// <summary>
@@ -69,6 +71,57 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         private const int MaximumCandidateNameLength = 512;
         private const BindingFlags InstanceMemberFlags =
             BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
+        private static readonly object RegisteredPackageIndexGate = new object();
+
+        private sealed class RegisteredPackageIndex
+        {
+            internal readonly Dictionary<string, UpmPackageInfo> ByName =
+                new Dictionary<string, UpmPackageInfo>(StringComparer.Ordinal);
+            internal readonly HashSet<string> DuplicateNames =
+                new HashSet<string>(StringComparer.Ordinal);
+        }
+
+        private static RegisteredPackageIndex registeredPackageIndex;
+        private static int registeredPackageSnapshotReadCount;
+        private static int registeredPackageGeneration;
+
+        // A deterministic seam for focused cache tests. Production code always
+        // uses PackageInfo.GetAllRegisteredPackages.
+        internal static Func<UpmPackageInfo[]> RegisteredPackagesProviderForTests { get; set; }
+
+        static PackageManagerReadOnlyGitPackage()
+        {
+            Events.registeredPackages += OnRegisteredPackages;
+        }
+
+        internal static int RegisteredPackageSnapshotReadCountForTests
+        {
+            get
+            {
+                lock (RegisteredPackageIndexGate)
+                    return registeredPackageSnapshotReadCount;
+            }
+        }
+
+        internal static void ResetRegisteredPackageIndexForTests()
+        {
+            lock (RegisteredPackageIndexGate)
+            {
+                registeredPackageIndex = null;
+                registeredPackageSnapshotReadCount = 0;
+                registeredPackageGeneration++;
+                RegisteredPackagesProviderForTests = null;
+            }
+        }
+
+        internal static void InvalidateRegisteredPackageIndex()
+        {
+            lock (RegisteredPackageIndexGate)
+            {
+                registeredPackageIndex = null;
+                registeredPackageGeneration++;
+            }
+        }
 
         internal static bool TryGetInfo(
             object package,
@@ -90,8 +143,14 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 return false;
             }
 
-            if (package is PackageInfo publicPackageInfo)
-                return TryCreateInfo(publicPackageInfo, out info, out error);
+            if (package is UpmPackageInfo publicPackageInfo)
+            {
+                return TryCreateInfo(
+                    publicPackageInfo,
+                    true,
+                    out info,
+                    out error);
+            }
 
             if (!TryResolveSelectedPackageName(package, out string packageName))
             {
@@ -123,13 +182,94 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 return false;
             }
 
-            PackageInfo[] registeredPackages;
+            if (!TryGetRegisteredPackage(
+                    normalizedName,
+                    out UpmPackageInfo matchingPackage,
+                    out error))
+            {
+                return false;
+            }
+
+            return TryCreateInfo(
+                matchingPackage,
+                true,
+                out info,
+                out error);
+        }
+
+        internal static bool TryGetRegisteredPackage(
+            string packageName,
+            out UpmPackageInfo packageInfo,
+            out string error)
+        {
+            packageInfo = null;
+            error = string.Empty;
+            string normalizedName = NormalizePackageName(packageName);
+            if (!GitUtility.IsValidUpmPackageName(normalizedName))
+            {
+                error = "The selected package does not have a valid UPM package name.";
+                return false;
+            }
+
+            if (!TryGetRegisteredPackageIndex(
+                    out RegisteredPackageIndex index,
+                    out error))
+            {
+                return false;
+            }
+
+            if (index.DuplicateNames.Contains(normalizedName))
+            {
+                error =
+                    "Unity reported more than one registered package with the selected name.";
+                return false;
+            }
+
+            if (!index.ByName.TryGetValue(normalizedName, out packageInfo) ||
+                packageInfo == null)
+            {
+                packageInfo = null;
+                error =
+                    $"{normalizedName} is not currently registered by Unity Package Manager.";
+                return false;
+            }
+
+            return true;
+        }
+
+        private static bool TryGetRegisteredPackageIndex(
+            out RegisteredPackageIndex index,
+            out string error)
+        {
+            lock (RegisteredPackageIndexGate)
+            {
+                index = registeredPackageIndex;
+                if (index != null)
+                {
+                    error = string.Empty;
+                    return true;
+                }
+            }
+
+            UpmPackageInfo[] registeredPackages;
+            int generation;
             try
             {
-                registeredPackages = PackageInfo.GetAllRegisteredPackages();
+                Func<UpmPackageInfo[]> provider;
+                lock (RegisteredPackageIndexGate)
+                {
+                    provider = RegisteredPackagesProviderForTests;
+                    registeredPackageSnapshotReadCount++;
+                    generation = registeredPackageGeneration;
+                }
+
+                registeredPackages = provider != null
+                    ? provider()
+                    : UpmPackageInfo.GetAllRegisteredPackages();
             }
             catch (Exception exception)
             {
+                index = null;
                 error = GitHubUtility.SanitizeUiDiagnostic(
                     "Unity's registered package list could not be read: " +
                     exception.Message);
@@ -138,39 +278,73 @@ namespace MartinCalander.GitSubmoduleManager.Editor
 
             if (registeredPackages == null)
             {
+                index = null;
                 error = "Unity's registered package list is not ready.";
                 return false;
             }
 
-            PackageInfo matchingPackage = null;
-            foreach (PackageInfo candidate in registeredPackages)
+            var candidateIndex = new RegisteredPackageIndex();
+            foreach (UpmPackageInfo candidate in registeredPackages)
             {
-                if (candidate == null ||
-                    !string.Equals(candidate.name, normalizedName, StringComparison.Ordinal))
+                string candidateName = candidate?.name;
+                if (string.IsNullOrEmpty(candidateName) ||
+                    candidateIndex.DuplicateNames.Contains(candidateName))
                 {
                     continue;
                 }
 
-                if (matchingPackage != null)
+                if (candidateIndex.ByName.ContainsKey(candidateName))
                 {
-                    error = "Unity reported more than one registered package with the selected name.";
+                    candidateIndex.ByName.Remove(candidateName);
+                    candidateIndex.DuplicateNames.Add(candidateName);
+                    continue;
+                }
+
+                candidateIndex.ByName.Add(candidateName, candidate);
+            }
+
+            lock (RegisteredPackageIndexGate)
+            {
+                if (generation != registeredPackageGeneration)
+                {
+                    index = null;
+                    error =
+                        "Unity's registered package list changed while it was being indexed.";
                     return false;
                 }
 
-                matchingPackage = candidate;
+                if (registeredPackageIndex == null)
+                    registeredPackageIndex = candidateIndex;
+                index = registeredPackageIndex;
             }
 
-            if (matchingPackage == null)
-            {
-                error = $"{normalizedName} is not currently registered by Unity Package Manager.";
-                return false;
-            }
+            error = string.Empty;
+            return true;
+        }
 
-            return TryCreateInfo(matchingPackage, out info, out error);
+        private static void OnRegisteredPackages(PackageRegistrationEventArgs _)
+        {
+            InvalidateRegisteredPackageIndex();
+            PackageManifestGitDependencyStore.InvalidateProjectReadCache();
+            PackageManagerGitHubNativePresentationPatch
+                .QueueForcedPackageStateRefresh();
         }
 
         internal static bool TryCreateInfo(
-            PackageInfo packageInfo,
+            UpmPackageInfo packageInfo,
+            out PackageManagerReadOnlyGitInfo info,
+            out string error)
+        {
+            return TryCreateInfo(
+                packageInfo,
+                false,
+                out info,
+                out error);
+        }
+
+        private static bool TryCreateInfo(
+            UpmPackageInfo packageInfo,
+            bool usePresentationManifestCache,
             out PackageManagerReadOnlyGitInfo info,
             out string error)
         {
@@ -190,10 +364,17 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 return false;
             }
 
-            if (!PackageManifestGitDependencyStore.TryGetProjectDependency(
+            PackageManifestGitDependency dependency;
+            bool foundDependency = usePresentationManifestCache
+                ? PackageManifestGitDependencyStore.TryGetProjectDependencyForPresentation(
                     packageInfo.name,
-                    out PackageManifestGitDependency dependency,
-                    out error))
+                    out dependency,
+                    out error)
+                : PackageManifestGitDependencyStore.TryGetProjectDependency(
+                    packageInfo.name,
+                    out dependency,
+                    out error);
+            if (!foundDependency)
             {
                 return false;
             }
@@ -224,7 +405,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         }
 
         internal static bool HasExactManifestSpec(
-            PackageInfo packageInfo,
+            UpmPackageInfo packageInfo,
             string expectedSpec)
         {
             if (packageInfo == null ||

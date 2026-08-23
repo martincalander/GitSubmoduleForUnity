@@ -9,10 +9,14 @@ namespace MartinCalander.GitSubmoduleManager.Editor
     {
         private const int PageSize = 50;
         private const int MaximumSearchResults = 1000;
-        private const int PackageManifestBatchSize = 8;
+        private const int InitialPackageManifestBatchSize = PageSize;
+        internal const int MaximumPackageManifestRequestsPerValidation = 32;
         private const int MaximumPackageManifestBytes = 64 * 1024;
         private const int MaximumManifestCacheEntries = 2048;
         private const double SearchDebounceSeconds = 0.3;
+        private const string PackageManifestRequestBudgetExhaustedMessage =
+            "Package validation stopped after reaching the bounded GitHub request limit " +
+            "for this page. Refresh the page to retry.";
         private const string RepositoryListProjection =
             "[.[] | {node_id, name, owner: {login: .owner.login}, clone_url, html_url, default_branch, private, description, updated_at}]";
         private const string RepositorySearchProjection =
@@ -125,6 +129,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         private AsyncCommandHandle packageManifestBatchHandle;
         private PackageManifestBatch activePackageManifestBatch;
         private int packageManifestValidationGeneration;
+        private int packageManifestRequestCount;
         private bool validPackageFilterEnabled;
 
         internal bool IsLoading =>
@@ -341,6 +346,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             validPackageFilterEnabled = enabled;
             packageManifestValidationGeneration++;
             pendingPackageManifestBatches.Clear();
+            packageManifestRequestCount = 0;
 
             foreach (GitHubRepo repo in DisplayedRepos)
             {
@@ -626,6 +632,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         {
             packageManifestValidationGeneration++;
             pendingPackageManifestBatches.Clear();
+            packageManifestRequestCount = 0;
 
             if (!validPackageFilterEnabled || DisplayedRepos == null || DisplayedRepos.Count == 0)
                 return;
@@ -664,7 +671,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 batch ??= new PackageManifestBatch { Generation = generation };
                 batch.Repositories.Add(repo);
 
-                if (batch.Repositories.Count >= PackageManifestBatchSize)
+                if (batch.Repositories.Count >= InitialPackageManifestBatchSize)
                 {
                     pendingPackageManifestBatches.Enqueue(batch);
                     batch = null;
@@ -697,6 +704,18 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                     continue;
                 }
 
+                if (packageManifestRequestCount >=
+                    MaximumPackageManifestRequestsPerValidation)
+                {
+                    MarkManifestBatchUnavailable(
+                        batch,
+                        PackageManifestRequestBudgetExhaustedMessage);
+                    MarkPendingManifestBatchesUnavailable(
+                        batch.Generation,
+                        PackageManifestRequestBudgetExhaustedMessage);
+                    return false;
+                }
+
                 var arguments = new List<string>
                 {
                     "api",
@@ -714,6 +733,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 }
 
                 activePackageManifestBatch = batch;
+                packageManifestRequestCount++;
                 packageManifestBatchHandle = CliCommandRunner.RunAsync(
                     "gh",
                     arguments,
@@ -735,11 +755,16 @@ namespace MartinCalander.GitSubmoduleManager.Editor
 
             if (result.StdOutTruncated)
             {
+                if (batch.Repositories.Count > 1)
+                {
+                    SplitAndPrependPackageManifestBatch(batch);
+                    return;
+                }
+
                 MarkManifestBatchUnavailable(
                     batch,
                     "GitHub returned more package manifest data than can be safely inspected. " +
                     "Refresh to retry; unusually large manifests are not accepted by this filter.");
-                StopCurrentManifestValidationAfterFailure(batch.Generation);
                 return;
             }
 
@@ -815,6 +840,34 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                     batch.Generation,
                     "GitHub API rate limit reached; package validation was paused." + resetNotice);
             }
+        }
+
+        private void SplitAndPrependPackageManifestBatch(PackageManifestBatch batch)
+        {
+            int repositoryCount = batch?.Repositories.Count ?? 0;
+            if (repositoryCount <= 1)
+                return;
+
+            int firstCount = repositoryCount / 2;
+            var first = new PackageManifestBatch { Generation = batch.Generation };
+            var second = new PackageManifestBatch { Generation = batch.Generation };
+            for (int index = 0; index < repositoryCount; index++)
+            {
+                (index < firstCount ? first : second).Repositories.Add(
+                    batch.Repositories[index]);
+            }
+
+            // Retry the smaller pieces before unrelated queued work. This keeps
+            // the current page's progress deterministic while retaining the
+            // bounded-output safety guarantee that motivated the old fixed-size
+            // batches. Typical package.json files now need one request per page;
+            // unusually large responses are isolated by repeated bisection.
+            PackageManifestBatch[] queued = pendingPackageManifestBatches.ToArray();
+            pendingPackageManifestBatches.Clear();
+            pendingPackageManifestBatches.Enqueue(first);
+            pendingPackageManifestBatches.Enqueue(second);
+            foreach (PackageManifestBatch pending in queued)
+                pendingPackageManifestBatches.Enqueue(pending);
         }
 
         private void ApplyPackageManifestNode(
@@ -1207,6 +1260,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             pendingPackageJsonTarget = null;
             packageManifestValidationGeneration++;
             pendingPackageManifestBatches.Clear();
+            packageManifestRequestCount = 0;
 
             if (isSearchMode &&
                 !string.IsNullOrWhiteSpace(currentSearchQuery) &&
@@ -1341,6 +1395,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
 
             packageManifestValidationGeneration++;
             pendingPackageManifestBatches.Clear();
+            packageManifestRequestCount = 0;
             packageManifestCache.Clear();
 
             DisplayedRepos = new List<GitHubRepo>();

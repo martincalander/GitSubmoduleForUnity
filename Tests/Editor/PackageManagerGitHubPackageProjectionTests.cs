@@ -27,6 +27,8 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
         [SetUp]
         public void SetUp()
         {
+            PackageManagerGitHubPackageProjection
+                .ProjectedPackageCreationGateForTests = null;
             retainedHosts.Clear();
             reflectionContract = null;
             packageDatabase = null;
@@ -36,6 +38,8 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
         [TearDown]
         public void TearDown()
         {
+            PackageManagerGitHubPackageProjection
+                .ProjectedPackageCreationGateForTests = null;
             for (int index = retainedHosts.Count - 1; index >= 0; index--)
             {
                 PackageManagerGitHubPackageProjection.ReleaseHost(
@@ -99,6 +103,245 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
         }
 
         [Test]
+        public void RepositoryCatalogueChange_UsesImmutableCollectionIdentity()
+        {
+            PackageManagerGitHubRepository repository = CreateRepository(
+                nodeId: "NODE-CATALOGUE-IDENTITY",
+                owner: "projection-tests",
+                repositoryName: "catalogue-identity",
+                packageName: "com.example.catalogueidentity",
+                displayName: "Catalogue Identity",
+                version: "1.0.0");
+            IReadOnlyList<PackageManagerGitHubRepository> repositories =
+                new ReadOnlyCollection<PackageManagerGitHubRepository>(
+                    new[] { repository });
+            IReadOnlyList<PackageManagerGitHubRepository> replacement =
+                new ReadOnlyCollection<PackageManagerGitHubRepository>(
+                    new[] { repository });
+
+            Assert.That(
+                PackageManagerGitHubPackageProjection
+                    .IsRepositoryCatalogueChanged(repositories, repositories),
+                Is.False,
+                "Loading/status snapshots reuse the immutable repository collection.");
+            Assert.That(
+                PackageManagerGitHubPackageProjection
+                    .IsRepositoryCatalogueChanged(repositories, replacement),
+                Is.True,
+                "A replacement collection is the discovery contract for catalogue content changes.");
+            Assert.That(
+                PackageManagerGitHubPackageProjection
+                    .ShouldRunPendingProjectionRetry(
+                        repositories,
+                        repositories,
+                        true,
+                        false,
+                        true),
+                Is.True);
+            Assert.That(
+                PackageManagerGitHubPackageProjection
+                    .ShouldRunPendingProjectionRetry(
+                        repositories,
+                        replacement,
+                        true,
+                        false,
+                        true),
+                Is.False,
+                "A delayed retry must not reconcile a stale catalogue collection.");
+            Assert.That(
+                PackageManagerGitHubPackageProjection
+                    .ShouldRunPendingProjectionRetry(
+                        repositories,
+                        repositories,
+                        false,
+                        false,
+                        true),
+                Is.False,
+                "A delayed retry must not resurrect projection without a retained host.");
+            Assert.That(
+                PackageManagerGitHubPackageProjection
+                    .ShouldRunPendingProjectionRetry(
+                        repositories,
+                        repositories,
+                        true,
+                        true,
+                        true),
+                Is.False,
+                "A delayed retry must stop during domain teardown.");
+        }
+
+        [Test]
+        public void PresentationRefresh_RebuildsOnlyForCatalogueOrForcedStateChanges()
+        {
+            IReadOnlyList<PackageManagerGitHubRepository> repositories =
+                new ReadOnlyCollection<PackageManagerGitHubRepository>(
+                    Array.Empty<PackageManagerGitHubRepository>());
+            IReadOnlyList<PackageManagerGitHubRepository> replacement =
+                new ReadOnlyCollection<PackageManagerGitHubRepository>(
+                    Array.Empty<PackageManagerGitHubRepository>());
+
+            Assert.That(
+                PackageManagerGitHubNativePresentationPatch
+                    .ShouldRebuildPageForSnapshot(
+                        repositories,
+                        repositories,
+                        false),
+                Is.False,
+                "A status-only discovery update should repaint the loading state without rebuilding the package list.");
+            Assert.That(
+                PackageManagerGitHubNativePresentationPatch
+                    .ShouldRebuildPageForSnapshot(
+                        repositories,
+                        replacement,
+                        false),
+                Is.True);
+            Assert.That(
+                PackageManagerGitHubNativePresentationPatch
+                    .ShouldRebuildPageForSnapshot(
+                        repositories,
+                        repositories,
+                        true),
+                Is.True,
+                "Installed submodule changes still affect extension-page membership.");
+            Assert.That(
+                PackageManagerGitHubNativePresentationPatch
+                    .ShouldExplicitlyRebuildPage(true, true, false),
+                Is.False,
+                "PackageDatabase.UpdatePackages already rebuilt the active page synchronously.");
+            Assert.That(
+                PackageManagerGitHubNativePresentationPatch
+                    .ShouldExplicitlyRebuildPage(true, false, false),
+                Is.True,
+                "A catalogue change without a Package Database mutation still needs one presentation rebuild.");
+            Assert.That(
+                PackageManagerGitHubNativePresentationPatch
+                    .ShouldExplicitlyRebuildPage(false, false, false),
+                Is.False,
+                "Status-only snapshots update loading presentation without rebuilding.");
+            Assert.That(
+                PackageManagerGitHubNativePresentationPatch
+                    .ShouldExplicitlyRebuildPage(true, true, true),
+                Is.True,
+                "A forced package-registration or submodule refresh must not inherit duplicate-rebuild suppression.");
+        }
+
+        [Test]
+        public void Reconcile_TransientCreationFailureRetriesSameCatalogueCollection()
+        {
+            RetainIsolatedHostOrIgnore();
+
+            PackageManagerGitHubRepository repository = CreateRepository(
+                nodeId: "NODE-TRANSIENT-CREATION",
+                owner: "projection-tests",
+                repositoryName: "transient-creation",
+                packageName: "com.example.transientcreation",
+                displayName: "Transient Creation",
+                version: "1.0.0");
+            PackageManagerGitHubDiscoverySnapshot snapshot =
+                CreateSnapshot(repository);
+            string packageId = BuildPackageId(repository);
+            int creationAttempts = 0;
+            PackageManagerGitHubPackageProjection
+                .ProjectedPackageCreationGateForTests = (_, __) =>
+                    ++creationAttempts > 1;
+
+            Assert.That(
+                PackageManagerGitHubPackageProjection.Reconcile(
+                    packageDatabase,
+                    snapshot),
+                Is.True,
+                "A transient constructor failure must not corrupt existing Package Manager data.");
+            Assert.That(creationAttempts, Is.EqualTo(1));
+            Assert.That(FindPackage(packageId), Is.Null);
+            Assert.That(
+                PackageManagerGitHubPackageProjection
+                    .ShouldReconcileDiscoverySnapshot(snapshot),
+                Is.True,
+                "The same immutable collection must remain pending after a partial projection.");
+            Assert.That(
+                PackageManagerGitHubPackageProjection
+                    .IsProjectionRetryQueuedForTests(snapshot.Repositories),
+                Is.True,
+                "A final catalogue publish gets one coalesced delayed retry even without another status event.");
+
+            Assert.That(
+                PackageManagerGitHubPackageProjection.Reconcile(
+                    packageDatabase,
+                    snapshot),
+                Is.True);
+            Assert.That(creationAttempts, Is.EqualTo(2));
+            Assert.That(FindPackage(packageId), Is.Not.Null);
+            Assert.That(
+                PackageManagerGitHubPackageProjection
+                    .ShouldReconcileDiscoverySnapshot(snapshot),
+                Is.False,
+                "A successful retry may finally mark the exact collection complete.");
+            Assert.That(
+                PackageManagerGitHubPackageProjection
+                    .IsProjectionRetryQueuedForTests(snapshot.Repositories),
+                Is.False,
+                "A successful retry cancels its pending delayed callback.");
+            Assert.That(
+                PackageManagerGitHubPackageProjection
+                    .DidLastReconcileUpdatePackageDatabase(
+                        snapshot.Repositories),
+                Is.True);
+        }
+
+        [Test]
+        public void Reconcile_EarlyFailureAndExceptionKeepOneBoundedRetryPending()
+        {
+            RetainIsolatedHostOrIgnore();
+
+            PackageManagerGitHubRepository repository = CreateRepository(
+                nodeId: "NODE-RETRY-FAILURES",
+                owner: "projection-tests",
+                repositoryName: "retry-failures",
+                packageName: "com.example.retryfailures",
+                displayName: "Retry Failures",
+                version: "1.0.0");
+            PackageManagerGitHubDiscoverySnapshot snapshot =
+                CreateSnapshot(repository);
+
+            Assert.That(
+                PackageManagerGitHubPackageProjection.Reconcile(
+                    new object(),
+                    snapshot),
+                Is.False,
+                "An unavailable Package Database is retryable while a host remains open.");
+            Assert.That(
+                PackageManagerGitHubPackageProjection
+                    .IsProjectionRetryQueuedForTests(snapshot.Repositories),
+                Is.True);
+
+            PackageManagerGitHubPackageProjection
+                .ProjectedPackageCreationGateForTests = (_, __) =>
+                    throw new InvalidOperationException("Transient projection failure");
+            Assert.That(
+                PackageManagerGitHubPackageProjection.Reconcile(
+                    packageDatabase,
+                    snapshot),
+                Is.False,
+                "A guarded reflection exception must fail open and retain the coalesced retry.");
+            Assert.That(
+                PackageManagerGitHubPackageProjection
+                    .IsProjectionRetryQueuedForTests(snapshot.Repositories),
+                Is.True);
+
+            PackageManagerGitHubPackageProjection
+                .ProjectedPackageCreationGateForTests = null;
+            Assert.That(
+                PackageManagerGitHubPackageProjection.Reconcile(
+                    packageDatabase,
+                    snapshot),
+                Is.True);
+            Assert.That(
+                PackageManagerGitHubPackageProjection
+                    .IsProjectionRetryQueuedForTests(snapshot.Repositories),
+                Is.False);
+        }
+
+        [Test]
         public void Reconcile_ProjectsImmutableRepositoryAndPackageMetadata()
         {
             RetainIsolatedHostOrIgnore();
@@ -144,11 +387,19 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
             source.DeclaredAuthorName = "Mutated Author";
             source.DeclaredDependencies = Array.Empty<PackageManifestDependency>();
 
+            PackageManagerGitHubDiscoverySnapshot projectionSnapshot =
+                CreateSnapshot(immutableRepository);
             Assert.That(
                 PackageManagerGitHubPackageProjection.Reconcile(
                     packageDatabase,
-                    CreateSnapshot(immutableRepository)),
+                    projectionSnapshot),
                 Is.True);
+            Assert.That(
+                PackageManagerGitHubPackageProjection
+                    .DidLastReconcileUpdatePackageDatabase(
+                        projectionSnapshot.Repositories),
+                Is.True,
+                "Adding the projected package synchronously rebuilds Package Manager once.");
 
             string packageId = BuildPackageId(immutableRepository);
             object projectedPackage = FindPackage(packageId);
@@ -246,8 +497,14 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
             Assert.That(
                 PackageManagerGitHubPackageProjection.Reconcile(
                     packageDatabase,
-                    CreateSnapshot(immutableRepository)),
+                    projectionSnapshot),
                 Is.True);
+            Assert.That(
+                PackageManagerGitHubPackageProjection
+                    .DidLastReconcileUpdatePackageDatabase(
+                        projectionSnapshot.Repositories),
+                Is.False,
+                "An idempotent reconcile must not leave stale duplicate-rebuild suppression behind.");
             Assert.That(CountPackages(packageId), Is.EqualTo(1),
                 "Replaying the same immutable record must not duplicate the owned package.");
         }

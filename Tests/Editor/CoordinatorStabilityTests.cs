@@ -541,14 +541,14 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
         }
 
         [Test]
-        public void ValidPackageFilter_BatchesPageAndClassifiesManifestStates()
+        public void ValidPackageFilter_UsesSingleFullPageBatchAndClassifiesManifestStates()
         {
             var graphQlCalls = new List<CommandSpec>();
             var runner = new RecordingRunner(spec =>
             {
                 string arguments = GetArguments(spec);
                 if (arguments.Contains("user/repos"))
-                    return Success(BuildRepositoryPageJson(10));
+                    return Success(BuildRepositoryPageJson(50));
 
                 if (IsGraphQlCall(spec))
                 {
@@ -563,7 +563,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
             using var coordinator = new DiscoveryCoordinator();
 
             coordinator.LoadInitialPage();
-            TickUntil(coordinator, () => coordinator.DisplayedRepos.Count == 10);
+            TickUntil(coordinator, () => coordinator.DisplayedRepos.Count == 50);
             coordinator.SetValidPackageFilterEnabled(true);
             TickUntil(coordinator, () => !coordinator.IsValidatingPackageManifests);
 
@@ -571,16 +571,64 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
             lock (graphQlCalls)
                 calls = graphQlCalls.ToArray();
 
-            Assert.That(calls, Has.Length.EqualTo(2), "Ten repositories should use two bounded batches, not ten REST calls.");
+            Assert.That(calls, Has.Length.EqualTo(1),
+                "A normal full repository page should use one GraphQL request.");
             Assert.That(calls.All(call => call.Arguments == null), Is.True, "GraphQL requests must use tokenized argv.");
             Assert.That(calls.All(call => GetArguments(call).Contains("--hostname github.com")), Is.True);
-            Assert.That(coordinator.PackageManifestCheckTotal, Is.EqualTo(10));
-            Assert.That(coordinator.PackageManifestCheckCompleted, Is.EqualTo(10));
-            Assert.That(coordinator.DisplayedRepos.Count(repo => repo.ManifestState == PackageManifestState.Valid), Is.EqualTo(4));
-            Assert.That(coordinator.DisplayedRepos.Count(repo => repo.ManifestState == PackageManifestState.Missing), Is.EqualTo(3));
-            Assert.That(coordinator.DisplayedRepos.Count(repo => repo.ManifestState == PackageManifestState.Invalid), Is.EqualTo(3));
+            Assert.That(GetGraphQlNodeIds(calls.Single()), Has.Length.EqualTo(50));
+            Assert.That(coordinator.PackageManifestCheckTotal, Is.EqualTo(50));
+            Assert.That(coordinator.PackageManifestCheckCompleted, Is.EqualTo(50));
+            Assert.That(coordinator.DisplayedRepos.Count(repo => repo.ManifestState == PackageManifestState.Valid), Is.EqualTo(17));
+            Assert.That(coordinator.DisplayedRepos.Count(repo => repo.ManifestState == PackageManifestState.Missing), Is.EqualTo(17));
+            Assert.That(coordinator.DisplayedRepos.Count(repo => repo.ManifestState == PackageManifestState.Invalid), Is.EqualTo(16));
             Assert.That(coordinator.DisplayedRepos.Where(repo => repo.ManifestState == PackageManifestState.Valid)
                 .All(repo => repo.DeclaredPackageName.StartsWith("com.example.repo", StringComparison.Ordinal)), Is.True);
+        }
+
+        [Test]
+        public void ValidPackageFilter_TruncatedBatchBisectsUntilResponsesFit()
+        {
+            var graphQlBatchSizes = new List<int>();
+            var runner = new RecordingRunner(spec =>
+            {
+                string arguments = GetArguments(spec);
+                if (arguments.Contains("user/repos"))
+                    return Success(BuildRepositoryPageJson(10));
+
+                if (IsGraphQlCall(spec))
+                {
+                    string[] nodeIds = GetGraphQlNodeIds(spec);
+                    lock (graphQlBatchSizes)
+                        graphQlBatchSizes.Add(nodeIds.Length);
+                    if (nodeIds.Length > 3)
+                    {
+                        CommandResult truncated = Success("truncated manifest response");
+                        truncated.StdOutTruncated = true;
+                        return truncated;
+                    }
+
+                    return Success(BuildManifestGraphQlResponse(nodeIds));
+                }
+
+                return Success(string.Empty);
+            });
+            CliCommandRunner.CurrentRunner = runner;
+            using var coordinator = new DiscoveryCoordinator();
+
+            coordinator.LoadInitialPage();
+            TickUntil(coordinator, () => coordinator.DisplayedRepos.Count == 10);
+            coordinator.SetValidPackageFilterEnabled(true);
+            TickUntil(coordinator, () => !coordinator.IsValidatingPackageManifests);
+
+            int[] sizes;
+            lock (graphQlBatchSizes)
+                sizes = graphQlBatchSizes.ToArray();
+
+            Assert.That(sizes, Is.EqualTo(new[] { 10, 5, 2, 3, 5, 2, 3 }),
+                "Only oversized responses should be retried, in deterministic halves.");
+            Assert.That(coordinator.PackageManifestCheckCompleted, Is.EqualTo(10));
+            Assert.That(coordinator.PackageManifestUnavailableCount, Is.Zero);
+            Assert.That(coordinator.DisplayedRepos.All(repo => repo.PackageJsonChecked), Is.True);
         }
 
         [Test]
@@ -591,7 +639,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
             {
                 string arguments = GetArguments(spec);
                 if (arguments.Contains("user/repos"))
-                    return Success(BuildRepositoryPageJson(17));
+                    return Success(BuildRepositoryPageJson(51));
 
                 if (IsGraphQlCall(spec))
                 {
@@ -611,26 +659,125 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
             using var coordinator = new DiscoveryCoordinator();
 
             coordinator.LoadInitialPage();
-            TickUntil(coordinator, () => coordinator.DisplayedRepos.Count == 17);
+            TickUntil(coordinator, () => coordinator.DisplayedRepos.Count == 51);
             coordinator.SetValidPackageFilterEnabled(true);
             TickUntil(coordinator, () => !coordinator.IsValidatingPackageManifests);
 
             Assert.That(graphQlCallCount, Is.EqualTo(1), "A failed request must stop queued GitHub work.");
-            Assert.That(coordinator.PackageManifestUnavailableCount, Is.EqualTo(17));
+            Assert.That(coordinator.PackageManifestUnavailableCount, Is.EqualTo(51));
             Assert.That(coordinator.DisplayedRepos.All(repo =>
                 repo.PackageManifestMessage.Contains("private manifest content") == false), Is.True);
             Assert.That(coordinator.DisplayedRepos.All(repo => repo.ManifestState != PackageManifestState.Valid), Is.True);
         }
 
         [Test]
-        public void ValidPackageFilter_TruncatedSuccessfulResponseStopsRemainingBatchesAndFailsClosed()
+        public void ValidPackageFilter_SingleRepositoryTruncationIsolatedWhileSiblingsContinue()
         {
-            AssertUnusableManifestResponseStopsQueuedWork(() =>
+            var graphQlBatches = new List<string[]>();
+            var runner = new RecordingRunner(spec =>
             {
-                CommandResult result = Success("truncated private manifest content");
-                result.StdOutTruncated = true;
-                return result;
+                string arguments = GetArguments(spec);
+                if (arguments.Contains("user/repos"))
+                    return Success(BuildRepositoryPageJson(5));
+
+                if (IsGraphQlCall(spec))
+                {
+                    string[] nodeIds = GetGraphQlNodeIds(spec);
+                    lock (graphQlBatches)
+                        graphQlBatches.Add(nodeIds);
+                    if (nodeIds.Contains("R_repo_0"))
+                    {
+                        CommandResult truncated = Success(
+                            "truncated private manifest content");
+                        truncated.StdOutTruncated = true;
+                        return truncated;
+                    }
+
+                    return Success(BuildManifestGraphQlResponse(nodeIds));
+                }
+
+                return Success(string.Empty);
             });
+            CliCommandRunner.CurrentRunner = runner;
+            using var coordinator = new DiscoveryCoordinator();
+
+            coordinator.LoadInitialPage();
+            TickUntil(coordinator, () => coordinator.DisplayedRepos.Count == 5);
+            coordinator.SetValidPackageFilterEnabled(true);
+            TickUntil(coordinator, () => !coordinator.IsValidatingPackageManifests);
+
+            string[][] batches;
+            lock (graphQlBatches)
+                batches = graphQlBatches.ToArray();
+
+            Assert.That(
+                batches.Select(batch => batch.Length),
+                Is.EqualTo(new[] { 5, 2, 1, 1, 3 }),
+                "The oversized repository should be isolated before queued siblings continue.");
+            Assert.That(coordinator.PackageManifestUnavailableCount, Is.EqualTo(1));
+            Assert.That(
+                coordinator.DisplayedRepos.Single(repo => repo.NodeId == "R_repo_0")
+                    .ManifestState,
+                Is.EqualTo(PackageManifestState.Unavailable));
+            Assert.That(coordinator.DisplayedRepos
+                .Where(repo => repo.NodeId != "R_repo_0")
+                .All(repo => repo.ManifestState != PackageManifestState.Unavailable), Is.True);
+            Assert.That(coordinator.DisplayedRepos.All(repo =>
+                !repo.PackageManifestMessage.Contains("private manifest content")), Is.True);
+        }
+
+        [Test]
+        public void ValidPackageFilter_TruncationRetriesStopAtBoundedRequestBudget()
+        {
+            int graphQlCallCount = 0;
+            var runner = new RecordingRunner(spec =>
+            {
+                string arguments = GetArguments(spec);
+                if (arguments.Contains("user/repos"))
+                    return Success(BuildRepositoryPageJson(50));
+
+                if (IsGraphQlCall(spec))
+                {
+                    Interlocked.Increment(ref graphQlCallCount);
+                    CommandResult truncated = Success("truncated manifest response");
+                    truncated.StdOutTruncated = true;
+                    return truncated;
+                }
+
+                return Success(string.Empty);
+            });
+            CliCommandRunner.CurrentRunner = runner;
+            using var coordinator = new DiscoveryCoordinator();
+
+            coordinator.LoadInitialPage();
+            TickUntil(coordinator, () => coordinator.DisplayedRepos.Count == 50);
+            coordinator.SetValidPackageFilterEnabled(true);
+            TickUntil(coordinator, () => !coordinator.IsValidatingPackageManifests);
+
+            Assert.That(
+                graphQlCallCount,
+                Is.EqualTo(
+                    DiscoveryCoordinator.MaximumPackageManifestRequestsPerValidation),
+                "Truncated retries must consume the same bounded request budget as normal calls.");
+            Assert.That(coordinator.PackageManifestUnavailableCount, Is.EqualTo(50));
+            Assert.That(
+                coordinator.DisplayedRepos.All(repo =>
+                    repo.ManifestState == PackageManifestState.Unavailable),
+                Is.True,
+                "Every repository left behind by the exhausted budget must reach a fail-closed terminal state.");
+            Assert.That(
+                coordinator.DisplayedRepos.Any(repo =>
+                    repo.PackageManifestMessage.Contains("bounded GitHub request limit")),
+                Is.True,
+                "Queued repositories should explain that validation stopped at the request ceiling.");
+
+            for (int index = 0; index < 10; index++)
+                coordinator.Tick(0);
+            Assert.That(
+                graphQlCallCount,
+                Is.EqualTo(
+                    DiscoveryCoordinator.MaximumPackageManifestRequestsPerValidation),
+                "No command may start after the validation budget is exhausted.");
         }
 
         [Test]
@@ -1098,7 +1245,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
             {
                 string arguments = GetArguments(spec);
                 if (arguments.Contains("user/repos"))
-                    return Success(BuildRepositoryPageJson(17));
+                    return Success(BuildRepositoryPageJson(51));
 
                 if (IsGraphQlCall(spec))
                 {
@@ -1112,12 +1259,12 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
             using var coordinator = new DiscoveryCoordinator();
 
             coordinator.LoadInitialPage();
-            TickUntil(coordinator, () => coordinator.DisplayedRepos.Count == 17);
+            TickUntil(coordinator, () => coordinator.DisplayedRepos.Count == 51);
             coordinator.SetValidPackageFilterEnabled(true);
             TickUntil(coordinator, () => !coordinator.IsValidatingPackageManifests);
 
             Assert.That(graphQlCallCount, Is.EqualTo(1), "An unusable response must stop queued GitHub work.");
-            Assert.That(coordinator.PackageManifestUnavailableCount, Is.EqualTo(17));
+            Assert.That(coordinator.PackageManifestUnavailableCount, Is.EqualTo(51));
             Assert.That(coordinator.DisplayedRepos.All(repo => repo.ManifestState != PackageManifestState.Valid), Is.True);
         }
 

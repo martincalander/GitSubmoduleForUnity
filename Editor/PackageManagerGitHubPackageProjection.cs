@@ -41,7 +41,21 @@ namespace MartinCalander.GitSubmoduleManager.Editor
 
         private static ReflectionContract supportedContract;
         private static object lastPackageDatabase;
+        private static IReadOnlyList<PackageManagerGitHubRepository>
+            lastCompletedReconcileRepositories;
+        private static IReadOnlyList<PackageManagerGitHubRepository>
+            lastReconcileAttemptRepositories;
+        private static bool lastReconcileUpdatedPackageDatabase;
+        private static IReadOnlyList<PackageManagerGitHubRepository>
+            pendingProjectionRetryRepositories;
+        private static bool projectionRetryQueued;
+        private static bool isProjectionRetryInProgress;
         private static bool isShuttingDown;
+
+        // Deterministic failure seam for the retry contract tests. Production
+        // code leaves this null and always uses the guarded reflection factory.
+        internal static Func<string, PackageManagerGitHubRepository, bool>
+            ProjectedPackageCreationGateForTests { get; set; }
 
         static PackageManagerGitHubPackageProjection()
         {
@@ -128,6 +142,8 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         internal static bool Reconcile(
             PackageManagerGitHubDiscoverySnapshot snapshot)
         {
+            PackageManagerGitHubDiscoverySnapshot effectiveSnapshot =
+                snapshot ?? PackageManagerGitHubDiscoverySnapshot.Empty;
             // Async add/import completions may arrive after the Package Manager
             // window has closed. Never resurrect projection data without a host.
             if (!HasRetainedHosts())
@@ -136,10 +152,11 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             if (!TryGetContract(out ReflectionContract contract) ||
                 !TryResolvePackageDatabase(contract, out object packageDatabase))
             {
+                QueuePendingProjectionRetry(effectiveSnapshot.Repositories);
                 return false;
             }
 
-            return Reconcile(packageDatabase, snapshot);
+            return Reconcile(packageDatabase, effectiveSnapshot);
         }
 
         /// <summary>
@@ -150,6 +167,8 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             object packageDatabase,
             PackageManagerGitHubDiscoverySnapshot snapshot)
         {
+            PackageManagerGitHubDiscoverySnapshot effectiveSnapshot =
+                snapshot ?? PackageManagerGitHubDiscoverySnapshot.Empty;
             try
             {
                 if (!HasRetainedHosts())
@@ -159,6 +178,8 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                     !TryGetContract(out ReflectionContract contract) ||
                     !contract.PackageDatabaseType.IsInstanceOfType(packageDatabase))
                 {
+                    QueuePendingProjectionRetry(
+                        effectiveSnapshot.Repositories);
                     return false;
                 }
 
@@ -169,15 +190,49 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                     lastPackageDatabase = packageDatabase;
                 }
 
-                return ReconcileCore(
+                bool reconciled = ReconcileCore(
                     contract,
                     packageDatabase,
-                    snapshot ?? PackageManagerGitHubDiscoverySnapshot.Empty);
+                    effectiveSnapshot,
+                    out bool packageDatabaseUpdated,
+                    out bool allDesiredPackagesProjected);
+                lock (Gate)
+                {
+                    lastReconcileAttemptRepositories =
+                        effectiveSnapshot.Repositories;
+                    lastReconcileUpdatedPackageDatabase =
+                        reconciled && packageDatabaseUpdated;
+                    if (reconciled && allDesiredPackagesProjected)
+                    {
+                        lastCompletedReconcileRepositories =
+                            effectiveSnapshot.Repositories;
+                    }
+                    else if (ReferenceEquals(
+                                 lastCompletedReconcileRepositories,
+                                 effectiveSnapshot.Repositories))
+                    {
+                        // A package/submodule state change can require another
+                        // projection attempt without changing discovery identity.
+                        // Never let an older successful attempt suppress retry.
+                        lastCompletedReconcileRepositories = null;
+                    }
+                }
+
+                if (reconciled && allDesiredPackagesProjected)
+                {
+                    CancelPendingProjectionRetry(
+                        effectiveSnapshot.Repositories);
+                }
+                else
+                    QueuePendingProjectionRetry(effectiveSnapshot.Repositories);
+
+                return reconciled;
             }
             catch
             {
                 // Internal Package Manager changes fail open: native packages and
                 // the rest of the Package Manager window remain untouched.
+                QueuePendingProjectionRetry(effectiveSnapshot.Repositories);
                 return false;
             }
         }
@@ -263,7 +318,13 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 }
 
                 lock (Gate)
+                {
                     RepositoryByPackageId.Clear();
+                    lastCompletedReconcileRepositories = null;
+                    lastReconcileAttemptRepositories = null;
+                    lastReconcileUpdatedPackageDatabase = false;
+                }
+                CancelPendingProjectionRetry(null);
                 return true;
             }
             catch
@@ -275,8 +336,12 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         private static bool ReconcileCore(
             ReflectionContract contract,
             object packageDatabase,
-            PackageManagerGitHubDiscoverySnapshot snapshot)
+            PackageManagerGitHubDiscoverySnapshot snapshot,
+            out bool packageDatabaseUpdated,
+            out bool allDesiredPackagesProjected)
         {
+            packageDatabaseUpdated = false;
+            allDesiredPackagesProjected = false;
             if (!contract.TryGetAllPackages(
                     packageDatabase,
                     out List<object> allPackages))
@@ -358,6 +423,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
 
             var addOrUpdate = new List<object>();
             var successfullyBuiltIds = new HashSet<string>(StringComparer.Ordinal);
+            bool packageCreationFailed = false;
             foreach (KeyValuePair<string, PackageManagerGitHubRepository> pair in desired)
             {
                 if (existingOwned.ContainsKey(pair.Key) &&
@@ -369,11 +435,16 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                     continue;
                 }
 
-                if (!contract.TryCreateProjectedPackage(
+                Func<string, PackageManagerGitHubRepository, bool> creationGate =
+                    ProjectedPackageCreationGateForTests;
+                if ((creationGate != null &&
+                     !creationGate(pair.Key, pair.Value)) ||
+                    !contract.TryCreateProjectedPackage(
                         pair.Key,
                         pair.Value,
                         out object projectedPackage))
                 {
+                    packageCreationFailed = true;
                     continue;
                 }
 
@@ -385,10 +456,19 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 StringComparer.Ordinal);
             foreach (KeyValuePair<string, PackageManagerGitHubRepository> pair in desired)
             {
-                if (existingOwned.ContainsKey(pair.Key) ||
-                    successfullyBuiltIds.Contains(pair.Key))
+                if (successfullyBuiltIds.Contains(pair.Key))
                 {
                     nextMap[pair.Key] = pair.Value;
+                }
+                else if (existingOwned.ContainsKey(pair.Key) &&
+                         priorMap.TryGetValue(
+                             pair.Key,
+                             out PackageManagerGitHubRepository priorRepository))
+                {
+                    // If refreshing an existing placeholder failed, retain the
+                    // matching old sidecar data and leave this catalogue pending
+                    // so the next status snapshot can retry the construction.
+                    nextMap[pair.Key] = priorRepository;
                 }
             }
 
@@ -405,6 +485,10 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                     ReplaceRepositoryMap(priorMap);
                     return false;
                 }
+
+                packageDatabaseUpdated =
+                    addOrUpdate.Count != 0 || removeIds.Count != 0;
+                allDesiredPackagesProjected = !packageCreationFailed;
             }
             catch
             {
@@ -590,14 +674,183 @@ namespace MartinCalander.GitSubmoduleManager.Editor
 
         private static void OnDiscoverySnapshotChanged()
         {
-            if (HasRetainedHosts())
-                Reconcile(PackageManagerGitHubDiscovery.Current);
+            PackageManagerGitHubDiscoverySnapshot snapshot =
+                PackageManagerGitHubDiscovery.Current;
+            if (!HasRetainedHosts() ||
+                !ShouldReconcileDiscoverySnapshot(snapshot))
+            {
+                return;
+            }
+
+            Reconcile(snapshot);
         }
 
         private static void OnSubmoduleSnapshotChanged()
         {
             if (HasRetainedHosts())
                 Reconcile(PackageManagerGitHubDiscovery.Current);
+        }
+
+        internal static bool IsRepositoryCatalogueChanged(
+            IReadOnlyList<PackageManagerGitHubRepository> previousRepositories,
+            IReadOnlyList<PackageManagerGitHubRepository> currentRepositories)
+        {
+            return !ReferenceEquals(previousRepositories, currentRepositories);
+        }
+
+        internal static bool DidLastReconcileUpdatePackageDatabase(
+            IReadOnlyList<PackageManagerGitHubRepository> repositories)
+        {
+            lock (Gate)
+            {
+                return !isShuttingDown &&
+                       ReferenceEquals(
+                           lastReconcileAttemptRepositories,
+                           repositories) &&
+                       lastReconcileUpdatedPackageDatabase;
+            }
+        }
+
+        internal static bool ShouldReconcileDiscoverySnapshot(
+            PackageManagerGitHubDiscoverySnapshot snapshot)
+        {
+            IReadOnlyList<PackageManagerGitHubRepository> repositories =
+                snapshot?.Repositories ??
+                PackageManagerGitHubDiscoverySnapshot.Empty.Repositories;
+            lock (Gate)
+            {
+                return !isShuttingDown &&
+                       IsRepositoryCatalogueChanged(
+                           lastCompletedReconcileRepositories,
+                           repositories);
+            }
+        }
+
+        internal static bool ShouldRunPendingProjectionRetry(
+            IReadOnlyList<PackageManagerGitHubRepository> pendingRepositories,
+            IReadOnlyList<PackageManagerGitHubRepository> currentRepositories,
+            bool hasRetainedHosts,
+            bool shuttingDown,
+            bool reconciliationPending)
+        {
+            return !shuttingDown &&
+                   hasRetainedHosts &&
+                   reconciliationPending &&
+                   ReferenceEquals(
+                       pendingRepositories,
+                       currentRepositories);
+        }
+
+        internal static bool IsProjectionRetryQueuedForTests(
+            IReadOnlyList<PackageManagerGitHubRepository> repositories)
+        {
+            lock (Gate)
+            {
+                return projectionRetryQueued &&
+                       ReferenceEquals(
+                           pendingProjectionRetryRepositories,
+                           repositories);
+            }
+        }
+
+        private static void QueuePendingProjectionRetry(
+            IReadOnlyList<PackageManagerGitHubRepository> repositories)
+        {
+            bool queueDelayCall = false;
+            lock (Gate)
+            {
+                if (isShuttingDown ||
+                    RetainedHosts.Count == 0 ||
+                    isProjectionRetryInProgress)
+                {
+                    return;
+                }
+
+                if (ReferenceEquals(
+                        lastCompletedReconcileRepositories,
+                        repositories))
+                {
+                    // An early reflection/database failure can happen after this
+                    // same catalogue was previously projected for older package
+                    // state. Make the delayed exact-collection retry eligible.
+                    lastCompletedReconcileRepositories = null;
+                }
+
+                pendingProjectionRetryRepositories = repositories;
+                if (!projectionRetryQueued)
+                {
+                    projectionRetryQueued = true;
+                    queueDelayCall = true;
+                }
+            }
+
+            if (queueDelayCall)
+                EditorApplication.delayCall += RetryPendingProjection;
+        }
+
+        private static void CancelPendingProjectionRetry(
+            IReadOnlyList<PackageManagerGitHubRepository> repositories)
+        {
+            bool removeDelayCall;
+            lock (Gate)
+            {
+                if (repositories != null &&
+                    !ReferenceEquals(
+                        pendingProjectionRetryRepositories,
+                        repositories))
+                {
+                    return;
+                }
+
+                removeDelayCall = projectionRetryQueued;
+                projectionRetryQueued = false;
+                pendingProjectionRetryRepositories = null;
+            }
+
+            if (removeDelayCall)
+                EditorApplication.delayCall -= RetryPendingProjection;
+        }
+
+        private static void RetryPendingProjection()
+        {
+            EditorApplication.delayCall -= RetryPendingProjection;
+            IReadOnlyList<PackageManagerGitHubRepository> pendingRepositories;
+            bool hasRetainedHosts;
+            bool shuttingDown;
+            lock (Gate)
+            {
+                projectionRetryQueued = false;
+                pendingRepositories = pendingProjectionRetryRepositories;
+                pendingProjectionRetryRepositories = null;
+                hasRetainedHosts = RetainedHosts.Count != 0;
+                shuttingDown = isShuttingDown;
+                isProjectionRetryInProgress = true;
+            }
+
+            try
+            {
+                PackageManagerGitHubDiscoverySnapshot snapshot =
+                    PackageManagerGitHubDiscovery.Current;
+                IReadOnlyList<PackageManagerGitHubRepository> currentRepositories =
+                    snapshot?.Repositories ??
+                    PackageManagerGitHubDiscoverySnapshot.Empty.Repositories;
+                if (!ShouldRunPendingProjectionRetry(
+                        pendingRepositories,
+                        currentRepositories,
+                        hasRetainedHosts,
+                        shuttingDown,
+                        ShouldReconcileDiscoverySnapshot(snapshot)))
+                {
+                    return;
+                }
+
+                Reconcile(snapshot);
+            }
+            finally
+            {
+                lock (Gate)
+                    isProjectionRetryInProgress = false;
+            }
         }
 
         private static bool HasRetainedHosts()
@@ -645,6 +898,13 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 RetainedHosts.Clear();
                 RepositoryByPackageId.Clear();
                 lastPackageDatabase = null;
+                lastCompletedReconcileRepositories = null;
+                lastReconcileAttemptRepositories = null;
+                lastReconcileUpdatedPackageDatabase = false;
+                pendingProjectionRetryRepositories = null;
+                projectionRetryQueued = false;
+                isProjectionRetryInProgress = false;
+                ProjectedPackageCreationGateForTests = null;
             }
 
             PackageManagerGitHubDiscovery.SnapshotChanged -= OnDiscoverySnapshotChanged;
@@ -652,6 +912,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             AssemblyReloadEvents.beforeAssemblyReload -= OnBeforeAssemblyReload;
             EditorApplication.quitting -= OnEditorQuitting;
             EditorApplication.delayCall -= PurgeStalePackagesOnStartup;
+            EditorApplication.delayCall -= RetryPendingProjection;
         }
 
         private static bool TryGetContract(out ReflectionContract contract)

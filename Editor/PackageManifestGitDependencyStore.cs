@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Text;
@@ -111,14 +112,79 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         private static readonly byte[] Utf8Bom = { 0xEF, 0xBB, 0xBF };
         private static readonly Encoding StrictUtf8 = new UTF8Encoding(false, true);
         private static readonly object MutationGate = new object();
+        private static readonly object ReadCacheGate = new object();
+        private static readonly StringComparer PathComparer =
+            Path.DirectorySeparatorChar == '\\'
+                ? StringComparer.OrdinalIgnoreCase
+                : StringComparer.Ordinal;
+        private static readonly Dictionary<string, ManifestDependencyIndex>
+            ReadCache = new Dictionary<string, ManifestDependencyIndex>(PathComparer);
+        private const int MaximumReadCacheEntries = 32;
+        private static int readIndexBuildCount;
+        private static int readCacheGeneration;
+
+        private struct ManifestFileStamp : IEquatable<ManifestFileStamp>
+        {
+            internal long Length;
+            internal long LastWriteUtcTicks;
+            internal long CreationUtcTicks;
+
+            public bool Equals(ManifestFileStamp other)
+            {
+                return Length == other.Length &&
+                       LastWriteUtcTicks == other.LastWriteUtcTicks &&
+                       CreationUtcTicks == other.CreationUtcTicks;
+            }
+        }
+
+        private sealed class ManifestDependencyIndex
+        {
+            internal ManifestFileStamp Stamp;
+            internal Dictionary<string, string> Specs =
+                new Dictionary<string, string>(StringComparer.Ordinal);
+            internal HashSet<string> NonStringDependencyNames =
+                new HashSet<string>(StringComparer.Ordinal);
+            internal bool IsValid;
+            internal string Error = string.Empty;
+        }
 
         // Tests use this to make a manifest edit after the optimistic read but
         // immediately before the atomic replace. Production code never assigns
         // this hook.
         internal static Action<string> BeforeInitialAtomicReplaceForTests { get; set; }
 
+        // Tests use this to simulate a transient presentation-read failure
+        // without changing the manifest stamp. Production code never assigns
+        // this hook.
+        internal static Func<string, string> CachedReadFailureForTests { get; set; }
+
         internal static string ManifestPath =>
             Path.Combine(GitUtility.ProjectRoot, "Packages", "manifest.json");
+
+        internal static int ReadIndexBuildCountForTests
+        {
+            get
+            {
+                lock (ReadCacheGate)
+                    return readIndexBuildCount;
+            }
+        }
+
+        internal static void ResetReadCacheForTests()
+        {
+            lock (ReadCacheGate)
+            {
+                ReadCache.Clear();
+                readIndexBuildCount = 0;
+                readCacheGeneration++;
+                CachedReadFailureForTests = null;
+            }
+        }
+
+        internal static void InvalidateProjectReadCache()
+        {
+            InvalidateReadCache(ManifestPath);
+        }
 
         internal static bool TryGetProjectDependency(
             string packageName,
@@ -126,6 +192,22 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             out string error)
         {
             return TryGetDependencyAtPath(
+                ManifestPath,
+                packageName,
+                out dependency,
+                out error);
+        }
+
+        // Package Manager may classify many rows in one refresh. This
+        // presentation-only path reuses one bounded manifest dependency index;
+        // install/conversion validation continues to use the uncached method
+        // above so safety decisions always re-read the manifest bytes.
+        internal static bool TryGetProjectDependencyForPresentation(
+            string packageName,
+            out PackageManifestGitDependency dependency,
+            out string error)
+        {
+            return TryGetCachedDependencyAtPath(
                 ManifestPath,
                 packageName,
                 out dependency,
@@ -146,23 +228,95 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             if (!TryReadDocument(manifestPath, out ManifestDocument document, out error))
                 return false;
 
-            if (!TryGetDependencies(document.Root, false, out JObject dependencies, out error))
+            if (!TryGetDependencies(
+                    document.Root,
+                    false,
+                    false,
+                    out JObject dependencies,
+                    out error))
                 return false;
 
             JProperty property = dependencies.Property(packageName, StringComparison.Ordinal);
+            if (property != null && property.Value.Type != JTokenType.String)
+            {
+                error = $"The direct dependency entry for {packageName} is not a string.";
+                return false;
+            }
+
+            // Keep malformed manifests fail-closed even when the requested
+            // entry itself is a string or is absent.
+            if (dependencies.Properties().Any(
+                    item => item.Value.Type != JTokenType.String))
+            {
+                error = "Every Packages/manifest.json dependency value must be a string.";
+                return false;
+            }
+
             if (property == null)
             {
                 error = $"{packageName} is not declared as a direct project dependency.";
                 return false;
             }
 
-            if (property.Value.Type != JTokenType.String)
+            return TryCreateDependency(
+                packageName,
+                property.Value.Value<string>() ?? string.Empty,
+                out dependency,
+                out error);
+        }
+
+        internal static bool TryGetCachedDependencyAtPath(
+            string manifestPath,
+            string packageName,
+            out PackageManifestGitDependency dependency,
+            out string error)
+        {
+            dependency = null;
+            error = ValidatePackageName(packageName);
+            if (!string.IsNullOrEmpty(error))
+                return false;
+
+            if (!TryGetDependencyIndex(
+                    manifestPath,
+                    out ManifestDependencyIndex index,
+                    out error))
+                return false;
+
+            if (index.NonStringDependencyNames.Contains(packageName))
             {
                 error = $"The direct dependency entry for {packageName} is not a string.";
                 return false;
             }
 
-            string spec = property.Value.Value<string>() ?? string.Empty;
+            // Preserve the manifest-wide validation performed by the previous
+            // implementation. A malformed value for any other dependency must
+            // not make the rest of a malformed manifest look valid.
+            if (index.NonStringDependencyNames.Count != 0)
+            {
+                error = "Every Packages/manifest.json dependency value must be a string.";
+                return false;
+            }
+
+            if (!index.Specs.TryGetValue(packageName, out string spec))
+            {
+                error = $"{packageName} is not declared as a direct project dependency.";
+                return false;
+            }
+
+            return TryCreateDependency(
+                packageName,
+                spec,
+                out dependency,
+                out error);
+        }
+
+        private static bool TryCreateDependency(
+            string packageName,
+            string spec,
+            out PackageManifestGitDependency dependency,
+            out string error)
+        {
+            dependency = null;
             if (!TryParseGitSpec(
                     spec,
                     out string repositoryUrl,
@@ -181,6 +335,200 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 revision,
                 packageSubfolder);
             return true;
+        }
+
+        private static bool TryGetDependencyIndex(
+            string manifestPath,
+            out ManifestDependencyIndex index,
+            out string error)
+        {
+            index = null;
+            if (!TryGetManifestFileStamp(
+                    manifestPath,
+                    out string fullPath,
+                    out ManifestFileStamp initialStamp,
+                    out error))
+            {
+                InvalidateReadCache(manifestPath);
+                return false;
+            }
+
+            int generation;
+            lock (ReadCacheGate)
+            {
+                if (ReadCache.TryGetValue(fullPath, out ManifestDependencyIndex cached) &&
+                    cached != null &&
+                    cached.Stamp.Equals(initialStamp))
+                {
+                    index = cached;
+                    error = cached.Error;
+                    return cached.IsValid;
+                }
+
+                if (cached != null)
+                {
+                    ReadCache.Remove(fullPath);
+                    readCacheGeneration++;
+                }
+
+                generation = readCacheGeneration;
+            }
+
+            var candidate = new ManifestDependencyIndex
+            {
+                Stamp = initialStamp
+            };
+
+            ManifestDocument document = null;
+            string injectedReadFailure =
+                CachedReadFailureForTests?.Invoke(fullPath) ?? string.Empty;
+            bool readSucceeded;
+            if (!string.IsNullOrWhiteSpace(injectedReadFailure))
+            {
+                error = injectedReadFailure;
+                readSucceeded = false;
+            }
+            else
+            {
+                readSucceeded = TryReadDocument(fullPath, out document, out error);
+            }
+
+            if (readSucceeded)
+            {
+                readSucceeded = TryGetDependencies(
+                    document.Root,
+                    false,
+                    false,
+                    out JObject dependencies,
+                    out error);
+                if (readSucceeded)
+                {
+                    foreach (JProperty property in dependencies.Properties())
+                    {
+                        if (property.Value.Type == JTokenType.String)
+                        {
+                            candidate.Specs.Add(
+                                property.Name,
+                                property.Value.Value<string>() ?? string.Empty);
+                        }
+                        else
+                        {
+                            candidate.NonStringDependencyNames.Add(property.Name);
+                        }
+                    }
+                }
+            }
+
+            if (!TryGetManifestFileStamp(
+                    fullPath,
+                    out _,
+                    out ManifestFileStamp finalStamp,
+                    out string finalStampError) ||
+                !initialStamp.Equals(finalStamp))
+            {
+                index = null;
+                error = string.IsNullOrWhiteSpace(finalStampError)
+                    ? "Packages/manifest.json changed while its dependency index was being built."
+                    : finalStampError;
+                return false;
+            }
+
+            // A failed read or parse can be transient (for example, a Windows
+            // sharing violation while another process briefly owns the file).
+            // Fail this lookup closed, but do not retain that failure for an
+            // otherwise unchanged stamp; the next presentation lookup may retry.
+            if (!readSucceeded)
+            {
+                index = null;
+                return false;
+            }
+
+            candidate.IsValid = true;
+            candidate.Error = string.Empty;
+            lock (ReadCacheGate)
+            {
+                if (generation != readCacheGeneration)
+                {
+                    index = null;
+                    error =
+                        "Packages/manifest.json changed while its dependency index was being built.";
+                    return false;
+                }
+
+                readIndexBuildCount++;
+                if (ReadCache.Count >= MaximumReadCacheEntries &&
+                    !ReadCache.ContainsKey(fullPath))
+                {
+                    ReadCache.Clear();
+                }
+
+                ReadCache[fullPath] = candidate;
+            }
+
+            index = candidate;
+            error = candidate.Error;
+            return candidate.IsValid;
+        }
+
+        private static bool TryGetManifestFileStamp(
+            string manifestPath,
+            out string fullPath,
+            out ManifestFileStamp stamp,
+            out string error)
+        {
+            stamp = default(ManifestFileStamp);
+            if (!TryResolveManifestPath(manifestPath, out fullPath, out error))
+                return false;
+
+            try
+            {
+                var fileInfo = new FileInfo(fullPath);
+                fileInfo.Refresh();
+                if (!fileInfo.Exists || fileInfo.Length > MaximumManifestByteCount)
+                {
+                    error = !fileInfo.Exists
+                        ? "Packages/manifest.json does not exist."
+                        : "Packages/manifest.json exceeds the 2 MiB safety limit.";
+                    return false;
+                }
+
+                stamp = new ManifestFileStamp
+                {
+                    Length = fileInfo.Length,
+                    LastWriteUtcTicks = fileInfo.LastWriteTimeUtc.Ticks,
+                    CreationUtcTicks = fileInfo.CreationTimeUtc.Ticks
+                };
+                return true;
+            }
+            catch (Exception exception)
+            {
+                error = SanitizeFileError(
+                    "Packages/manifest.json could not be inspected safely: ",
+                    exception);
+                return false;
+            }
+        }
+
+        private static void InvalidateReadCache(string manifestPath)
+        {
+            if (string.IsNullOrWhiteSpace(manifestPath))
+                return;
+
+            string fullPath;
+            try
+            {
+                fullPath = Path.GetFullPath(manifestPath);
+            }
+            catch
+            {
+                return;
+            }
+
+            lock (ReadCacheGate)
+            {
+                ReadCache.Remove(fullPath);
+                readCacheGeneration++;
+            }
         }
 
         internal static bool TryAddDependency(
@@ -687,6 +1035,11 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             }
             finally
             {
+                // Any compare-and-swap attempt may have observed, installed, or
+                // restored different manifest bytes. Never retain an index
+                // across that boundary, including uncertain recovery paths.
+                InvalidateReadCache(fullPath);
+
                 // The replacement file contains only bytes created by this
                 // operation. File.Replace consumes it on success.
                 TryDeleteKnownFile(temporaryPath, replacementBytes);
@@ -955,6 +1308,21 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             out JObject dependencies,
             out string error)
         {
+            return TryGetDependencies(
+                root,
+                createIfMissing,
+                true,
+                out dependencies,
+                out error);
+        }
+
+        private static bool TryGetDependencies(
+            JObject root,
+            bool createIfMissing,
+            bool requireStringValues,
+            out JObject dependencies,
+            out string error)
+        {
             dependencies = null;
             error = string.Empty;
             JProperty property = root.Property(
@@ -986,7 +1354,8 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 return false;
             }
 
-            if (dependencies.Properties().Any(item => item.Value.Type != JTokenType.String))
+            if (requireStringValues &&
+                dependencies.Properties().Any(item => item.Value.Type != JTokenType.String))
             {
                 error = "Every Packages/manifest.json dependency value must be a string.";
                 return false;

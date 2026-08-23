@@ -54,6 +54,12 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         private static bool shuttingDown;
         private static bool patchRequested = true;
         private static bool presentationRefreshQueued;
+        private static bool presentationRebuildQueued;
+        private static bool forcedPresentationRebuildQueued;
+        private static bool allPackageManagerPagesRefreshQueued;
+        private static IReadOnlyList<PackageManagerGitHubRepository>
+            observedRepositories =
+                PackageManagerGitHubDiscovery.Current.Repositories;
         private static double nextAttempt;
 
         static PackageManagerGitHubNativePresentationPatch()
@@ -62,7 +68,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             PackageManagerGitHubDiscovery.SnapshotChanged +=
                 OnDiscoverySnapshotChanged;
             PackageManagerSubmoduleSnapshot.SnapshotChanged +=
-                OnDiscoverySnapshotChanged;
+                OnSubmoduleSnapshotChanged;
             AssemblyReloadEvents.beforeAssemblyReload += OnBeforeAssemblyReload;
             EditorApplication.update += RetryOnUpdate;
             EditorApplication.delayCall += TryPatchDelayed;
@@ -1011,7 +1017,12 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                     return;
 
                 PackageManagerSubmoduleNativePage.TryConfigureFilters(__0);
-                PackageManagerSubmoduleSnapshot.Refresh();
+                // Refreshing the remote catalogue must not invalidate or start a
+                // reader for the last known-good installed-submodule snapshot.
+                // That snapshot already follows package registration, project,
+                // repository-generation, and .gitmodules changes. Keeping the
+                // two lifecycles independent leaves safe uninstall actions usable
+                // throughout a potentially long GitHub discovery refresh.
                 if (!PackageManagerGitHubDiscovery.IsStarted)
                     PackageManagerGitHubDiscovery.EnsureStarted();
                 else if (!PackageManagerGitHubDiscovery.IsLoading)
@@ -1031,7 +1042,9 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                     return;
 
                 PackageManagerSubmoduleNativePage.TryConfigureFilters(__0);
-                PackageManagerSubmoduleSnapshot.Refresh();
+                // Static snapshot initialization already schedules the first
+                // installed-package scan. Re-entering Sources > GitHub should not
+                // restart that reader or disable uninstall while repositories load.
                 PackageManagerGitHubDiscovery.EnsureStarted();
             }
             catch
@@ -1197,16 +1210,98 @@ namespace MartinCalander.GitSubmoduleManager.Editor
 
         private static void OnDiscoverySnapshotChanged()
         {
-            if (shuttingDown || presentationRefreshQueued)
+            PackageManagerGitHubDiscoverySnapshot snapshot =
+                PackageManagerGitHubDiscovery.Current;
+            IReadOnlyList<PackageManagerGitHubRepository> repositories =
+                snapshot?.Repositories ??
+                PackageManagerGitHubDiscoverySnapshot.Empty.Repositories;
+            bool shouldRebuild = ShouldRebuildPageForSnapshot(
+                observedRepositories,
+                repositories,
+                false);
+            observedRepositories = repositories;
+            QueuePresentationRefresh(shouldRebuild, false, false);
+        }
+
+        private static void OnSubmoduleSnapshotChanged()
+        {
+            QueuePresentationRefresh(true, true, false);
+        }
+
+        /// <summary>
+        /// Queues one post-event rebuild after package registration state changes.
+        /// Unity does not define subscriber order for registeredPackages, so the
+        /// native page must refresh after every subscriber has observed the event
+        /// rather than relying on our cache invalidation callback running first.
+        /// </summary>
+        internal static void QueueForcedPackageStateRefresh()
+        {
+            QueuePresentationRefresh(true, true, true);
+        }
+
+        internal static bool ShouldRebuildPageForSnapshot(
+            IReadOnlyList<PackageManagerGitHubRepository> previousRepositories,
+            IReadOnlyList<PackageManagerGitHubRepository> currentRepositories,
+            bool submoduleSnapshotChanged)
+        {
+            return submoduleSnapshotChanged ||
+                   PackageManagerGitHubPackageProjection
+                       .IsRepositoryCatalogueChanged(
+                           previousRepositories,
+                           currentRepositories);
+        }
+
+        internal static bool ShouldExplicitlyRebuildPage(
+            bool presentationRequiresRebuild,
+            bool packageDatabaseAlreadyRebuilt,
+            bool forceExplicitRebuild)
+        {
+            return presentationRequiresRebuild &&
+                   (forceExplicitRebuild ||
+                    !packageDatabaseAlreadyRebuilt);
+        }
+
+        private static void QueuePresentationRefresh(
+            bool shouldRebuild,
+            bool forceExplicitRebuild,
+            bool refreshAllPackageManagerPages)
+        {
+            if (shuttingDown)
+                return;
+
+            presentationRebuildQueued |= shouldRebuild;
+            forcedPresentationRebuildQueued |= forceExplicitRebuild;
+            allPackageManagerPagesRefreshQueued |=
+                refreshAllPackageManagerPages;
+            if (presentationRefreshQueued)
                 return;
 
             presentationRefreshQueued = true;
-            EditorApplication.delayCall += RefreshOpenGitHubPages;
+            EditorApplication.delayCall += RefreshOpenPackageManagerPages;
         }
 
-        private static void RefreshOpenGitHubPages()
+        private static void RefreshOpenPackageManagerPages()
         {
+            bool shouldRebuild = presentationRebuildQueued;
+            bool forceExplicitRebuild =
+                forcedPresentationRebuildQueued;
+            bool refreshAllPackageManagerPages =
+                allPackageManagerPagesRefreshQueued;
+            IReadOnlyList<PackageManagerGitHubRepository> repositories =
+                PackageManagerGitHubDiscovery.Current.Repositories;
+            bool packageDatabaseAlreadyRebuilt =
+                shouldRebuild &&
+                !forceExplicitRebuild &&
+                PackageManagerGitHubPackageProjection
+                    .DidLastReconcileUpdatePackageDatabase(repositories);
+            bool shouldExplicitlyRebuild = ShouldExplicitlyRebuildPage(
+                shouldRebuild,
+                packageDatabaseAlreadyRebuilt,
+                forceExplicitRebuild);
             presentationRefreshQueued = false;
+            presentationRebuildQueued = false;
+            forcedPresentationRebuildQueued = false;
+            allPackageManagerPagesRefreshQueued = false;
             if (shuttingDown)
                 return;
 
@@ -1226,18 +1321,33 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                     object root = GetFieldValue(window, "m_Root");
                     object pageManager = GetFieldValue(root, "m_PageManager");
                     object activePage = GetPropertyValue(pageManager, "activePage");
-                    if (!IsGitHubPage(activePage))
+                    bool isGitHubPage = IsGitHubPage(activePage);
+                    if (!isGitHubPage && !refreshAllPackageManagerPages)
                         continue;
 
-                    PackageManagerSubmoduleNativePage.TryConfigureFilters(
-                        activePage);
-                    PackageManagerSubmoduleHarmonyPatch.TryRebuildPackageManagerWindow(
-                        window);
-                    // Rebuild refreshes visualStates. Read its final organization
-                    // groups as a fallback for installed packages that are not in
-                    // the current discovery catalogue.
-                    PackageManagerSubmoduleNativePage.TryConfigureFilters(
-                        activePage);
+                    if (shouldRebuild)
+                    {
+                        if (shouldExplicitlyRebuild)
+                        {
+                            if (isGitHubPage)
+                            {
+                                PackageManagerSubmoduleNativePage.TryConfigureFilters(
+                                    activePage);
+                            }
+                            PackageManagerSubmoduleHarmonyPatch
+                                .TryRebuildPackageManagerWindow(window);
+                        }
+
+                        // PackageDatabase.UpdatePackages and an explicit rebuild both
+                        // refresh visualStates. Read the final organization groups as
+                        // a fallback for installed packages absent from discovery.
+                        if (isGitHubPage)
+                        {
+                            PackageManagerSubmoduleNativePage.TryConfigureFilters(
+                                activePage);
+                        }
+                    }
+
                     object statusBar = GetPropertyValue(root, "packageStatusbar");
                     statusUpdate?.Invoke(statusBar, null);
                     window.rootVisualElement?.MarkDirtyRepaint();
@@ -1269,7 +1379,9 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                     if (!IsGitHubPage(GetPropertyValue(pageManager, "activePage")))
                         continue;
 
-                    PackageManagerSubmoduleSnapshot.Refresh();
+                    // Discovery startup is intentionally independent from the
+                    // installed-submodule reader; the latter initialized itself
+                    // and watches every installed-state invalidation source.
                     PackageManagerGitHubDiscovery.EnsureStarted();
                 }
             }
@@ -1332,11 +1444,11 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         {
             shuttingDown = true;
             EditorApplication.update -= RetryOnUpdate;
-            EditorApplication.delayCall -= RefreshOpenGitHubPages;
+            EditorApplication.delayCall -= RefreshOpenPackageManagerPages;
             PackageManagerGitHubDiscovery.SnapshotChanged -=
                 OnDiscoverySnapshotChanged;
             PackageManagerSubmoduleSnapshot.SnapshotChanged -=
-                OnDiscoverySnapshotChanged;
+                OnSubmoduleSnapshotChanged;
             AppDomain.CurrentDomain.AssemblyLoad -= OnAssemblyLoad;
             AssemblyReloadEvents.beforeAssemblyReload -= OnBeforeAssemblyReload;
             try

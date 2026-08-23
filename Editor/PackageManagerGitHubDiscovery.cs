@@ -64,6 +64,50 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         internal string LicensesUrl { get; }
         internal IReadOnlyList<PackageManifestDependency> Dependencies { get; }
         internal string PackageManifestBlobOid { get; }
+
+        internal bool HasSameContent(PackageManagerGitHubRepository other)
+        {
+            if (other == null ||
+                !string.Equals(NodeId, other.NodeId, StringComparison.Ordinal) ||
+                !string.Equals(Name, other.Name, StringComparison.Ordinal) ||
+                !string.Equals(Owner, other.Owner, StringComparison.Ordinal) ||
+                !string.Equals(Url, other.Url, StringComparison.Ordinal) ||
+                !string.Equals(DefaultBranch, other.DefaultBranch, StringComparison.Ordinal) ||
+                IsPrivate != other.IsPrivate ||
+                !string.Equals(Description, other.Description, StringComparison.Ordinal) ||
+                !string.Equals(UpdatedAt, other.UpdatedAt, StringComparison.Ordinal) ||
+                !string.Equals(PackageName, other.PackageName, StringComparison.Ordinal) ||
+                !string.Equals(DisplayName, other.DisplayName, StringComparison.Ordinal) ||
+                !string.Equals(Version, other.Version, StringComparison.Ordinal) ||
+                !string.Equals(PackageDescription, other.PackageDescription, StringComparison.Ordinal) ||
+                !string.Equals(MinimumUnityVersion, other.MinimumUnityVersion, StringComparison.Ordinal) ||
+                !string.Equals(AuthorName, other.AuthorName, StringComparison.Ordinal) ||
+                !string.Equals(DocumentationUrl, other.DocumentationUrl, StringComparison.Ordinal) ||
+                !string.Equals(ChangelogUrl, other.ChangelogUrl, StringComparison.Ordinal) ||
+                !string.Equals(LicensesUrl, other.LicensesUrl, StringComparison.Ordinal) ||
+                !string.Equals(
+                    PackageManifestBlobOid,
+                    other.PackageManifestBlobOid,
+                    StringComparison.Ordinal) ||
+                Dependencies.Count != other.Dependencies.Count)
+            {
+                return false;
+            }
+
+            for (int index = 0; index < Dependencies.Count; index++)
+            {
+                PackageManifestDependency left = Dependencies[index];
+                PackageManifestDependency right = other.Dependencies[index];
+                if (left == null || right == null ||
+                    !string.Equals(left.Name, right.Name, StringComparison.Ordinal) ||
+                    !string.Equals(left.Version, right.Version, StringComparison.Ordinal))
+                {
+                    return false;
+                }
+            }
+
+            return true;
+        }
     }
 
     /// <summary>
@@ -97,7 +141,8 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             int totalOwners,
             int unavailableManifestCount,
             long revision,
-            string coverageWarningMessage = "")
+            string coverageWarningMessage = "",
+            bool isShowingRetainedRepositories = false)
         {
             Repositories = repositories ?? EmptyRepositories;
             IsLoading = isLoading;
@@ -109,6 +154,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             UnavailableManifestCount = unavailableManifestCount;
             Revision = revision;
             CoverageWarningMessage = coverageWarningMessage ?? string.Empty;
+            IsShowingRetainedRepositories = isShowingRetainedRepositories;
         }
 
         internal IReadOnlyList<PackageManagerGitHubRepository> Repositories { get; }
@@ -120,6 +166,12 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         internal int TotalOwners { get; }
         internal int UnavailableManifestCount { get; }
         internal long Revision { get; }
+        /// <summary>
+        /// True while a refresh presents the last completed catalogue instead
+        /// of exposing an incomplete replacement catalogue.
+        /// </summary>
+        internal bool IsShowingRetainedRepositories { get; }
+
         /// <summary>
         /// A terminal discovery can still be usable for presentation while not
         /// being complete enough to prove that a package is absent. For example,
@@ -137,6 +189,11 @@ namespace MartinCalander.GitSubmoduleManager.Editor
     [InitializeOnLoad]
     internal static class PackageManagerGitHubDiscovery
     {
+        // A failed or unusually slow refresh must not make installed packages
+        // disappear immediately, but stale repository authorization and
+        // metadata must not be presented indefinitely either.
+        internal const double RetainedCatalogueDurationSeconds = 15d * 60d;
+
         private enum CataloguePhase
         {
             Idle,
@@ -176,6 +233,16 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         private static int totalOwners;
         private static int unavailableManifestCount;
         private static long revision;
+        // Downstream projection treats collection identity as the catalogue
+        // revision. Status-only snapshots reuse this immutable instance so a
+        // spinner/status update cannot trigger a full Package Manager rebuild.
+        private static IReadOnlyList<PackageManagerGitHubRepository>
+            publishedRepositories = PackageManagerGitHubDiscoverySnapshot.Empty.Repositories;
+        private static IReadOnlyList<PackageManagerGitHubRepository>
+            lastSuccessfulRepositories = PackageManagerGitHubDiscoverySnapshot.Empty.Repositories;
+        private static bool repositoriesDirty;
+        private static bool isShowingRetainedRepositories;
+        private static double retainedCatalogueExpiresAt;
 
         internal static event Action SnapshotChanged;
 
@@ -240,6 +307,37 @@ namespace MartinCalander.GitSubmoduleManager.Editor
 
         private static void BeginRefresh()
         {
+            double currentTime = EditorApplication.timeSinceStartup;
+            if (isShowingRetainedRepositories &&
+                currentTime >= retainedCatalogueExpiresAt)
+            {
+                isShowingRetainedRepositories = false;
+                retainedCatalogueExpiresAt = 0d;
+            }
+
+            bool canRetainPublishedCatalogue =
+                publishedRepositories.Count > 0 &&
+                ReferenceEquals(publishedRepositories, lastSuccessfulRepositories) &&
+                (isShowingRetainedRepositories ||
+                 (phase == CataloguePhase.Complete && HasCompleteCoverage()));
+
+            if (canRetainPublishedCatalogue)
+            {
+                if (!isShowingRetainedRepositories ||
+                    retainedCatalogueExpiresAt <= currentTime)
+                {
+                    retainedCatalogueExpiresAt =
+                        currentTime + RetainedCatalogueDurationSeconds;
+                }
+
+                isShowingRetainedRepositories = true;
+            }
+            else
+            {
+                isShowingRetainedRepositories = false;
+                retainedCatalogueExpiresAt = 0d;
+            }
+
             DisposeCoordinator();
             ResetAggregation();
 
@@ -253,7 +351,8 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             awaitingPageResult = true;
             pageProcessed = false;
             totalOwners = 1;
-            statusMessage = "Loading repositories for the authenticated GitHub account...";
+            statusMessage = WithRetentionNotice(
+                "Loading repositories for the authenticated GitHub account...");
             PublishSnapshot();
         }
 
@@ -268,7 +367,13 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         /// </summary>
         internal static void Tick(double currentTime)
         {
-            if (!isStarted || !isLoading || coordinator == null || isShuttingDown)
+            if (!isStarted || isShuttingDown)
+                return;
+
+            if (ReleaseRetainedCatalogueIfExpired(currentTime))
+                PublishSnapshot();
+
+            if (!isLoading || coordinator == null)
                 return;
 
             try
@@ -415,6 +520,18 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 : string.Empty;
             string organizationWarning = coordinator?.WarningMessage;
             coverageWarningMessage = organizationWarning ?? string.Empty;
+            bool hasCompleteCoverage = HasCompleteCoverage();
+            bool canKeepRetainedCatalogue =
+                !hasCompleteCoverage &&
+                isShowingRetainedRepositories &&
+                EditorApplication.timeSinceStartup < retainedCatalogueExpiresAt &&
+                ReferenceEquals(publishedRepositories, lastSuccessfulRepositories);
+            if (!canKeepRetainedCatalogue)
+            {
+                isShowingRetainedRepositories = false;
+                retainedCatalogueExpiresAt = 0d;
+            }
+
             string warningSuffix = string.IsNullOrWhiteSpace(organizationWarning)
                 ? string.Empty
                 : " " + organizationWarning.Trim();
@@ -422,7 +539,24 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 $"Found {Repositories.Count} valid UPM packages across " +
                 $"{completedOwners} GitHub owners and {completedPages} pages." +
                 unavailableSuffix + warningSuffix;
-            PublishSnapshot();
+            if (canKeepRetainedCatalogue)
+            {
+                statusMessage +=
+                    " Previously loaded packages remain available temporarily " +
+                    "because refresh coverage was incomplete.";
+            }
+
+            // Only a warning-free catalogue with complete owner and manifest
+            // coverage may become the next stale-while-revalidate baseline.
+            PublishSnapshot(markSuccessfulCatalogue: hasCompleteCoverage);
+        }
+
+        private static bool HasCompleteCoverage()
+        {
+            return unavailableManifestCount == 0 &&
+                   string.IsNullOrWhiteSpace(coverageWarningMessage) &&
+                   totalOwners > 0 &&
+                   completedOwners >= totalOwners;
         }
 
         private static void Fail(string message)
@@ -430,11 +564,42 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             phase = CataloguePhase.Failed;
             isLoading = false;
             errorMessage = GitHubUtility.SanitizeUiDiagnostic(message);
-            statusMessage = Repositories.Count == 0
+            statusMessage = isShowingRetainedRepositories
+                ? "Repository refresh stopped; previously loaded packages remain " +
+                  "available temporarily."
+                : Repositories.Count == 0
                 ? "GitHub package discovery did not complete."
                 : $"Discovery stopped after finding {Repositories.Count} valid UPM packages.";
             DisposeCoordinator();
             PublishSnapshot();
+        }
+
+        private static bool ReleaseRetainedCatalogueIfExpired(double currentTime)
+        {
+            if (!isShowingRetainedRepositories ||
+                currentTime < retainedCatalogueExpiresAt)
+            {
+                return false;
+            }
+
+            isShowingRetainedRepositories = false;
+            retainedCatalogueExpiresAt = 0d;
+            if (phase == CataloguePhase.Failed)
+            {
+                statusMessage = Repositories.Count == 0
+                    ? "Repository refresh failed; previously loaded packages expired."
+                    : $"Repository refresh failed after validating {Repositories.Count} packages.";
+            }
+            else if (phase == CataloguePhase.Complete &&
+                     (!string.IsNullOrWhiteSpace(coverageWarningMessage) ||
+                      unavailableManifestCount > 0))
+            {
+                statusMessage =
+                    "Repository refresh completed with incomplete coverage; " +
+                    $"retained packages expired. Showing {Repositories.Count} validated packages.";
+            }
+
+            return true;
         }
 
         private static string BuildStatusMessage()
@@ -449,25 +614,33 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                     : "the authenticated account";
 
             if (phase == CataloguePhase.WaitingForOrganizations)
-                return "Loading GitHub organizations...";
+                return WithRetentionNotice("Loading GitHub organizations...");
 
             if (coordinator.IsLoading || awaitingPageResult)
             {
                 string commandStatus = coordinator.StatusMessage;
-                return string.IsNullOrWhiteSpace(commandStatus)
+                return WithRetentionNotice(string.IsNullOrWhiteSpace(commandStatus)
                     ? $"Loading {owner} repositories, page {coordinator.CurrentPage}..."
-                    : $"Loading {owner} repositories, page {coordinator.CurrentPage}: {commandStatus}";
+                    : $"Loading {owner} repositories, page {coordinator.CurrentPage}: {commandStatus}");
             }
 
             if (coordinator.IsValidatingPackageManifests)
             {
-                return
+                return WithRetentionNotice(
                     $"Validating UPM packages for {owner}, page {coordinator.CurrentPage} " +
                     $"({coordinator.PackageManifestCheckCompleted}/" +
-                    $"{coordinator.PackageManifestCheckTotal})...";
+                    $"{coordinator.PackageManifestCheckTotal})...");
             }
 
-            return $"Processing {owner} repositories, page {coordinator.CurrentPage}...";
+            return WithRetentionNotice(
+                $"Processing {owner} repositories, page {coordinator.CurrentPage}...");
+        }
+
+        private static string WithRetentionNotice(string message)
+        {
+            return isShowingRetainedRepositories
+                ? message + " Previously loaded packages remain available."
+                : message;
         }
 
         private static bool AddValidRepositories(IEnumerable<GitHubRepo> repositories)
@@ -494,11 +667,17 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 bool hasNodeIdentity = !string.IsNullOrWhiteSpace(copy.NodeId);
                 if (hasNodeIdentity && IndexByNodeId.TryGetValue(copy.NodeId, out index))
                 {
+                    if (Repositories[index].HasSameContent(copy))
+                        continue;
+
                     ReplaceRepository(index, repositoryIdentity, copy);
                     changed = true;
                 }
                 else if (IndexByRepository.TryGetValue(repositoryIdentity, out index))
                 {
+                    if (Repositories[index].HasSameContent(copy))
+                        continue;
+
                     ReplaceRepository(index, repositoryIdentity, copy);
                     changed = true;
                 }
@@ -512,6 +691,8 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                     changed = true;
                 }
             }
+
+            repositoriesDirty |= changed;
 
             return changed;
         }
@@ -550,17 +731,30 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 IndexByNodeId[replacement.NodeId] = index;
         }
 
-        private static void PublishSnapshot()
+        private static void PublishSnapshot(bool markSuccessfulCatalogue = false)
         {
-            var repositoryCopies = Repositories.ToArray();
-            Array.Sort(
-                repositoryCopies,
-                CompareRepositories);
-            var readOnlyRepositories =
-                new ReadOnlyCollection<PackageManagerGitHubRepository>(repositoryCopies);
+            if (repositoriesDirty && !isShowingRetainedRepositories)
+            {
+                var repositoryCopies = Repositories.ToArray();
+                Array.Sort(
+                    repositoryCopies,
+                    CompareRepositories);
+                if (!HasSameCatalogueContent(publishedRepositories, repositoryCopies))
+                {
+                    publishedRepositories =
+                        new ReadOnlyCollection<PackageManagerGitHubRepository>(repositoryCopies);
+                }
+                repositoriesDirty = false;
+            }
+
+            // Record success before notifying synchronous Package Manager
+            // subscribers so a refresh requested from a rebuild callback can
+            // retain this exact completed catalogue.
+            if (markSuccessfulCatalogue)
+                lastSuccessfulRepositories = publishedRepositories;
 
             current = new PackageManagerGitHubDiscoverySnapshot(
-                readOnlyRepositories,
+                publishedRepositories,
                 isLoading,
                 statusMessage,
                 errorMessage,
@@ -569,8 +763,25 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 totalOwners,
                 unavailableManifestCount,
                 ++revision,
-                coverageWarningMessage);
+                coverageWarningMessage,
+                isShowingRetainedRepositories);
             InvokeSnapshotChanged();
+        }
+
+        private static bool HasSameCatalogueContent(
+            IReadOnlyList<PackageManagerGitHubRepository> left,
+            IReadOnlyList<PackageManagerGitHubRepository> right)
+        {
+            if (left == null || right == null || left.Count != right.Count)
+                return false;
+
+            for (int index = 0; index < left.Count; index++)
+            {
+                if (left[index] == null || !left[index].HasSameContent(right[index]))
+                    return false;
+            }
+
+            return true;
         }
 
         private static int CompareRepositories(
@@ -617,6 +828,9 @@ namespace MartinCalander.GitSubmoduleManager.Editor
 
         private static void ResetAggregation()
         {
+            if (Repositories.Count > 0 || publishedRepositories.Count > 0)
+                repositoriesDirty = true;
+
             Repositories.Clear();
             IndexByNodeId.Clear();
             IndexByRepository.Clear();
@@ -650,11 +864,18 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             isStarted = false;
             DisposeCoordinator();
             ResetAggregation();
+            isShowingRetainedRepositories = false;
+            retainedCatalogueExpiresAt = 0d;
+            lastSuccessfulRepositories = PackageManagerGitHubDiscoverySnapshot.Empty.Repositories;
 
             if (publishEmptySnapshot && !isShuttingDown)
                 PublishSnapshot();
             else
+            {
                 current = PackageManagerGitHubDiscoverySnapshot.Empty;
+                publishedRepositories = current.Repositories;
+                repositoriesDirty = false;
+            }
         }
 
         private static void OnBeforeAssemblyReload()

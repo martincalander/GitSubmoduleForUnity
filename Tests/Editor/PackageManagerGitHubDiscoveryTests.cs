@@ -58,6 +58,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
             };
 
             var copy = new PackageManagerGitHubRepository(source);
+            var equivalent = new PackageManagerGitHubRepository(source);
             source.Name = "mutated";
             source.Description = "Changed";
             source.DeclaredPackageName = "com.example.changed";
@@ -85,6 +86,11 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
             Assert.That(copy.Dependencies, Has.Count.EqualTo(1));
             Assert.That(copy.Dependencies[0].Name, Is.EqualTo("com.example.dependency"));
             Assert.That(copy.Dependencies[0].Version, Is.EqualTo("4.5.6"));
+            Assert.That(copy.HasSameContent(equivalent), Is.True);
+            Assert.That(
+                copy.HasSameContent(new PackageManagerGitHubRepository(source)),
+                Is.False,
+                "A changed immutable record must replace the published catalogue collection.");
         }
 
         [Test]
@@ -114,8 +120,17 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
             var runner = new CatalogueRunner();
             CliCommandRunner.CurrentRunner = runner;
             int changeCount = 0;
-            void OnChanged() => changeCount++;
-            PackageManagerGitHubDiscovery.SnapshotChanged += OnChanged;
+            var oneRepositorySnapshots =
+                new List<IReadOnlyList<PackageManagerGitHubRepository>>();
+            void CaptureSnapshot()
+            {
+                changeCount++;
+                IReadOnlyList<PackageManagerGitHubRepository> repositories =
+                    PackageManagerGitHubDiscovery.Current.Repositories;
+                if (repositories.Count == 1)
+                    oneRepositorySnapshots.Add(repositories);
+            }
+            PackageManagerGitHubDiscovery.SnapshotChanged += CaptureSnapshot;
             try
             {
                 PackageManagerGitHubDiscovery.Refresh();
@@ -178,13 +193,245 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                     Is.True);
                 Assert.That(changeCount, Is.GreaterThan(2),
                     "Each settled page should publish incremental progress.");
+                Assert.That(oneRepositorySnapshots, Has.Count.GreaterThan(1),
+                    "Progress should publish while the one-package catalogue is unchanged.");
+                Assert.That(
+                    oneRepositorySnapshots.All(snapshotRepositories =>
+                        ReferenceEquals(
+                            snapshotRepositories,
+                            oneRepositorySnapshots[0])),
+                    Is.True,
+                    "Status-only progress must reuse the immutable repository collection.");
                 Assert.That(runner.PersonalPageCalls, Is.EqualTo(2));
                 Assert.That(runner.OrganizationPageCalls, Is.EqualTo(1));
             }
             finally
             {
-                PackageManagerGitHubDiscovery.SnapshotChanged -= OnChanged;
+                PackageManagerGitHubDiscovery.SnapshotChanged -= CaptureSnapshot;
             }
+        }
+
+        [Test]
+        public void Refresh_RetainsLastCompletedCatalogueThroughBoundedFailureWindow()
+        {
+            RetainIsolatedDiscoveryOrIgnore();
+
+            var runner = new CatalogueRunner();
+            CliCommandRunner.CurrentRunner = runner;
+            PackageManagerGitHubDiscovery.Refresh();
+            WaitForCatalogue();
+
+            IReadOnlyList<PackageManagerGitHubRepository> completedRepositories =
+                PackageManagerGitHubDiscovery.Current.Repositories;
+            Assert.That(completedRepositories, Has.Count.EqualTo(2));
+
+            runner.FailOrganizationRequests = true;
+            var refreshRepositories =
+                new List<IReadOnlyList<PackageManagerGitHubRepository>>();
+            void CaptureRefresh() => refreshRepositories.Add(
+                PackageManagerGitHubDiscovery.Current.Repositories);
+            PackageManagerGitHubDiscovery.SnapshotChanged += CaptureRefresh;
+            try
+            {
+                PackageManagerGitHubDiscovery.Refresh();
+
+                PackageManagerGitHubDiscoverySnapshot refreshing =
+                    PackageManagerGitHubDiscovery.Current;
+                Assert.That(refreshing.IsLoading, Is.True);
+                Assert.That(refreshing.IsShowingRetainedRepositories, Is.True);
+                Assert.That(
+                    refreshing.Repositories,
+                    Is.SameAs(completedRepositories),
+                    "Starting a refresh must not withdraw installed-package actions from the UI.");
+                Assert.That(refreshing.StatusMessage, Does.Contain("remain available"));
+
+                WaitForCatalogue();
+            }
+            finally
+            {
+                PackageManagerGitHubDiscovery.SnapshotChanged -= CaptureRefresh;
+            }
+
+            PackageManagerGitHubDiscoverySnapshot failed =
+                PackageManagerGitHubDiscovery.Current;
+            Assert.That(failed.IsLoading, Is.False);
+            Assert.That(failed.ErrorMessage, Is.Not.Empty);
+            Assert.That(failed.IsShowingRetainedRepositories, Is.True);
+            Assert.That(failed.Repositories, Is.SameAs(completedRepositories));
+            Assert.That(refreshRepositories, Is.Not.Empty);
+            Assert.That(
+                refreshRepositories.All(repositories =>
+                    ReferenceEquals(repositories, completedRepositories)),
+                Is.True,
+                "A partial replacement must stay staged until refresh completes.");
+
+            PackageManagerGitHubDiscovery.Tick(
+                EditorApplication.timeSinceStartup +
+                PackageManagerGitHubDiscovery.RetainedCatalogueDurationSeconds +
+                1d);
+
+            PackageManagerGitHubDiscoverySnapshot expired =
+                PackageManagerGitHubDiscovery.Current;
+            Assert.That(expired.IsShowingRetainedRepositories, Is.False);
+            Assert.That(
+                expired.Repositories.Select(repository => repository.PackageName),
+                Is.EqualTo(new[] { "com.example.personal" }),
+                "After the safety window, only packages validated by the failed refresh may remain.");
+            Assert.That(expired.StatusMessage, Does.Contain("validating 1"));
+            Assert.That(expired.ErrorMessage, Is.EqualTo(failed.ErrorMessage));
+
+            PackageManagerGitHubDiscovery.Refresh();
+            PackageManagerGitHubDiscoverySnapshot retryAfterExpiry =
+                PackageManagerGitHubDiscovery.Current;
+            Assert.That(retryAfterExpiry.IsShowingRetainedRepositories, Is.False);
+            Assert.That(
+                retryAfterExpiry.Repositories,
+                Is.Empty,
+                "Retrying must not extend or resurrect an expired successful catalogue.");
+        }
+
+        [Test]
+        public void Refresh_RetainsCompletedCatalogueWhenCoverageIsIncomplete()
+        {
+            RetainIsolatedDiscoveryOrIgnore();
+
+            var runner = new CatalogueRunner
+            {
+                ReturnNoOrganizations = true
+            };
+            CliCommandRunner.CurrentRunner = runner;
+            PackageManagerGitHubDiscovery.Refresh();
+            WaitForCatalogue();
+
+            IReadOnlyList<PackageManagerGitHubRepository> completedRepositories =
+                PackageManagerGitHubDiscovery.Current.Repositories;
+            Assert.That(completedRepositories, Has.Count.EqualTo(1));
+
+            runner.FailOrganizationListing = true;
+            PackageManagerGitHubDiscovery.Refresh();
+            WaitForCatalogue();
+
+            PackageManagerGitHubDiscoverySnapshot incomplete =
+                PackageManagerGitHubDiscovery.Current;
+            Assert.That(incomplete.IsLoading, Is.False);
+            Assert.That(incomplete.ErrorMessage, Is.Empty);
+            Assert.That(incomplete.CoverageWarningMessage, Is.Not.Empty);
+            Assert.That(incomplete.IsShowingRetainedRepositories, Is.True);
+            Assert.That(incomplete.Repositories, Is.SameAs(completedRepositories));
+            Assert.That(incomplete.StatusMessage, Does.Contain("coverage was incomplete"));
+
+            PackageManagerGitHubDiscovery.Tick(
+                EditorApplication.timeSinceStartup +
+                PackageManagerGitHubDiscovery.RetainedCatalogueDurationSeconds +
+                1d);
+
+            PackageManagerGitHubDiscoverySnapshot expired =
+                PackageManagerGitHubDiscovery.Current;
+            Assert.That(expired.IsShowingRetainedRepositories, Is.False);
+            Assert.That(
+                expired.Repositories.Select(repository => repository.PackageName),
+                Is.EqualTo(new[] { "com.example.personal" }));
+            Assert.That(expired.StatusMessage, Does.Contain("incomplete coverage"));
+
+            PackageManagerGitHubDiscovery.Refresh();
+            PackageManagerGitHubDiscoverySnapshot retryAfterExpiry =
+                PackageManagerGitHubDiscovery.Current;
+            Assert.That(retryAfterExpiry.IsShowingRetainedRepositories, Is.False);
+            Assert.That(
+                retryAfterExpiry.Repositories,
+                Is.Empty,
+                "Equal partial contents must not grant a fresh retention window.");
+        }
+
+        [Test]
+        public void Refresh_SwapsChangedCatalogueAtomicallyAndReusesIdenticalSuccessIdentity()
+        {
+            RetainIsolatedDiscoveryOrIgnore();
+
+            var runner = new CatalogueRunner();
+            CliCommandRunner.CurrentRunner = runner;
+            PackageManagerGitHubDiscovery.Refresh();
+            WaitForCatalogue();
+
+            IReadOnlyList<PackageManagerGitHubRepository> initialRepositories =
+                PackageManagerGitHubDiscovery.Current.Repositories;
+            Assert.That(initialRepositories, Has.Count.EqualTo(2));
+
+            runner.UseChangedCatalogue = true;
+            var changedRefreshSnapshots =
+                new List<PackageManagerGitHubDiscoverySnapshot>();
+            void CaptureChangedRefresh() => changedRefreshSnapshots.Add(
+                PackageManagerGitHubDiscovery.Current);
+            PackageManagerGitHubDiscovery.SnapshotChanged += CaptureChangedRefresh;
+            try
+            {
+                PackageManagerGitHubDiscovery.Refresh();
+                WaitForCatalogue();
+            }
+            finally
+            {
+                PackageManagerGitHubDiscovery.SnapshotChanged -= CaptureChangedRefresh;
+            }
+
+            PackageManagerGitHubDiscoverySnapshot changed =
+                PackageManagerGitHubDiscovery.Current;
+            Assert.That(changed.IsLoading, Is.False);
+            Assert.That(changed.ErrorMessage, Is.Empty);
+            Assert.That(changed.Repositories, Is.Not.SameAs(initialRepositories));
+            Assert.That(
+                changed.Repositories.Select(repository => repository.PackageName),
+                Is.EqualTo(new[]
+                {
+                    "com.example.replacement",
+                    "com.example.personal"
+                }));
+            Assert.That(
+                changed.Repositories.All(repository => repository.Version == "2.0.0"),
+                Is.True);
+            Assert.That(
+                changedRefreshSnapshots.Where(snapshot => snapshot.IsLoading),
+                Is.Not.Empty);
+            Assert.That(
+                changedRefreshSnapshots
+                    .Where(snapshot => snapshot.IsLoading)
+                    .All(snapshot =>
+                        snapshot.IsShowingRetainedRepositories &&
+                        ReferenceEquals(snapshot.Repositories, initialRepositories)),
+                Is.True,
+                "Every in-progress snapshot must retain the exact completed catalogue.");
+
+            IReadOnlyList<PackageManagerGitHubRepository> changedRepositories =
+                changed.Repositories;
+            var identicalRefreshSnapshots =
+                new List<PackageManagerGitHubDiscoverySnapshot>();
+            void CaptureIdenticalRefresh() => identicalRefreshSnapshots.Add(
+                PackageManagerGitHubDiscovery.Current);
+            PackageManagerGitHubDiscovery.SnapshotChanged += CaptureIdenticalRefresh;
+            try
+            {
+                PackageManagerGitHubDiscovery.Refresh();
+                WaitForCatalogue();
+            }
+            finally
+            {
+                PackageManagerGitHubDiscovery.SnapshotChanged -= CaptureIdenticalRefresh;
+            }
+
+            PackageManagerGitHubDiscoverySnapshot identical =
+                PackageManagerGitHubDiscovery.Current;
+            Assert.That(identical.IsLoading, Is.False);
+            Assert.That(identical.ErrorMessage, Is.Empty);
+            Assert.That(
+                identical.Repositories,
+                Is.SameAs(changedRepositories),
+                "An identical successful refresh must not create a new catalogue revision.");
+            Assert.That(
+                identicalRefreshSnapshots.Where(snapshot => snapshot.IsLoading),
+                Is.Not.Empty);
+            Assert.That(
+                identicalRefreshSnapshots.All(snapshot =>
+                    ReferenceEquals(snapshot.Repositories, changedRepositories)),
+                Is.True);
         }
 
         private void RetainIsolatedDiscoveryOrIgnore()
@@ -227,6 +474,10 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
         {
             internal int PersonalPageCalls;
             internal int OrganizationPageCalls;
+            internal bool FailOrganizationRequests;
+            internal bool FailOrganizationListing;
+            internal bool ReturnNoOrganizations;
+            internal bool UseChangedCatalogue;
 
             public CommandResult Run(CommandSpec spec)
             {
@@ -234,8 +485,33 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                 if (arguments.Contains("api user --jq .login"))
                     return Success("personal-owner");
 
+                if (FailOrganizationListing && arguments.Contains("user/orgs"))
+                {
+                    return new CommandResult
+                    {
+                        ExitCode = 1,
+                        StdErr = "Organization listing failed for the test.",
+                        TerminationConfirmed = true
+                    };
+                }
+
                 if (arguments.Contains("user/orgs"))
-                    return Success("example-org\nexample-org");
+                {
+                    return ReturnNoOrganizations
+                        ? Success(string.Empty)
+                        : Success("example-org\nexample-org");
+                }
+
+                if (FailOrganizationRequests &&
+                    arguments.Contains("orgs/example-org/repos"))
+                {
+                    return new CommandResult
+                    {
+                        ExitCode = 1,
+                        StdErr = "Repository refresh failed for the test.",
+                        TerminationConfirmed = true
+                    };
+                }
 
                 if (arguments.Contains("user/repos") && arguments.Contains("page=1"))
                 {
@@ -262,9 +538,13 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                 {
                     Interlocked.Increment(ref OrganizationPageCalls);
                     return Success(RepositoryJson(
-                        "NODE-ORGANIZATION",
+                        UseChangedCatalogue
+                            ? "NODE-REPLACEMENT"
+                            : "NODE-ORGANIZATION",
                         "example-org",
-                        "organization-package"));
+                        UseChangedCatalogue
+                            ? "replacement-package"
+                            : "organization-package"));
                 }
 
                 if (arguments.Contains("graphql"))
@@ -278,7 +558,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                 };
             }
 
-            private static string ManifestResponse(CommandSpec spec)
+            private string ManifestResponse(CommandSpec spec)
             {
                 var nodes = new List<string>();
                 foreach (string argument in spec.ArgumentList ?? Array.Empty<string>())
@@ -289,11 +569,14 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                     string nodeId = argument.Substring("ids[]=".Length);
                     string packageName = nodeId == "NODE-ORGANIZATION"
                         ? "com.example.organization"
-                        : "com.example.personal";
+                        : nodeId == "NODE-REPLACEMENT"
+                            ? "com.example.replacement"
+                            : "com.example.personal";
                     string manifest =
                         "{\"name\":\"" + packageName +
                         "\",\"displayName\":\"Package " + nodeId +
-                        "\",\"version\":\"1.0.0\"," +
+                        "\",\"version\":\"" +
+                        (UseChangedCatalogue ? "2.0.0" : "1.0.0") + "\"," +
                         "\"description\":\"Manifest " + nodeId + "\"," +
                         "\"unity\":\"2021.3\"," +
                         "\"unityRelease\":\"0f1\"," +

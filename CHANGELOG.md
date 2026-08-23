@@ -83,6 +83,12 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- GitHub discovery now validates a normal 50-repository page with one bounded
+  GraphQL request, automatically bisects oversized responses, and avoids
+  redundant Package Manager projection, list rebuilds, and package lookup work
+  during loading-only progress updates. Refreshes retain the last completed
+  catalogue atomically for a bounded safety window, so installed-package
+  actions remain available while replacement results load.
 - Current management now lives exclusively at **Window > Package Management >
   Package Manager > Sources > GitHub** and in Package Manager's native details,
   **+**, and **Manage** controls. The setup experience is a small standalone
