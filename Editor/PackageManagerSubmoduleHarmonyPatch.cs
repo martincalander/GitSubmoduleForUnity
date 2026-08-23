@@ -49,9 +49,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic;
 
         private static Harmony harmony;
-        private static volatile bool patchRequested = true;
         private static bool shuttingDown;
-        private static double nextPatchAttempt;
         private static string lastPatchError = string.Empty;
         private static readonly ConditionalWeakTable<VisualElement, DeferredTagState>
             DeferredTags = new ConditionalWeakTable<VisualElement, DeferredTagState>();
@@ -65,9 +63,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         static PackageManagerSubmoduleHarmonyPatch()
         {
             PackageManagerSubmoduleSnapshot.SnapshotChanged += OnSnapshotChanged;
-            AppDomain.CurrentDomain.AssemblyLoad += OnAssemblyLoad;
             AssemblyReloadEvents.beforeAssemblyReload += OnBeforeAssemblyReload;
-            EditorApplication.update += RetryPatchOnUpdate;
             EditorApplication.delayCall += TryPatchAndRefresh;
         }
 
@@ -1138,37 +1134,16 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             RefreshOpenPackageManagerWindows();
         }
 
-        private static void OnAssemblyLoad(object _, AssemblyLoadEventArgs __)
-        {
-            patchRequested = true;
-        }
-
-        private static void RetryPatchOnUpdate()
-        {
-            if (shuttingDown ||
-                !patchRequested ||
-                EditorApplication.timeSinceStartup < nextPatchAttempt)
-            {
-                return;
-            }
-
-            nextPatchAttempt = EditorApplication.timeSinceStartup + 1d;
-            patchRequested = !TryPatch();
-        }
-
         private static void TryPatchAndRefresh()
         {
-            patchRequested = !TryPatch();
-            PackageManagerSubmoduleSnapshot.Refresh();
+            TryPatch();
             RefreshOpenPackageManagerWindows();
         }
 
         private static void OnBeforeAssemblyReload()
         {
             shuttingDown = true;
-            EditorApplication.update -= RetryPatchOnUpdate;
             PackageManagerSubmoduleSnapshot.SnapshotChanged -= OnSnapshotChanged;
-            AppDomain.CurrentDomain.AssemblyLoad -= OnAssemblyLoad;
             AssemblyReloadEvents.beforeAssemblyReload -= OnBeforeAssemblyReload;
 
             try

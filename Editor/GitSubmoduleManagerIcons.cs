@@ -30,20 +30,6 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             return lightThemeIcon;
         }
 
-        internal static string GetGitIconAssetPath(bool useDarkTheme)
-        {
-            string iconFileName = useDarkTheme
-                ? DarkThemeIconFileName
-                : LightThemeIconFileName;
-            return $"{ResolvePackageAssetPath()}/Editor/{iconFileName}";
-        }
-
-        internal static void ClearCache()
-        {
-            darkThemeIcon = null;
-            lightThemeIcon = null;
-        }
-
         private static Texture2D LoadIcon(string iconFileName)
         {
             return AssetDatabase.LoadAssetAtPath<Texture2D>(

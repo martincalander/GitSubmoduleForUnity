@@ -35,8 +35,8 @@ git clone https://github.com/<your-user>/GitSubmoduleManager.git \
   Packages/com.martincalander.gitsubmodulemanager
 ```
 
-Open the Unity project, then open **Window > Package Management > Git Submodule
-Manager**.
+Open the Unity project, then open **Window > Package Management > Package
+Manager > Sources > GitHub**.
 
 Do not edit Unity-generated solution or project files. Let Unity import new
 package files and generate `.meta` files.
@@ -45,9 +45,16 @@ package files and generate `.meta` files.
 
 ```text
 Editor/
-├── GitSubmoduleManagerWindow.* editor UI and actions
-├── DiscoveryCoordinator.cs    paged GitHub state
-├── RepositoryCoordinator.cs   lazy branch loading
+├── GitSubmoduleManagerPackageManagerHost.cs
+│                               Package Manager lifecycle
+├── PackageManagerSubmoduleNativePage.cs
+│                               native Sources/GitHub page
+├── PackageManagerGitHubDiscovery.cs
+│                               lazy authenticated catalogue
+├── GitSubmoduleAddService.cs
+├── GitPackageConversionService.cs
+├── GitSubmoduleRemoveService.cs
+│                               validated package mutations
 ├── Models/                    internal data objects
 └── Utilities/
     ├── CliCommandRunner.cs    bounded process execution

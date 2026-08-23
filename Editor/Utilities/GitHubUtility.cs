@@ -205,15 +205,6 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                    version >= MinimumClipboardAuthenticationVersion;
         }
 
-        internal static string GetAuthenticatedUsername()
-        {
-            var result = CliCommandRunner.Run(
-                "gh",
-                BuildApiArguments("user --jq .login"),
-                GitUtility.ProjectRoot);
-            return result.IsSuccess ? result.StdOut.Trim() : string.Empty;
-        }
-
         internal static string BuildApiArguments(string arguments)
         {
             string value = arguments?.Trim() ?? string.Empty;
@@ -333,8 +324,8 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                     Name = repoJson.name,
                     Owner = repoJson.owner != null ? repoJson.owner.login : string.Empty,
                     Url = GetCloneUrl(repoJson),
-                    DefaultBranch = repoJson.defaultBranchRef != null ? repoJson.defaultBranchRef.name : repoJson.default_branch,
-                    IsPrivate = repoJson.isPrivate || repoJson.@private,
+                    DefaultBranch = repoJson.default_branch,
+                    IsPrivate = repoJson.@private,
                     Description = repoJson.description,
                     UpdatedAt = repoJson.updated_at
                 });
@@ -518,11 +509,8 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             public string node_id;
             public string name;
             public OwnerJson owner;
-            public string url;
             public string html_url;
             public string clone_url;
-            public DefaultBranchRefJson defaultBranchRef;
-            public bool isPrivate;
             public bool @private;
             public string default_branch;
             public string description;
@@ -533,12 +521,6 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         private sealed class OwnerJson
         {
             public string login;
-        }
-
-        [Serializable]
-        private sealed class DefaultBranchRefJson
-        {
-            public string name;
         }
     }
 }

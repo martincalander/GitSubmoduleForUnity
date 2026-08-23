@@ -63,14 +63,14 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         private static RemoveRequest activeRemoveRequest;
         private static Action<ReadOnlyGitPackageInstallCompletion> activeCallback;
         private static bool registeredPackagesChanged;
+        private static bool activeEventsSubscribed;
 
         internal static event Action<ReadOnlyGitPackageInstallCompletion> Completed;
 
         static PackageManagerReadOnlyGitInstallService()
         {
             activeState = LoadActiveState();
-            EditorApplication.update += Update;
-            Events.registeredPackages += OnRegisteredPackages;
+            SubscribeActiveEvents();
         }
 
         internal static bool IsBusy => activeState != null;
@@ -298,10 +298,11 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 StartedUtcTicks = DateTime.UtcNow.Ticks
             };
             activeCallback = onComplete;
-            SaveActiveState();
 
             try
             {
+                SubscribeActiveEvents();
+                SaveActiveState();
                 activeAddRequest = Client.Add(spec);
                 if (activeAddRequest == null)
                     throw new InvalidOperationException("Unity did not create an add request.");
@@ -897,11 +898,32 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         private static void ClearActiveState()
         {
             activeState = null;
+            UnsubscribeActiveEvents();
             activeAddRequest = null;
             activeRemoveRequest = null;
             activeCallback = null;
             registeredPackagesChanged = false;
             SessionState.EraseString(ActiveStateKey);
+        }
+
+        private static void SubscribeActiveEvents()
+        {
+            if (activeState == null || activeEventsSubscribed)
+                return;
+
+            activeEventsSubscribed = true;
+            EditorApplication.update += Update;
+            Events.registeredPackages += OnRegisteredPackages;
+        }
+
+        private static void UnsubscribeActiveEvents()
+        {
+            if (!activeEventsSubscribed)
+                return;
+
+            activeEventsSubscribed = false;
+            EditorApplication.update -= Update;
+            Events.registeredPackages -= OnRegisteredPackages;
         }
 
         private static string SanitizeMessage(string message)

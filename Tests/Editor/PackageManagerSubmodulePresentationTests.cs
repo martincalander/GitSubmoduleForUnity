@@ -108,6 +108,27 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
         }
 
         [Test]
+        public void Snapshot_ContentEquality_UsesPresentationValues()
+        {
+            string projectRoot = Path.Combine(
+                Path.GetTempPath(),
+                "GitSubmodulePresentationProject");
+            PackageManagerSubmoduleSnapshotData first = CreateSnapshot(
+                projectRoot,
+                "https://github.com/owner/repository.git");
+            PackageManagerSubmoduleSnapshotData identical = CreateSnapshot(
+                projectRoot,
+                "https://github.com/owner/repository.git");
+            PackageManagerSubmoduleSnapshotData changed = CreateSnapshot(
+                projectRoot,
+                "ssh://git@git.example.com/team/repository.git");
+
+            Assert.That(first.HasSameContent(identical), Is.True);
+            Assert.That(first.HasSameContent(changed), Is.False);
+            Assert.That(first.HasSameContent(null), Is.False);
+        }
+
+        [Test]
         public void Snapshot_UninstalledOrDifferentConcretePath_IsNotClassified()
         {
             string projectRoot = Path.Combine(Path.GetTempPath(), "GitSubmodulePresentationProject");
@@ -1092,7 +1113,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
 
             ParameterInfo[] activationParameters =
                 PackageManagerGitHubNativePresentationPatch
-                    .GetPageActivationPrefix()
+                    .GetPageActivationPostfix()
                     .GetParameters();
             ParameterInfo[] loadingParameters =
                 PackageManagerGitHubNativePresentationPatch
@@ -1266,10 +1287,10 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
             foreach (MethodInfo target in activationTargets)
             {
                 Assert.That(
-                    PackageManagerGitHubNativePresentationPatch.IsPrefixApplied(
+                    PackageManagerGitHubNativePresentationPatch.IsPatchApplied(
                         target,
                         PackageManagerGitHubNativePresentationPatch
-                            .GetPageActivationPrefix()),
+                            .GetPageActivationPostfix()),
                     Is.True);
             }
 

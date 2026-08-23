@@ -21,8 +21,8 @@ namespace MartinCalander.GitSubmoduleManager.Editor
     }
 
     /// <summary>
-    /// Host-neutral add workflow shared by the legacy manager view and the
-    /// Package Manager discovery page. All repository mutation remains owned by
+    /// Host-neutral add workflow shared by Package Manager's install surfaces.
+    /// All repository mutation remains owned by
     /// GitOperationService, including journaling, reload locking, final refresh,
     /// postcondition checks, and rollback.
     /// </summary>

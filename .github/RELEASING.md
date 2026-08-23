@@ -102,8 +102,8 @@ does not create or move a tag.
   https://github.com/martincalander/GitSubmoduleManager.git#v1.0.1
   ```
 
-- Confirm the package imports, the editor window opens, and the documented
-  minimum Unity version remains accurate.
+- Confirm the package imports, **Package Manager > Sources > GitHub** opens, and
+  the documented minimum Unity version remains accurate.
 
 If the package is registered with OpenUPM, confirm its registry page discovers
 the new immutable tag after the GitHub release is available.

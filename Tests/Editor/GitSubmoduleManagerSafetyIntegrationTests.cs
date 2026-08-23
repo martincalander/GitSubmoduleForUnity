@@ -323,17 +323,6 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
         }
 
         [Test]
-        public void SubmoduleStatus_ParsesSha256ObjectIds()
-        {
-            string oid = new string('a', 64);
-
-            Dictionary<string, string> commits = GitUtility.ParseSubmoduleCommitMap(
-                " " + oid + " Packages/com.example.sha256 (heads/main)\n");
-
-            Assert.That(commits["Packages/com.example.sha256"], Is.EqualTo(oid));
-        }
-
-        [Test]
         public void AsyncHandle_CancelPublishesCancelledTerminalResult()
         {
             var runner = new CancellationAwareRunner();
@@ -502,7 +491,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
         }
 
         [Test]
-        public void GetSubmodules_ReadsFriendlyDisplayNameFromManifest()
+        public void GetSubmodules_ReadsPackageNameFromManifest()
         {
             bool loaded = GitUtility.TryGetSubmodules(out List<GitPackageInfo> packages, out string error);
             GitPackageInfo package = packages.Find(candidate => candidate.Path == PackagePath);
@@ -510,7 +499,6 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
             Assert.That(loaded, Is.True, error);
             Assert.That(package, Is.Not.Null);
             Assert.That(package.PackageName, Is.EqualTo("com.example.integration-package"));
-            Assert.That(package.DisplayName, Is.EqualTo("Integration Package"));
         }
 
         [Test]

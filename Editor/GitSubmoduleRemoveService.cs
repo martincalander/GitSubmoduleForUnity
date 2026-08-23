@@ -37,7 +37,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
     }
 
     /// <summary>
-    /// Host-neutral removal workflow for Package Manager and the legacy window.
+    /// Host-neutral removal workflow for Package Manager's management surfaces.
     /// Unity's embedded-package removal deletes the directory directly, so every
     /// submodule removal must instead pass through GitOperationService and Git's
     /// canonical git-rm operation with its safety and postcondition checks.

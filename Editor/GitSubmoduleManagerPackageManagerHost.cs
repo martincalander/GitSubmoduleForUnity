@@ -19,12 +19,12 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             "com.martincalander.gitsubmodulemanager.package-manager-host";
         internal const string PackageManagerWindowTypeName =
             "UnityEditor.PackageManager.UI.PackageManagerWindow";
-        internal const string SidebarPageId =
-            PackageManagerSubmoduleNativePage.ExtensionPageId;
-
         private const string SidebarElementName = "sidebar";
         private const double WindowScanIntervalSeconds = 0.5;
         private const double OpenRequestTimeoutSeconds = 10.0;
+        private const double PatchRetryIntervalSeconds = 0.5;
+        private const double PatchRetryWindowSeconds = 10.0;
+        private const double SessionRepairTimeoutSeconds = 10.0;
 
         private static readonly string[] LifecycleMethodNames =
         {
@@ -38,17 +38,23 @@ namespace MartinCalander.GitSubmoduleManager.Editor
 
         private static Harmony harmony;
         private static bool isPatched;
+        private static bool updateSubscribed;
+        private static bool patchRetryActive;
         private static bool isShuttingDown;
         private static bool openRequested;
         private static double openRequestDeadline;
         private static double nextWindowScanTime;
+        private static double patchRetryDeadline;
+        private static double nextPatchRetryTime;
 
         static GitSubmoduleManagerPackageManagerHost()
         {
             if (!TryPatch(out _))
+            {
+                BeginPatchRetryWindow();
                 EditorApplication.delayCall += RetryPatch;
+            }
 
-            EditorApplication.update += Update;
             EditorApplication.delayCall += AttachExistingWindows;
             AssemblyReloadEvents.beforeAssemblyReload += BeforeAssemblyReload;
             EditorApplication.quitting += BeforeEditorQuits;
@@ -75,9 +81,13 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             if (isShuttingDown)
                 return;
 
+            if (!isPatched && !TryPatch(out _))
+                BeginPatchRetryWindow();
             openRequested = true;
+            nextWindowScanTime = 0d;
             openRequestDeadline =
                 EditorApplication.timeSinceStartup + OpenRequestTimeoutSeconds;
+            SubscribeUpdate();
             TryOpenPackageManagerThroughReflection();
             EditorApplication.delayCall += AttachExistingWindows;
         }
@@ -267,17 +277,6 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             return false;
         }
 
-        internal static void DeactivateAll()
-        {
-            // There is no custom embedded view to deactivate.
-        }
-
-        internal static void RepaintOpenHosts()
-        {
-            foreach (HostSession session in Sessions.Values)
-                session.RequestRepaint();
-        }
-
         internal static bool IsSidebarExtensionRefreshPatchApplied()
         {
             Type sidebarType = FindType(PackageManagerSubmoduleNativePage.SidebarTypeName);
@@ -325,8 +324,13 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                     "[Git Submodule Manager] The native Package Manager integration " +
                     "could not install its compatibility hook. " + error);
             }
+            else
+            {
+                patchRetryActive = false;
+            }
 
             AttachExistingWindows();
+            UpdateSubscription();
         }
 
         private static bool HasPostfix(MethodInfo original, MethodInfo postfix)
@@ -378,13 +382,18 @@ namespace MartinCalander.GitSubmoduleManager.Editor
 
         private static void BeforePackageManagerGuiBuilt()
         {
+            PackageManagerSubmoduleHarmonyPatch.TryPatch();
+            PackageManagerGitHubNativePresentationPatch.TryPatch();
             PackageManagerSubmoduleNativePage.TryRegisterFromServices(out _, out _);
         }
 
         private static void AfterPackageManagerGuiBuilt(object __instance)
         {
             if (__instance is EditorWindow window)
-                EditorApplication.delayCall += () => TryAttachWindow(window);
+            {
+                EditorApplication.delayCall += () =>
+                    TryAttachWindow(window, restartRepairWindow: true);
+            }
         }
 
         private static void AfterSidebarExtensionRowsUpdated(object __instance)
@@ -398,14 +407,27 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             if (isShuttingDown)
                 return;
 
-            CleanupDeadSessions();
-            foreach (HostSession session in Sessions.Values)
-                session.Tick();
-
             double now = EditorApplication.timeSinceStartup;
-            if (openRequested || now >= nextWindowScanTime)
+            if (patchRetryActive)
+            {
+                if (isPatched || now >= patchRetryDeadline)
+                {
+                    patchRetryActive = false;
+                }
+                else if (now >= nextPatchRetryTime)
+                {
+                    nextPatchRetryTime = now + PatchRetryIntervalSeconds;
+                    if (TryPatch(out _))
+                        patchRetryActive = false;
+                }
+            }
+
+            if (now >= nextWindowScanTime)
             {
                 nextWindowScanTime = now + WindowScanIntervalSeconds;
+                CleanupDeadSessions();
+                foreach (HostSession session in Sessions.Values)
+                    session.Tick();
                 AttachExistingWindows();
             }
 
@@ -416,6 +438,8 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                     "[Git Submodule Manager] Sources > GitHub could not be opened " +
                     "before Unity's Package Manager activation timed out.");
             }
+
+            UpdateSubscription();
         }
 
         private static void AttachExistingWindows()
@@ -445,12 +469,18 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             }
 
             if (!openRequested || preferred == null || !preferred.Activate())
+            {
+                UpdateSubscription();
                 return;
+            }
 
             openRequested = false;
+            UpdateSubscription();
         }
 
-        private static HostSession TryAttachWindow(EditorWindow window)
+        private static HostSession TryAttachWindow(
+            EditorWindow window,
+            bool restartRepairWindow = false)
         {
             if (window == null || isShuttingDown)
                 return null;
@@ -461,9 +491,16 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 session?.Dispose();
                 session = new HostSession(window);
                 Sessions[window] = session;
+                SubscribeUpdate();
+            }
+            else if (restartRepairWindow)
+            {
+                session.RestartRepairWindow();
             }
 
-            return session.TryAttachVisualTree() ? session : null;
+            bool attached = session.TryAttachVisualTree();
+            UpdateSubscription();
+            return attached ? session : null;
         }
 
         private static void ReleaseWindow(EditorWindow window)
@@ -473,6 +510,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
 
             Sessions.Remove(window);
             session.Dispose();
+            UpdateSubscription();
         }
 
         private static void CleanupDeadSessions()
@@ -541,12 +579,14 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         private static void BeforeEditorQuits()
         {
             isShuttingDown = true;
+            UnsubscribeUpdate();
             DisposeAllSessions();
         }
 
         private static void BeforeAssemblyReload()
         {
             isShuttingDown = true;
+            UnsubscribeUpdate();
             DisposeAllSessions();
             try
             {
@@ -567,6 +607,62 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             foreach (HostSession session in Sessions.Values)
                 session.Dispose();
             Sessions.Clear();
+        }
+
+        private static void UpdateSubscription()
+        {
+            if (!isShuttingDown &&
+                (patchRetryActive ||
+                 openRequested ||
+                 HasSessionRequiringPolling()))
+            {
+                SubscribeUpdate();
+            }
+            else
+            {
+                UnsubscribeUpdate();
+            }
+        }
+
+        private static bool HasSessionRequiringPolling()
+        {
+            foreach (HostSession session in Sessions.Values)
+            {
+                if (session.RequiresPolling)
+                    return true;
+            }
+
+            return false;
+        }
+
+        private static void BeginPatchRetryWindow()
+        {
+            if (isShuttingDown)
+                return;
+
+            double now = EditorApplication.timeSinceStartup;
+            patchRetryActive = true;
+            patchRetryDeadline = now + PatchRetryWindowSeconds;
+            nextPatchRetryTime = now;
+            SubscribeUpdate();
+        }
+
+        private static void SubscribeUpdate()
+        {
+            if (updateSubscribed || isShuttingDown)
+                return;
+
+            updateSubscribed = true;
+            EditorApplication.update += Update;
+        }
+
+        private static void UnsubscribeUpdate()
+        {
+            if (!updateSubscribed)
+                return;
+
+            updateSubscribed = false;
+            EditorApplication.update -= Update;
         }
 
         private static void CollectDescendants<T>(VisualElement root, List<T> result)
@@ -657,16 +753,37 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             private readonly EventCallback<DetachFromPanelEvent> windowDetached;
             private VisualElement retainedRoot;
             private bool projectionRetained;
+            private bool installMenuMounted;
+            private bool nativeActionsMounted;
             private bool isDisposed;
+            private double repairDeadline;
 
             internal HostSession(EditorWindow window)
             {
                 Window = window;
+                repairDeadline = EditorApplication.timeSinceStartup +
+                                 SessionRepairTimeoutSeconds;
                 windowDetached = OnWindowDetached;
                 Window.rootVisualElement.RegisterCallback(windowDetached);
             }
 
             internal EditorWindow Window { get; }
+            internal bool IsAttached =>
+                !isDisposed &&
+                retainedRoot != null &&
+                projectionRetained &&
+                installMenuMounted &&
+                nativeActionsMounted;
+            internal bool RequiresPolling =>
+                !IsAttached &&
+                EditorApplication.timeSinceStartup < repairDeadline;
+
+            internal void RestartRepairWindow()
+            {
+                repairDeadline = EditorApplication.timeSinceStartup +
+                                 SessionRepairTimeoutSeconds;
+                SubscribeUpdate();
+            }
 
             internal bool TryAttachVisualTree()
             {
@@ -704,17 +821,19 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                     return false;
                 }
 
-                PackageManagerGitSubmoduleInstallMenu.InstallForRoot(retainedRoot);
+                installMenuMounted =
+                    PackageManagerGitSubmoduleInstallMenu.InstallForRoot(
+                        retainedRoot);
                 if (!projectionRetained)
                 {
                     projectionRetained =
                         PackageManagerGitHubPackageProjection.RetainHost(retainedRoot);
                 }
 
-                if (projectionRetained)
+                nativeActionsMounted = projectionRetained &&
                     PackageManagerGitHubNativeActions.InstallForRoot(retainedRoot);
 
-                return projectionRetained;
+                return IsAttached;
             }
 
             internal bool Activate()
@@ -742,12 +861,6 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             {
                 if (!isDisposed)
                     TryAttachVisualTree();
-            }
-
-            internal void RequestRepaint()
-            {
-                if (!isDisposed && Window != null)
-                    Window.Repaint();
             }
 
             public void Dispose()
@@ -778,6 +891,8 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 if (root == null)
                 {
                     projectionRetained = false;
+                    installMenuMounted = false;
+                    nativeActionsMounted = false;
                     return;
                 }
 
@@ -796,6 +911,8 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 }
 
                 projectionRetained = false;
+                installMenuMounted = false;
+                nativeActionsMounted = false;
             }
 
             private void OnWindowDetached(DetachFromPanelEvent evt)

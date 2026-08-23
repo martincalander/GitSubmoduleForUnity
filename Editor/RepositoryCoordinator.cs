@@ -12,6 +12,10 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         private AsyncCommandHandle branchFetchHandle;
         private bool discardBranchFetchResult;
 
+        internal bool HasPendingBranchWork =>
+            branchFetchHandle != null ||
+            !string.IsNullOrWhiteSpace(pendingBranchFetchUrl);
+
         internal void RequestBranches(string url)
         {
             if (string.IsNullOrWhiteSpace(url))

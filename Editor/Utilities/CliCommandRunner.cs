@@ -236,6 +236,21 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                  handle.Result != null &&
                  handle.Result.TerminationConfirmed));
         }
+
+        internal static void ResetRestartRequirementForTests()
+        {
+            lock (Gate)
+            {
+                if (RetiredHandles.Any(handle =>
+                        handle != null && !handle.IsComplete))
+                {
+                    throw new InvalidOperationException(
+                        "Cannot reset the test drain gate while commands are active.");
+                }
+
+                RetiredHandles.Clear();
+            }
+        }
     }
 
     internal static class CliCommandRunner
@@ -537,6 +552,29 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         internal static void ResetRunner()
         {
             CurrentRunner = new ProcessCommandRunner();
+        }
+
+        internal static void ResetGitHubCommandRestartRequirementForTests()
+        {
+            if (CurrentRunner is ProcessCommandRunner)
+            {
+                throw new InvalidOperationException(
+                    "The GitHub restart gate may only be reset with a test runner installed.");
+            }
+
+            lock (GitHubCommandGate)
+            {
+                if (s_activeGitHubCommandCount != 0 ||
+                    s_gitHubAuthenticationReserved)
+                {
+                    throw new InvalidOperationException(
+                        "The GitHub restart gate cannot be reset while commands are owned.");
+                }
+            }
+
+            AsyncCommandDrainRegistry.ResetRestartRequirementForTests();
+            lock (GitHubCommandGate)
+                s_gitHubCommandRestartRequired = false;
         }
     }
 

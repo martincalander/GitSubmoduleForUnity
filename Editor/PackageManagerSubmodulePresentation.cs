@@ -127,6 +127,64 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                    githubRepositories.Contains(identity);
         }
 
+        internal bool HasSameContent(PackageManagerSubmoduleSnapshotData other)
+        {
+            return ReferenceEquals(this, other) ||
+                   other != null &&
+                   HasSameEntries(byName, other.byName) &&
+                   HasSameEntries(byFullPath, other.byFullPath) &&
+                   githubRepositories.SetEquals(other.githubRepositories);
+        }
+
+        private static bool HasSameEntries(
+            Dictionary<string, PackageManagerSubmoduleInfo> left,
+            Dictionary<string, PackageManagerSubmoduleInfo> right)
+        {
+            if (left.Count != right.Count)
+                return false;
+
+            foreach (KeyValuePair<string, PackageManagerSubmoduleInfo> pair in left)
+            {
+                if (!right.TryGetValue(
+                        pair.Key,
+                        out PackageManagerSubmoduleInfo candidate) ||
+                    !HasSameInfo(pair.Value, candidate))
+                {
+                    return false;
+                }
+            }
+
+            return true;
+        }
+
+        private static bool HasSameInfo(
+            PackageManagerSubmoduleInfo left,
+            PackageManagerSubmoduleInfo right)
+        {
+            return ReferenceEquals(left, right) ||
+                   left != null &&
+                   right != null &&
+                   string.Equals(
+                       left.PackageName,
+                       right.PackageName,
+                       StringComparison.Ordinal) &&
+                   string.Equals(
+                       left.PackagePath,
+                       right.PackagePath,
+                       StringComparison.Ordinal) &&
+                   string.Equals(
+                       left.FullPackagePath,
+                       right.FullPackagePath,
+                       Path.DirectorySeparatorChar == '\\'
+                           ? StringComparison.OrdinalIgnoreCase
+                           : StringComparison.Ordinal) &&
+                   string.Equals(
+                       left.RepositoryUrl,
+                       right.RepositoryUrl,
+                       StringComparison.Ordinal) &&
+                   left.IsGitHub == right.IsGitHub;
+        }
+
         private static string BuildRepositoryIdentity(string owner, string repository)
         {
             if (string.IsNullOrWhiteSpace(owner) ||

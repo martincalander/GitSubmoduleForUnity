@@ -212,6 +212,285 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
         }
 
         [Test]
+        public void Catalogue_BoundsParallelOrganizationLanesAndRefillsFreedLane()
+        {
+            RetainIsolatedDiscoveryOrIgnore();
+
+            var runner = new ParallelOrganizationCatalogueRunner();
+            CliCommandRunner.CurrentRunner = runner;
+            try
+            {
+                PackageManagerGitHubDiscovery.Refresh();
+                WaitForCondition(
+                    () => runner.StartedOrganizationCount >=
+                          PackageManagerGitHubDiscovery.MaximumConcurrentOrganizationLanes,
+                    "The initial organization lanes did not start.");
+
+                Assert.That(
+                    PackageManagerGitHubDiscovery.MaximumConcurrentOrganizationLanes,
+                    Is.EqualTo(2),
+                    "Keep the initial concurrency cap conservative and explicit.");
+                Assert.That(runner.ActiveOrganizationRequests, Is.EqualTo(2));
+                Assert.That(runner.MaximumActiveOrganizationRequests, Is.EqualTo(2));
+                Assert.That(runner.HasStartedOrganization("org-alpha"), Is.True);
+                Assert.That(runner.HasStartedOrganization("org-beta"), Is.True);
+                Assert.That(runner.HasStartedOrganization("org-gamma"), Is.False,
+                    "An organization beyond the lane cap must remain queued.");
+                Assert.That(runner.OrganizationStartedBeforePersonalValidation, Is.False,
+                    "Personal repositories must finish before organization lanes start.");
+
+                runner.ReleaseOrganization("org-beta");
+                WaitForCondition(
+                    () => runner.HasStartedOrganization("org-gamma"),
+                    "A queued organization did not start when a lane became free.");
+
+                Assert.That(runner.ActiveOrganizationRequests, Is.EqualTo(2),
+                    "The scheduler should refill one freed lane without exceeding the cap.");
+                Assert.That(runner.MaximumActiveOrganizationRequests, Is.EqualTo(2));
+
+                runner.ReleaseAllOrganizations();
+                WaitForCatalogue();
+
+                PackageManagerGitHubDiscoverySnapshot snapshot =
+                    PackageManagerGitHubDiscovery.Current;
+                Assert.That(snapshot.IsLoading, Is.False);
+                Assert.That(snapshot.ErrorMessage, Is.Empty);
+                Assert.That(snapshot.CompletedOwners, Is.EqualTo(4));
+                Assert.That(snapshot.TotalOwners, Is.EqualTo(4));
+                Assert.That(snapshot.CompletedPages, Is.EqualTo(5));
+                Assert.That(snapshot.Repositories, Has.Count.EqualTo(5));
+                Assert.That(
+                    snapshot.Repositories.Select(repository => repository.PackageName),
+                    Is.EqualTo(new[]
+                    {
+                        "com.parallel.alpha-first",
+                        "com.parallel.alpha-second",
+                        "com.parallel.beta",
+                        "com.parallel.gamma",
+                        "com.parallel.personal"
+                    }),
+                    "Parallel completion order must not affect catalogue ordering.");
+                Assert.That(runner.OrganizationRepositoryPageCalls, Is.EqualTo(4));
+                Assert.That(runner.MaximumRequestsForOwner("org-alpha"), Is.EqualTo(1),
+                    "Pages for one owner must remain serialized within its lane.");
+                Assert.That(runner.MaximumRequestsForOwner("org-beta"), Is.EqualTo(1));
+                Assert.That(runner.MaximumRequestsForOwner("org-gamma"), Is.EqualTo(1));
+            }
+            finally
+            {
+                runner.ReleaseAllOrganizations();
+            }
+        }
+
+        [Test]
+        public void Refresh_CoalescesQueuedAndTerminalSubscriberIntoOneReplacementScan()
+        {
+            RetainIsolatedDiscoveryOrIgnore();
+
+            var runner = new ParallelOrganizationCatalogueRunner();
+            CliCommandRunner.CurrentRunner = runner;
+            PackageManagerGitHubDiscovery.Refresh();
+            WaitForCondition(
+                () => runner.StartedOrganizationCount >=
+                      PackageManagerGitHubDiscovery.MaximumConcurrentOrganizationLanes,
+                "The initial organization lanes did not start.");
+
+            bool terminalRefreshRequested = false;
+            bool replacementScanObserved = false;
+            void RefreshFromTerminalSnapshot()
+            {
+                if (terminalRefreshRequested ||
+                    PackageManagerGitHubDiscovery.Current.IsLoading)
+                {
+                    return;
+                }
+
+                terminalRefreshRequested = true;
+                PackageManagerGitHubDiscovery.Refresh();
+                replacementScanObserved =
+                    runner.WaitForReplacementPersonalRepositoryPage();
+            }
+
+            PackageManagerGitHubDiscovery.SnapshotChanged +=
+                RefreshFromTerminalSnapshot;
+            try
+            {
+                PackageManagerGitHubDiscovery.Refresh();
+                PackageManagerGitHubDiscovery.Refresh();
+                runner.ReleaseAllOrganizations();
+                WaitForCatalogue();
+            }
+            finally
+            {
+                runner.ReleaseAllOrganizations();
+                PackageManagerGitHubDiscovery.SnapshotChanged -=
+                    RefreshFromTerminalSnapshot;
+            }
+
+            Assert.That(terminalRefreshRequested, Is.True);
+            Assert.That(replacementScanObserved, Is.True,
+                "The terminal callback must start the coalesced replacement scan.");
+            Assert.That(runner.PersonalRepositoryPageCalls, Is.EqualTo(2),
+                "The queued request and synchronous terminal callback must share one replacement scan.");
+            Assert.That(runner.OrganizationRepositoryPageCalls, Is.EqualTo(8));
+            Assert.That(PackageManagerGitHubDiscovery.Current.IsLoading, Is.False);
+            Assert.That(PackageManagerGitHubDiscovery.Current.ErrorMessage, Is.Empty);
+        }
+
+        [Test]
+        public void Dispose_LetsActiveOrganizationReadsDrainWithoutCancellation()
+        {
+            RetainIsolatedDiscoveryOrIgnore();
+
+            var runner = new ParallelOrganizationCatalogueRunner();
+            CliCommandRunner.CurrentRunner = runner;
+            PackageManagerGitHubDiscovery.Refresh();
+            WaitForCondition(
+                () => runner.StartedOrganizationCount >=
+                      PackageManagerGitHubDiscovery.MaximumConcurrentOrganizationLanes,
+                "The organization reads did not reach the active lane cap.");
+
+            try
+            {
+                PackageManagerGitHubDiscovery.Dispose();
+
+                Assert.That(PackageManagerGitHubDiscovery.IsStarted, Is.True,
+                    "An ordinary close should retain ownership until active reads settle.");
+                Assert.That(PackageManagerGitHubDiscovery.IsUpdateSubscribed, Is.True,
+                    "Natural draining needs a temporary update observer.");
+                Assert.That(runner.AnyOrganizationCancellationRequested, Is.False,
+                    "Closing Package Manager must not force-cancel ordinary GitHub reads.");
+                Assert.That(
+                    CliCommandRunner.GitHubCommandRequiresEditorRestart,
+                    Is.False);
+
+                // Reopen and close while the same reads are draining. The most
+                // recent host state must win, so completion must still stop.
+                PackageManagerGitHubDiscovery.EnsureStarted();
+                PackageManagerGitHubDiscovery.Dispose();
+
+                runner.ReleaseAllOrganizations();
+                WaitForCondition(
+                    () => !PackageManagerGitHubDiscovery.IsStarted,
+                    "Discovery did not retire after its active reads drained.");
+
+                Assert.That(runner.AnyOrganizationCancellationRequested, Is.False);
+                Assert.That(PackageManagerGitHubDiscovery.IsUpdateSubscribed, Is.False);
+                Assert.That(CliCommandRunner.HasActiveGitHubCommands, Is.False);
+                Assert.That(
+                    CliCommandRunner.GitHubCommandRequiresEditorRestart,
+                    Is.False);
+                Assert.That(runner.PersonalRepositoryPageCalls, Is.EqualTo(1),
+                    "A final close during drain must suppress the queued restart.");
+            }
+            finally
+            {
+                runner.ReleaseAllOrganizations();
+            }
+        }
+
+        [Test]
+        public void PersonalFailure_DrainsOrganizationListingBeforePublishingFailure()
+        {
+            RetainIsolatedDiscoveryOrIgnore();
+
+            var runner = new PersonalFailureDrainRunner();
+            CliCommandRunner.CurrentRunner = runner;
+            try
+            {
+                PackageManagerGitHubDiscovery.Refresh();
+                WaitForCondition(
+                    () => PackageManagerGitHubDiscovery.IsFailureDrainPending,
+                    "The personal repository failure was not consumed.");
+
+                Assert.That(runner.OrganizationRequestStarted, Is.True);
+                Assert.That(runner.OrganizationCancellationRequested, Is.False);
+                Assert.That(PackageManagerGitHubDiscovery.Current.IsLoading, Is.True,
+                    "Terminal failure must wait for the organization command to finish naturally.");
+                Assert.That(PackageManagerGitHubDiscovery.Current.ErrorMessage, Is.Empty);
+                Assert.That(
+                    CliCommandRunner.GitHubCommandRequiresEditorRestart,
+                    Is.False);
+
+                runner.ReleaseOrganizationRequest();
+                WaitForCatalogue();
+
+                Assert.That(PackageManagerGitHubDiscovery.IsFailureDrainPending, Is.False);
+                Assert.That(PackageManagerGitHubDiscovery.Current.IsLoading, Is.False);
+                Assert.That(PackageManagerGitHubDiscovery.Current.ErrorMessage, Is.Not.Empty);
+                Assert.That(runner.OrganizationCancellationRequested, Is.False);
+                Assert.That(
+                    CliCommandRunner.GitHubCommandRequiresEditorRestart,
+                    Is.False);
+            }
+            finally
+            {
+                runner.ReleaseOrganizationRequest();
+            }
+        }
+
+        [Test]
+        public void RestartRequiredCommand_BlocksQueuedAndManualReplacementScans()
+        {
+            RetainIsolatedDiscoveryOrIgnore();
+
+            var runner = new RestartRequiredFailureRunner();
+            CliCommandRunner.CurrentRunner = runner;
+            try
+            {
+                PackageManagerGitHubDiscovery.Refresh();
+                WaitForCondition(
+                    () => runner.PersonalRepositoryRequestStarted,
+                    "The personal repository request did not start.");
+
+                PackageManagerGitHubDiscovery.Refresh();
+                runner.ReleasePersonalRepositoryRequest();
+                WaitForCatalogue();
+
+                AssertRestartRequiredTerminalState(runner);
+
+                PackageManagerGitHubDiscovery.Refresh();
+
+                AssertRestartRequiredTerminalState(runner);
+            }
+            finally
+            {
+                runner.ReleasePersonalRepositoryRequest();
+                StopDiscoveryAndResetRestartRequirementForTests();
+            }
+        }
+
+        [Test]
+        public void RestartRequiredCommand_BlocksGracefulDrainRestart()
+        {
+            RetainIsolatedDiscoveryOrIgnore();
+
+            var runner = new RestartRequiredFailureRunner();
+            CliCommandRunner.CurrentRunner = runner;
+            try
+            {
+                PackageManagerGitHubDiscovery.Refresh();
+                WaitForCondition(
+                    () => runner.PersonalRepositoryRequestStarted,
+                    "The personal repository request did not start.");
+
+                PackageManagerGitHubDiscovery.Dispose();
+                PackageManagerGitHubDiscovery.EnsureStarted();
+                runner.ReleasePersonalRepositoryRequest();
+                WaitForCatalogue();
+
+                AssertRestartRequiredTerminalState(runner);
+                Assert.That(runner.PersonalRepositoryCancellationRequested, Is.False,
+                    "Graceful draining must not manufacture the restart requirement through cancellation.");
+            }
+            finally
+            {
+                runner.ReleasePersonalRepositoryRequest();
+                StopDiscoveryAndResetRestartRequirementForTests();
+            }
+        }
+
+        [Test]
         public void Refresh_RetainsLastCompletedCatalogueThroughBoundedFailureWindow()
         {
             RetainIsolatedDiscoveryOrIgnore();
@@ -264,8 +543,10 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                     ReferenceEquals(repositories, completedRepositories)),
                 Is.True,
                 "A partial replacement must stay staged until refresh completes.");
+            Assert.That(PackageManagerGitHubDiscovery.IsUpdateSubscribed, Is.True,
+                "Retained results need a bounded expiry observer.");
 
-            PackageManagerGitHubDiscovery.Tick(
+            PackageManagerGitHubDiscovery.ProcessEditorUpdate(
                 EditorApplication.timeSinceStartup +
                 PackageManagerGitHubDiscovery.RetainedCatalogueDurationSeconds +
                 1d);
@@ -279,6 +560,8 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                 "After the safety window, only packages validated by the failed refresh may remain.");
             Assert.That(expired.StatusMessage, Does.Contain("validating 1"));
             Assert.That(expired.ErrorMessage, Is.EqualTo(failed.ErrorMessage));
+            Assert.That(PackageManagerGitHubDiscovery.IsUpdateSubscribed, Is.False,
+                "The expiry observer should retire after retained results expire.");
 
             PackageManagerGitHubDiscovery.Refresh();
             PackageManagerGitHubDiscoverySnapshot retryAfterExpiry =
@@ -320,7 +603,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
             Assert.That(incomplete.Repositories, Is.SameAs(completedRepositories));
             Assert.That(incomplete.StatusMessage, Does.Contain("coverage was incomplete"));
 
-            PackageManagerGitHubDiscovery.Tick(
+            PackageManagerGitHubDiscovery.ProcessEditorUpdate(
                 EditorApplication.timeSinceStartup +
                 PackageManagerGitHubDiscovery.RetainedCatalogueDurationSeconds +
                 1d);
@@ -468,6 +751,536 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                 "GitHub catalogue did not finish: " +
                 PackageManagerGitHubDiscovery.StatusMessage + " " +
                 PackageManagerGitHubDiscovery.ErrorMessage);
+        }
+
+        private static void WaitForCondition(Func<bool> condition, string failureMessage)
+        {
+            DateTime timeout = DateTime.UtcNow.AddSeconds(15);
+            while (DateTime.UtcNow < timeout)
+            {
+                PackageManagerGitHubDiscovery.Tick(
+                    EditorApplication.timeSinceStartup + 1d);
+                if (condition())
+                    return;
+                Thread.Sleep(5);
+            }
+
+            Assert.Fail(failureMessage + " " +
+                        PackageManagerGitHubDiscovery.StatusMessage + " " +
+                        PackageManagerGitHubDiscovery.ErrorMessage);
+        }
+
+        private static void AssertRestartRequiredTerminalState(
+            RestartRequiredFailureRunner runner)
+        {
+            Assert.That(CliCommandRunner.GitHubCommandRequiresEditorRestart, Is.True);
+            Assert.That(PackageManagerGitHubDiscovery.Current.IsLoading, Is.False,
+                "A restart-required command gate must not enter an unstartable loading scan.");
+            Assert.That(
+                PackageManagerGitHubDiscovery.Current.ErrorMessage,
+                Is.EqualTo(
+                    PackageManagerGitHubDiscovery.GitHubCommandRestartRequiredMessage));
+            Assert.That(runner.PersonalRepositoryPageCalls, Is.EqualTo(1));
+        }
+
+        private static void StopDiscoveryAndResetRestartRequirementForTests()
+        {
+            PackageManagerGitHubDiscovery.Dispose();
+            DateTime timeout = DateTime.UtcNow.AddSeconds(15);
+            while (DateTime.UtcNow < timeout &&
+                   (PackageManagerGitHubDiscovery.IsStarted ||
+                    CliCommandRunner.HasActiveGitHubCommands))
+            {
+                PackageManagerGitHubDiscovery.Tick(
+                    EditorApplication.timeSinceStartup + 1d);
+                Thread.Sleep(5);
+            }
+
+            CliCommandRunner.ResetGitHubCommandRestartRequirementForTests();
+        }
+
+        private sealed class PersonalFailureDrainRunner : ICommandRunner
+        {
+            private readonly ManualResetEventSlim organizationStarted = new(false);
+            private readonly ManualResetEventSlim releaseOrganization = new(false);
+            private readonly object syncRoot = new();
+            private CancellationToken organizationCancellationToken;
+
+            internal bool OrganizationRequestStarted => organizationStarted.IsSet;
+
+            internal bool OrganizationCancellationRequested
+            {
+                get
+                {
+                    lock (syncRoot)
+                        return organizationCancellationToken.IsCancellationRequested;
+                }
+            }
+
+            internal void ReleaseOrganizationRequest()
+            {
+                releaseOrganization.Set();
+            }
+
+            public CommandResult Run(CommandSpec spec)
+            {
+                string arguments = GetArguments(spec);
+                if (arguments.Contains("api user --jq .login"))
+                    return Success("personal-owner");
+
+                if (arguments.Contains("user/orgs"))
+                {
+                    lock (syncRoot)
+                        organizationCancellationToken = spec.CancellationToken;
+                    organizationStarted.Set();
+                    return WaitForRelease(
+                        releaseOrganization,
+                        spec.CancellationToken,
+                        string.Empty);
+                }
+
+                if (arguments.Contains("user/repos"))
+                {
+                    while (!organizationStarted.Wait(10))
+                    {
+                        if (spec.CancellationToken.IsCancellationRequested)
+                            return Cancelled();
+                    }
+
+                    return Failure(
+                        "Personal repository listing failed for the test.",
+                        terminationConfirmed: true);
+                }
+
+                return Failure("Unexpected command: " + arguments, true);
+            }
+        }
+
+        private sealed class RestartRequiredFailureRunner : ICommandRunner
+        {
+            private readonly ManualResetEventSlim personalRepositoryStarted =
+                new(false);
+            private readonly ManualResetEventSlim releasePersonalRepository =
+                new(false);
+            private readonly object syncRoot = new();
+            private CancellationToken personalRepositoryCancellationToken;
+            private int personalRepositoryPageCalls;
+
+            internal bool PersonalRepositoryRequestStarted =>
+                personalRepositoryStarted.IsSet;
+            internal int PersonalRepositoryPageCalls =>
+                Volatile.Read(ref personalRepositoryPageCalls);
+
+            internal bool PersonalRepositoryCancellationRequested
+            {
+                get
+                {
+                    lock (syncRoot)
+                        return personalRepositoryCancellationToken.IsCancellationRequested;
+                }
+            }
+
+            internal void ReleasePersonalRepositoryRequest()
+            {
+                releasePersonalRepository.Set();
+            }
+
+            public CommandResult Run(CommandSpec spec)
+            {
+                string arguments = GetArguments(spec);
+                if (arguments.Contains("api user --jq .login"))
+                    return Success("personal-owner");
+                if (arguments.Contains("user/orgs"))
+                    return Success(string.Empty);
+
+                if (arguments.Contains("user/repos"))
+                {
+                    Interlocked.Increment(ref personalRepositoryPageCalls);
+                    lock (syncRoot)
+                        personalRepositoryCancellationToken = spec.CancellationToken;
+                    personalRepositoryStarted.Set();
+                    return WaitForRelease(
+                        releasePersonalRepository,
+                        spec.CancellationToken,
+                        "Repository process ownership could not be confirmed.",
+                        terminationConfirmed: false);
+                }
+
+                return Failure("Unexpected command: " + arguments, true);
+            }
+        }
+
+        private static CommandResult WaitForRelease(
+            ManualResetEventSlim release,
+            CancellationToken cancellationToken,
+            string output,
+            bool terminationConfirmed = true)
+        {
+            while (!release.Wait(10))
+            {
+                if (cancellationToken.IsCancellationRequested)
+                    return Cancelled();
+            }
+
+            return terminationConfirmed
+                ? Success(output)
+                : Failure(output, terminationConfirmed: false);
+        }
+
+        private static CommandResult Cancelled()
+        {
+            return new CommandResult
+            {
+                ExitCode = -1,
+                Cancelled = true,
+                TerminationConfirmed = true
+            };
+        }
+
+        private static CommandResult Failure(
+            string error,
+            bool terminationConfirmed)
+        {
+            return new CommandResult
+            {
+                ExitCode = 1,
+                StdErr = error,
+                TerminationConfirmed = terminationConfirmed
+            };
+        }
+
+        private static string GetArguments(CommandSpec spec)
+        {
+            return spec.Arguments ??
+                   string.Join(" ", spec.ArgumentList ?? Array.Empty<string>());
+        }
+
+        private static CommandResult Success(string output)
+        {
+            return new CommandResult
+            {
+                ExitCode = 0,
+                StdOut = output,
+                StdErr = string.Empty,
+                TerminationConfirmed = true
+            };
+        }
+
+        private sealed class ParallelOrganizationCatalogueRunner : ICommandRunner
+        {
+            private static readonly string[] Organizations =
+            {
+                "org-alpha",
+                "org-beta",
+                "org-gamma"
+            };
+
+            private readonly object syncRoot = new();
+            private readonly Dictionary<string, ManualResetEventSlim> organizationGates =
+                Organizations.ToDictionary(
+                    organization => organization,
+                    _ => new ManualResetEventSlim(false),
+                    StringComparer.Ordinal);
+            private readonly HashSet<string> startedOrganizations =
+                new(StringComparer.Ordinal);
+            private readonly Dictionary<string, int> activeRequestsByOwner =
+                new(StringComparer.Ordinal);
+            private readonly Dictionary<string, int> maximumRequestsByOwner =
+                new(StringComparer.Ordinal);
+            private readonly List<CancellationToken> organizationCancellationTokens =
+                new();
+            private readonly ManualResetEventSlim replacementPersonalPageStarted =
+                new(false);
+
+            private int activeOrganizationRequests;
+            private int maximumActiveOrganizationRequests;
+            private int organizationRepositoryPageCalls;
+            private int personalRepositoryPageCalls;
+            private int personalValidationCompleted;
+            private bool organizationStartedBeforePersonalValidation;
+
+            internal int ActiveOrganizationRequests
+            {
+                get
+                {
+                    lock (syncRoot)
+                        return activeOrganizationRequests;
+                }
+            }
+
+            internal int MaximumActiveOrganizationRequests
+            {
+                get
+                {
+                    lock (syncRoot)
+                        return maximumActiveOrganizationRequests;
+                }
+            }
+
+            internal int OrganizationRepositoryPageCalls
+            {
+                get
+                {
+                    lock (syncRoot)
+                        return organizationRepositoryPageCalls;
+                }
+            }
+
+            internal int PersonalRepositoryPageCalls =>
+                Volatile.Read(ref personalRepositoryPageCalls);
+
+            internal int StartedOrganizationCount
+            {
+                get
+                {
+                    lock (syncRoot)
+                        return startedOrganizations.Count;
+                }
+            }
+
+            internal bool OrganizationStartedBeforePersonalValidation
+            {
+                get
+                {
+                    lock (syncRoot)
+                        return organizationStartedBeforePersonalValidation;
+                }
+            }
+
+            internal bool AnyOrganizationCancellationRequested
+            {
+                get
+                {
+                    lock (syncRoot)
+                    {
+                        return organizationCancellationTokens.Any(
+                            token => token.IsCancellationRequested);
+                    }
+                }
+            }
+
+            internal bool HasStartedOrganization(string owner)
+            {
+                lock (syncRoot)
+                    return startedOrganizations.Contains(owner);
+            }
+
+            internal int MaximumRequestsForOwner(string owner)
+            {
+                lock (syncRoot)
+                {
+                    return maximumRequestsByOwner.TryGetValue(owner, out int maximum)
+                        ? maximum
+                        : 0;
+                }
+            }
+
+            internal void ReleaseOrganization(string owner)
+            {
+                if (organizationGates.TryGetValue(owner, out ManualResetEventSlim gate))
+                    gate.Set();
+            }
+
+            internal void ReleaseAllOrganizations()
+            {
+                foreach (ManualResetEventSlim gate in organizationGates.Values)
+                    gate.Set();
+            }
+
+            internal bool WaitForReplacementPersonalRepositoryPage()
+            {
+                return replacementPersonalPageStarted.Wait(
+                    TimeSpan.FromSeconds(5));
+            }
+
+            public CommandResult Run(CommandSpec spec)
+            {
+                string arguments = GetArguments(spec);
+                if (arguments.Contains("api user --jq .login"))
+                    return Success("personal-owner");
+
+                if (arguments.Contains("user/orgs"))
+                    return Success(string.Join("\n", Organizations));
+
+                if (arguments.Contains("user/repos"))
+                {
+                    if (Interlocked.Increment(ref personalRepositoryPageCalls) == 2)
+                        replacementPersonalPageStarted.Set();
+                    return Success(RepositoryJson(
+                        "NODE-PERSONAL",
+                        "personal-owner",
+                        "personal"));
+                }
+
+                foreach (string organization in Organizations)
+                {
+                    if (arguments.Contains("orgs/" + organization + "/repos"))
+                        return RunOrganizationPage(spec, arguments, organization);
+                }
+
+                if (arguments.Contains("graphql"))
+                    return Success(ManifestResponse(spec));
+
+                return new CommandResult
+                {
+                    ExitCode = 1,
+                    StdErr = "Unexpected command: " + arguments,
+                    TerminationConfirmed = true
+                };
+            }
+
+            private CommandResult RunOrganizationPage(
+                CommandSpec spec,
+                string arguments,
+                string owner)
+            {
+                lock (syncRoot)
+                {
+                    startedOrganizations.Add(owner);
+                    organizationCancellationTokens.Add(spec.CancellationToken);
+                    organizationRepositoryPageCalls++;
+                    activeOrganizationRequests++;
+                    maximumActiveOrganizationRequests = Math.Max(
+                        maximumActiveOrganizationRequests,
+                        activeOrganizationRequests);
+                    activeRequestsByOwner.TryGetValue(owner, out int activeForOwner);
+                    activeForOwner++;
+                    activeRequestsByOwner[owner] = activeForOwner;
+                    maximumRequestsByOwner.TryGetValue(owner, out int maximumForOwner);
+                    maximumRequestsByOwner[owner] = Math.Max(
+                        maximumForOwner,
+                        activeForOwner);
+                    if (Volatile.Read(ref personalValidationCompleted) == 0)
+                        organizationStartedBeforePersonalValidation = true;
+                }
+
+                try
+                {
+                    ManualResetEventSlim gate = organizationGates[owner];
+                    while (!gate.Wait(10))
+                    {
+                        if (spec.CancellationToken.IsCancellationRequested)
+                        {
+                            return new CommandResult
+                            {
+                                ExitCode = -1,
+                                Cancelled = true,
+                                TerminationConfirmed = true
+                            };
+                        }
+                    }
+
+                    bool secondPage = arguments.Contains("page=2");
+                    if (owner == "org-alpha" && !secondPage)
+                    {
+                        return Success(
+                            "HTTP/2.0 200 OK\r\n" +
+                            "Link: <https://api.github.com/orgs/org-alpha/repos?page=2>; rel=\"next\"\r\n\r\n" +
+                            RepositoryJson(
+                                "NODE-ALPHA-FIRST",
+                                owner,
+                                "alpha-first"));
+                    }
+
+                    string suffix = owner.Substring("org-".Length);
+                    return Success(RepositoryJson(
+                        owner == "org-alpha"
+                            ? "NODE-ALPHA-SECOND"
+                            : "NODE-" + suffix.ToUpperInvariant(),
+                        owner,
+                        owner == "org-alpha" ? "alpha-second" : suffix));
+                }
+                finally
+                {
+                    lock (syncRoot)
+                    {
+                        activeOrganizationRequests--;
+                        activeRequestsByOwner[owner]--;
+                    }
+                }
+            }
+
+            private string ManifestResponse(CommandSpec spec)
+            {
+                var nodes = new List<string>();
+                foreach (string argument in spec.ArgumentList ?? Array.Empty<string>())
+                {
+                    if (!argument.StartsWith("ids[]=", StringComparison.Ordinal))
+                        continue;
+
+                    string nodeId = argument.Substring("ids[]=".Length);
+                    string packageName = nodeId switch
+                    {
+                        "NODE-PERSONAL" => "com.parallel.personal",
+                        "NODE-ALPHA-FIRST" => "com.parallel.alpha-first",
+                        "NODE-ALPHA-SECOND" => "com.parallel.alpha-second",
+                        "NODE-BETA" => "com.parallel.beta",
+                        "NODE-GAMMA" => "com.parallel.gamma",
+                        _ => string.Empty
+                    };
+                    string manifest =
+                        "{\"name\":\"" + packageName +
+                        "\",\"displayName\":\"" + packageName +
+                        "\",\"version\":\"1.0.0\"}";
+                    nodes.Add(
+                        "{\"id\":\"" + nodeId +
+                        "\",\"packageManifest\":{" +
+                        "\"__typename\":\"Blob\"," +
+                        "\"oid\":\"" + new string('c', 40) + "\"," +
+                        "\"byteSize\":" + Encoding.UTF8.GetByteCount(manifest) + "," +
+                        "\"isBinary\":false," +
+                        "\"isTruncated\":false," +
+                        "\"text\":" + QuoteJson(manifest) + "}}"
+                    );
+
+                    if (nodeId == "NODE-PERSONAL")
+                        Volatile.Write(ref personalValidationCompleted, 1);
+                }
+
+                return
+                    "{\"data\":{\"nodes\":[" + string.Join(",", nodes) +
+                    "],\"rateLimit\":{\"remaining\":100," +
+                    "\"resetAt\":\"\"}},\"errors\":[]}";
+            }
+
+            private static string RepositoryJson(
+                string nodeId,
+                string owner,
+                string name)
+            {
+                return
+                    "[{\"node_id\":\"" + nodeId +
+                    "\",\"name\":\"" + name +
+                    "\",\"owner\":{\"login\":\"" + owner +
+                    "\"},\"clone_url\":\"https://github.com/" + owner + "/" + name +
+                    ".git\",\"html_url\":\"https://github.com/" + owner + "/" + name +
+                    "\",\"default_branch\":\"main\",\"private\":false," +
+                    "\"description\":\"Package\",\"updated_at\":\"2026-01-01\"}]";
+            }
+
+            private static string QuoteJson(string value)
+            {
+                return "\"" + value
+                    .Replace("\\", "\\\\")
+                    .Replace("\"", "\\\"") + "\"";
+            }
+
+            private static string GetArguments(CommandSpec spec)
+            {
+                return spec.Arguments ??
+                       string.Join(" ", spec.ArgumentList ?? Array.Empty<string>());
+            }
+
+            private static CommandResult Success(string output)
+            {
+                return new CommandResult
+                {
+                    ExitCode = 0,
+                    StdOut = output,
+                    StdErr = string.Empty,
+                    TerminationConfirmed = true
+                };
+            }
         }
 
         private sealed class CatalogueRunner : ICommandRunner

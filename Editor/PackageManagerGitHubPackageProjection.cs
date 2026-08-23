@@ -51,6 +51,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         private static bool projectionRetryQueued;
         private static bool isProjectionRetryInProgress;
         private static bool isShuttingDown;
+        private static int packageDatabaseUpdateDepth;
 
         // Deterministic failure seam for the retry contract tests. Production
         // code leaves this null and always uses the guarded reflection factory.
@@ -74,6 +75,12 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         {
             return TryGetContract(out _);
         }
+
+        // PackageDatabase.UpdatePackages synchronously refreshes active pages.
+        // The Harmony refresh hook uses this narrow guard to distinguish that
+        // projection callback from an actual Package Manager refresh request.
+        internal static bool IsUpdatingPackageDatabase =>
+            packageDatabaseUpdateDepth > 0;
 
         /// <summary>
         /// Retains a Package Manager visual root by reference. Repeated retains of
@@ -102,6 +109,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
 
             // Remove serialized placeholders left by an interrupted previous
             // domain, then rebuild only from the current immutable catalogue.
+            PackageManagerSubmoduleSnapshot.Refresh();
             RemoveOwnedPackages();
             return Reconcile(PackageManagerGitHubDiscovery.Current);
         }
@@ -309,7 +317,8 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                     contract,
                     packageDatabase);
                 if (ownedIds.Count != 0 &&
-                    !contract.UpdatePackages(
+                    !UpdatePackageDatabase(
+                        contract,
                         packageDatabase,
                         Array.Empty<object>(),
                         ownedIds))
@@ -480,7 +489,11 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             try
             {
                 if ((addOrUpdate.Count != 0 || removeIds.Count != 0) &&
-                    !contract.UpdatePackages(packageDatabase, addOrUpdate, removeIds))
+                    !UpdatePackageDatabase(
+                        contract,
+                        packageDatabase,
+                        addOrUpdate,
+                        removeIds))
                 {
                     ReplaceRepositoryMap(priorMap);
                     return false;
@@ -497,6 +510,26 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             }
 
             return true;
+        }
+
+        private static bool UpdatePackageDatabase(
+            ReflectionContract contract,
+            object packageDatabase,
+            IReadOnlyList<object> addOrUpdate,
+            IReadOnlyList<string> removeIds)
+        {
+            packageDatabaseUpdateDepth++;
+            try
+            {
+                return contract.UpdatePackages(
+                    packageDatabase,
+                    addOrUpdate,
+                    removeIds);
+            }
+            finally
+            {
+                packageDatabaseUpdateDepth--;
+            }
         }
 
         private static void ReplaceRepositoryMap(
@@ -888,9 +921,17 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                     return;
             }
 
-            // Attempt removal before closing the reflection gate. A failure is
+            // Avoid resolving and scanning Package Manager's database during a
+            // reload when this domain never projected anything. A failure is
             // harmless: the next domain's delayed startup purge retries it.
-            RemoveOwnedPackages();
+            bool hasProjectedState;
+            lock (Gate)
+            {
+                hasProjectedState = RetainedHosts.Count != 0 ||
+                                    RepositoryByPackageId.Count != 0;
+            }
+            if (hasProjectedState)
+                RemoveOwnedPackages();
 
             lock (Gate)
             {

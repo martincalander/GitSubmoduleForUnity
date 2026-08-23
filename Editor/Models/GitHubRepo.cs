@@ -22,7 +22,6 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         public bool IsPrivate;
         public string Description;
         public string UpdatedAt;
-        public bool IsInstalled;
         public PackageManifestState ManifestState;
         public string PackageManifestMessage;
         public string DeclaredPackageName;
@@ -38,16 +37,10 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             Array.Empty<PackageManifestDependency>();
         public string PackageManifestBlobOid;
 
-        public bool HasPackageJson => ManifestState == PackageManifestState.Valid;
-
         public bool PackageJsonChecked =>
             ManifestState == PackageManifestState.Valid ||
             ManifestState == PackageManifestState.Missing ||
             ManifestState == PackageManifestState.Invalid;
 
-        public string PackageJsonError =>
-            ManifestState == PackageManifestState.Unavailable
-                ? PackageManifestMessage
-                : string.Empty;
     }
 }

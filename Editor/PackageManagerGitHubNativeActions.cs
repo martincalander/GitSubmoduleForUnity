@@ -29,9 +29,6 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         internal const string BuiltInActionsFieldName =
             "m_BuiltInActionsContainer";
         internal const string DetailsLinksPropertyName = "detailsLinks";
-        internal const string ActionButtonElementName =
-            PackageManagerGitHubDetails.InstallActionElementName;
-
         private const BindingFlags AnyInstance =
             BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
 
@@ -2336,77 +2333,6 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                    string.Equals(expectedPath, actualPath, comparison);
         }
 
-        private static List<PackageManagerGitHubDetails> FindDetailsForInstall(
-            PackageManagerGitHubDetails preferredDetails,
-            string repositoryIdentity,
-            string installIdentity)
-        {
-            var matches = new List<PackageManagerGitHubDetails>();
-            if (string.IsNullOrWhiteSpace(installIdentity) &&
-                string.IsNullOrWhiteSpace(repositoryIdentity))
-            {
-                return matches;
-            }
-
-            AddDetailsIfMatching(
-                matches,
-                preferredDetails,
-                repositoryIdentity,
-                installIdentity);
-
-            foreach (NativeActionEntry entry in EntriesByToolbar.Values)
-            {
-                AddDetailsIfMatching(
-                    matches,
-                    entry?.Details,
-                    repositoryIdentity,
-                    installIdentity);
-            }
-
-            return matches;
-        }
-
-        private static void AddDetailsIfMatching(
-            List<PackageManagerGitHubDetails> matches,
-            PackageManagerGitHubDetails details,
-            string repositoryIdentity,
-            string installIdentity)
-        {
-            if (details == null ||
-                details.IsDisposed ||
-                matches.Contains(details))
-            {
-                return;
-            }
-
-            bool matchesIdentity = !string.IsNullOrWhiteSpace(installIdentity)
-                ? string.Equals(
-                    installIdentity,
-                    BuildActiveInstallIdentity(
-                        details.CurrentRepository,
-                        details.SelectedBranch,
-                        details.SelectedInstallMode),
-                    StringComparison.Ordinal)
-                : IsDetailsShowingRepository(
-                    details,
-                    repositoryIdentity);
-            if (matchesIdentity)
-                matches.Add(details);
-        }
-
-        private static bool IsDetailsShowingRepository(
-            PackageManagerGitHubDetails details,
-            string repositoryIdentity)
-        {
-            return details != null &&
-                   !details.IsDisposed &&
-                   string.Equals(
-                       repositoryIdentity,
-                       PackageManagerGitHubDetails.GetRepositoryIdentity(
-                           details.CurrentRepository),
-                       StringComparison.Ordinal);
-        }
-
         private static void ReportInstallError(
             PackageManagerGitHubDetails details,
             string title,
@@ -2430,41 +2356,6 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 // Package Manager can recycle the details hierarchy while an
                 // asynchronous Git callback is completing. The sanitized console
                 // diagnostic remains available if inline feedback cannot mount.
-            }
-
-            Debug.LogWarning("[Git Submodule Manager] " + diagnostic);
-        }
-
-        private static void ReportInstallErrorForRepository(
-            PackageManagerGitHubDetails preferredDetails,
-            string repositoryIdentity,
-            string installIdentity,
-            string title,
-            string message)
-        {
-            string safeTitle = GitHubUtility.SanitizeUiDiagnostic(title);
-            string safeMessage = GitHubUtility.SanitizeUiDiagnostic(message);
-            if (string.IsNullOrWhiteSpace(safeMessage))
-                safeMessage = "The Git package operation could not be completed.";
-
-            string diagnostic = string.IsNullOrWhiteSpace(safeTitle)
-                ? safeMessage
-                : safeTitle + ": " + safeMessage;
-            foreach (PackageManagerGitHubDetails details in
-                     FindDetailsForInstall(
-                         preferredDetails,
-                         repositoryIdentity,
-                         installIdentity))
-            {
-                try
-                {
-                    details.ShowInstallError(diagnostic);
-                }
-                catch
-                {
-                    // Another Package Manager refresh can recycle one window
-                    // while feedback is being applied to the others.
-                }
             }
 
             Debug.LogWarning("[Git Submodule Manager] " + diagnostic);

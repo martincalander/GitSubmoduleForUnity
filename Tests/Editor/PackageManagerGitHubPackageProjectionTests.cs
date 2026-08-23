@@ -223,6 +223,16 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                     .ShouldExplicitlyRebuildPage(true, true, true),
                 Is.True,
                 "A forced package-registration or submodule refresh must not inherit duplicate-rebuild suppression.");
+            Assert.That(
+                PackageManagerGitHubNativePresentationPatch
+                    .ShouldForwardDiscoveryRefresh(false),
+                Is.True,
+                "A native user refresh must reach the coalescing discovery entry point.");
+            Assert.That(
+                PackageManagerGitHubNativePresentationPatch
+                    .ShouldForwardDiscoveryRefresh(true),
+                Is.False,
+                "A synchronous projection rebuild must not recursively start discovery.");
         }
 
         [Test]

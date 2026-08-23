@@ -97,9 +97,12 @@ not convertible because a package submodule must expose its manifest at the
 checkout root.
 
 Projection records are owned by a specific Package Manager host lifecycle.
-Refresh retires obsolete catalogue handles before replacing records; window
-teardown releases that host's transient projections; domain reload and Editor
-shutdown dispose discovery coordinators and process handles.
+Refresh requests made during an active catalogue load are coalesced until its
+bounded GitHub reads finish, avoiding forced cancellation of live process trees.
+Window teardown releases that host's transient projections and lets active
+bounded reads terminate naturally before coordinator disposal. Domain reload
+and Editor shutdown still dispose discovery coordinators and process handles
+immediately as lifecycle safety requires.
 
 ## Reflection and Compatibility Boundary
 
@@ -218,10 +221,13 @@ never silently approved.
 ## Discovery State
 
 The native catalogue starts lazily when **Sources > GitHub** needs remote data.
-One coordinator walks repository pages for the authenticated user and their
-visible organizations. Repository node IDs are sent to GitHub GraphQL in bounded
+One bootstrap coordinator walks the authenticated user's pages and discovers
+visible organizations. Up to two organization coordinators then overlap network
+and GitHub CLI latency, while pages and manifest validation remain serialized
+inside each owner. Repository node IDs are sent to GitHub GraphQL in bounded
 batches, and each confirmed root manifest is published into an immutable
-snapshot as soon as its validation batch completes.
+snapshot as soon as its validation batch completes. Aggregation and immutable
+snapshot publication remain on Unity's main thread.
 
 Records are deduplicated by GitHub node ID, falling back to case-insensitive
 owner/name identity. Unavailable, malformed, non-root, or unchecked manifests

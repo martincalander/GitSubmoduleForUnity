@@ -93,6 +93,26 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
             }
         }
 
+        [Test]
+        public void DiscoveryCoordinator_ObservesLiveAuthenticationReservation()
+        {
+            IgnoreWhenLivePackageManagerDiscoveryOwnsGitHubCommands();
+
+            Assert.That(
+                CliCommandRunner.TryReserveGitHubAuthentication(),
+                Is.True);
+            try
+            {
+                Assert.That(
+                    DiscoveryCoordinator.CanStartGitHubCommandNow,
+                    Is.False);
+            }
+            finally
+            {
+                CliCommandRunner.ReleaseGitHubAuthenticationReservation();
+            }
+        }
+
         [TestCase(false, false, false, false, false)]
         [TestCase(true, false, false, false, true)]
         [TestCase(false, true, false, false, true)]

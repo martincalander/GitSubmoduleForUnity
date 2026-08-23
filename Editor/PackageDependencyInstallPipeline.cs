@@ -126,7 +126,6 @@ namespace MartinCalander.GitSubmoduleManager.Editor
     /// dependency resolution and consent before handing the only mutation to
     /// the reload-safe coordinator.
     /// </summary>
-    [InitializeOnLoad]
     internal static class PackageDependencyInstallPipeline
     {
         private const double PreMutationTimeoutSeconds = 600d;

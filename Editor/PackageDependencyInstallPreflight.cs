@@ -303,17 +303,11 @@ namespace MartinCalander.GitSubmoduleManager.Editor
     /// Main-thread, single-flight wrapper. It owns only read-only discovery and
     /// registry searches; project mutation starts later in the coordinator.
     /// </summary>
-    [InitializeOnLoad]
     internal static class PackageDependencyPreflightService
     {
         private static PackageDependencyPreflightRunner runner;
 
         internal static event Action<PackageDependencyPreflightCompletion> Completed;
-
-        static PackageDependencyPreflightService()
-        {
-            AssemblyReloadEvents.beforeAssemblyReload += OnBeforeAssemblyReload;
-        }
 
         internal static bool IsBusy => runner?.IsBusy == true;
 
@@ -350,6 +344,8 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 return false;
             }
 
+            AssemblyReloadEvents.beforeAssemblyReload -= OnBeforeAssemblyReload;
+            AssemblyReloadEvents.beforeAssemblyReload += OnBeforeAssemblyReload;
             EditorApplication.update -= Update;
             EditorApplication.update += Update;
             return true;
@@ -358,6 +354,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         internal static void Cancel()
         {
             EditorApplication.update -= Update;
+            AssemblyReloadEvents.beforeAssemblyReload -= OnBeforeAssemblyReload;
             runner?.Dispose();
             runner = null;
         }
@@ -371,6 +368,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             }
 
             EditorApplication.update -= Update;
+            AssemblyReloadEvents.beforeAssemblyReload -= OnBeforeAssemblyReload;
             runner?.Dispose();
             runner = null;
         }
@@ -407,7 +405,6 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         private static void OnBeforeAssemblyReload()
         {
             Cancel();
-            AssemblyReloadEvents.beforeAssemblyReload -= OnBeforeAssemblyReload;
         }
     }
 }

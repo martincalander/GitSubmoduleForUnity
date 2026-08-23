@@ -205,7 +205,6 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         private static readonly Encoding StrictUtf8Encoding = new UTF8Encoding(false, true);
         private static readonly Regex PackageNameRegex = new Regex(@"^[a-z0-9]+(?:[._-][a-z0-9]+)+$", RegexOptions.Compiled);
         private static readonly Regex BranchNameRegex = new Regex(@"^[A-Za-z0-9][A-Za-z0-9._/-]*$", RegexOptions.Compiled);
-        private static readonly Regex SubmoduleStatusRegex = new Regex(@"^[ +\-U]?([0-9a-f]{7,64})\s+([^\s]+)", RegexOptions.Multiline | RegexOptions.Compiled);
         private static readonly Regex CommitObjectIdRegex = new Regex(
             "^[0-9a-fA-F]{40,64}$",
             RegexOptions.Compiled | RegexOptions.CultureInvariant);
@@ -1306,25 +1305,6 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 return true;
             }
 
-            var statusResult = RunGit(
-                "submodule status",
-                root,
-                CliCommandRunner.DefaultTimeoutMs,
-                cancellationToken);
-            if (!statusResult.IsSuccess)
-            {
-                error = BuildCommandError("Failed to read submodule status", statusResult);
-                return false;
-            }
-
-            if (!TryRequireCompleteStructuralOutput(
-                    statusResult,
-                    "Submodule status inspection",
-                    out error))
-                return false;
-
-            string statusOutput = statusResult.StdOut;
-
             var configResult = RunGit(
                 "config --no-includes --null --file .gitmodules --list",
                 root,
@@ -1350,7 +1330,6 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             if (!TryParseNullConfigList(configResult.StdOut, out var config, out error))
                 return false;
 
-            var commitMap = ParseSubmoduleCommitMap(statusOutput);
             var names = ExtractSubmoduleNamesFromConfig(config);
 
             foreach (string name in names)
@@ -1358,33 +1337,26 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 cancellationToken.ThrowIfCancellationRequested();
                 config.TryGetValue($"submodule.{name}.path", out string rawPath);
                 config.TryGetValue($"submodule.{name}.url", out string url);
-                config.TryGetValue($"submodule.{name}.branch", out string branch);
                 string path = NormalizePath(rawPath ?? string.Empty);
                 if (!IsPackagePath(path))
                     continue;
 
                 var info = new GitPackageInfo
                 {
-                    Name = name,
                     Path = path,
-                    Url = url ?? string.Empty,
-                    Branch = branch ?? string.Empty,
-                    CommitHash = commitMap.TryGetValue(path, out string commit) ? commit : string.Empty,
-                    IsInitialized = IsSubmoduleInitialized(statusOutput, path)
+                    Url = url ?? string.Empty
                 };
 
                 string packageJsonPath = Path.Combine(root, path, "package.json");
-                info.HasPackageJson = File.Exists(packageJsonPath);
-                if (info.HasPackageJson &&
+                if (File.Exists(packageJsonPath) &&
                     TryReadValidPackageManifest(
                         packageJsonPath,
                         out string packageName,
-                        out string packageDisplayName,
+                        out _,
                         out _,
                         cancellationToken))
                 {
                     info.PackageName = packageName;
-                    info.DisplayName = packageDisplayName;
                 }
                 else if (path.Replace("\\", "/").StartsWith("Packages/", StringComparison.Ordinal))
                 {
@@ -6907,27 +6879,6 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             return names;
         }
 
-        internal static Dictionary<string, string> ParseSubmoduleCommitMap(string submoduleStatusOutput)
-        {
-            var commits = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-            if (string.IsNullOrWhiteSpace(submoduleStatusOutput))
-            {
-                return commits;
-            }
-
-            foreach (Match match in SubmoduleStatusRegex.Matches(submoduleStatusOutput))
-            {
-                string commit = match.Groups[1].Value;
-                string path = NormalizePath(match.Groups[2].Value);
-                if (!string.IsNullOrEmpty(path))
-                {
-                    commits[path] = commit;
-                }
-            }
-
-            return commits;
-        }
-
         internal static List<string> ParseRemoteBranches(string lsRemoteOutput)
         {
             var branches = new List<string>();
@@ -6959,30 +6910,6 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         internal static string NormalizePath(string path)
         {
             return (path ?? string.Empty).Replace("\\", "/").Trim();
-        }
-
-        private static bool IsSubmoduleInitialized(string statusOutput, string path)
-        {
-            if (string.IsNullOrWhiteSpace(statusOutput))
-                return false;
-
-            string normalizedPath = NormalizePath(path);
-            string[] lines = statusOutput.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries);
-            foreach (string line in lines)
-            {
-                string trimmed = line.TrimStart(' ', '+', '-', 'U');
-                int separator = trimmed.IndexOf(' ');
-                if (separator < 0)
-                    continue;
-
-                string remainder = trimmed.Substring(separator + 1);
-                int pathEnd = remainder.IndexOf(' ');
-                string candidatePath = NormalizePath(pathEnd >= 0 ? remainder.Substring(0, pathEnd) : remainder);
-                if (string.Equals(candidatePath, normalizedPath, StringComparison.Ordinal))
-                    return line.Length > 0 && line[0] != '-';
-            }
-
-            return false;
         }
 
         internal static string Quote(string value)

@@ -520,19 +520,6 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
         }
 
         [Test]
-        public void ParseSubmoduleCommitMap_ParsesTrackedAndUninitializedEntries()
-        {
-            const string statusOutput =
-                "-1234567890abcdef1234567890abcdef12345678 Packages/com.martincalander.gitsubmodulemanager\n" +
-                " abcdef0123456789abcdef0123456789abcdef01 Packages\\com.essentials.extensions (heads/main)\n";
-
-            var commitMap = GitUtility.ParseSubmoduleCommitMap(statusOutput);
-
-            Assert.That(commitMap["Packages/com.martincalander.gitsubmodulemanager"], Is.EqualTo("1234567890abcdef1234567890abcdef12345678"));
-            Assert.That(commitMap["Packages/com.essentials.extensions"], Is.EqualTo("abcdef0123456789abcdef0123456789abcdef01"));
-        }
-
-        [Test]
         public void NormalizePath_ReplacesBackslashesAndTrimsWhitespace()
         {
             var normalized = GitUtility.NormalizePath(@"  Packages\com.martincalander.gitsubmodulemanager  ");
@@ -617,75 +604,6 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
 
             Assert.That(redacted, Does.Not.Contain("user:secret"));
             Assert.That(redacted, Does.Contain("https://***@example.com"));
-        }
-
-        [Test]
-        public void CliInstaller_MacGit_UsesSystemInstallerWhenAvailable()
-        {
-            var plan = CliInstaller.GetInstallPlan(
-                ToolKind.Git,
-                RuntimePlatform.OSXEditor,
-                command => command == "xcode-select");
-
-            Assert.That(plan.CanRunAutomatically, Is.True);
-            Assert.That(plan.OpensSystemInstaller, Is.True);
-            Assert.That(plan.FileName, Is.EqualTo("xcode-select"));
-            Assert.That(plan.Arguments, Is.EqualTo("--install"));
-            Assert.That(plan.DisplayCommand, Is.EqualTo("xcode-select --install"));
-        }
-
-        [Test]
-        public void CliInstaller_WindowsGh_UsesWingetWithExplicitAgreements()
-        {
-            var plan = CliInstaller.GetInstallPlan(
-                ToolKind.GitHubCli,
-                RuntimePlatform.WindowsEditor,
-                command => command == "winget");
-
-            Assert.That(plan.CanRunAutomatically, Is.True);
-            Assert.That(plan.FileName, Is.EqualTo("winget"));
-            Assert.That(plan.Arguments, Does.Contain("--id GitHub.cli -e"));
-            Assert.That(plan.Arguments, Does.Contain("--accept-source-agreements"));
-            Assert.That(plan.Arguments, Does.Contain("--accept-package-agreements"));
-            Assert.That(plan.DisplayCommand, Is.EqualTo($"winget {plan.Arguments}"));
-        }
-
-        [Test]
-        public void CliInstaller_Linux_LeavesPrivilegePromptInTerminal()
-        {
-            var plan = CliInstaller.GetInstallPlan(
-                ToolKind.Git,
-                RuntimePlatform.LinuxEditor,
-                command => command == "apt-get");
-
-            Assert.That(plan.CanRunAutomatically, Is.False);
-            Assert.That(plan.CanCopyCommand, Is.True);
-            Assert.That(plan.DisplayCommand, Is.EqualTo("sudo apt-get install git"));
-            Assert.That(plan.AutomaticInstallUnavailableReason, Does.Contain("terminal"));
-        }
-
-        [Test]
-        public void CliInstaller_LinuxGit_SelectsDetectedPackageManager()
-        {
-            var plan = CliInstaller.GetInstallPlan(
-                ToolKind.Git,
-                RuntimePlatform.LinuxEditor,
-                command => command == "dnf");
-
-            Assert.That(plan.DisplayCommand, Is.EqualTo("sudo dnf install git"));
-        }
-
-        [Test]
-        public void CliInstaller_MissingPackageManager_FallsBackToOfficialGuide()
-        {
-            var plan = CliInstaller.GetInstallPlan(
-                ToolKind.GitHubCli,
-                RuntimePlatform.OSXEditor,
-                _ => false);
-
-            Assert.That(plan.CanRunAutomatically, Is.False);
-            Assert.That(plan.InstallUrl, Is.EqualTo("https://cli.github.com/"));
-            Assert.That(plan.AutomaticInstallUnavailableReason, Does.Contain("Homebrew"));
         }
 
         [TestCase(false, false, true)]
@@ -947,8 +865,10 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
             const string url = "https://github.com/owner/repo.git";
 
             coordinator.RequestBranches(url);
+            Assert.That(coordinator.HasPendingBranchWork, Is.True);
             WaitForBranchFetch(coordinator);
 
+            Assert.That(coordinator.HasPendingBranchWork, Is.False);
             Assert.That(coordinator.TryGetBranchError(url, out string error), Is.True);
             Assert.That(error, Does.Contain("network unavailable"));
 
@@ -1068,7 +988,6 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
 
             Assert.That(coordinator.CurrentPage, Is.EqualTo(2));
             Assert.That(coordinator.DisplayedRepos, Has.Count.EqualTo(10));
-            Assert.That(coordinator.HasPrevPage, Is.True);
         }
 
         [Test]

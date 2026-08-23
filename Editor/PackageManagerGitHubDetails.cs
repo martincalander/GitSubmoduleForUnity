@@ -88,6 +88,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             PackageManagerGitInstallMode.GitSubmodule;
         private bool userSelectedBranch;
         private bool installActionEnabled;
+        private bool branchUpdateSubscribed;
         private bool isDisposed;
         private InstallUiState installUiState;
 
@@ -199,8 +200,6 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             EnsurePrimaryControlsMounted();
             EnsureInstallFeedbackMounted();
             SetVisible(false);
-            if (branchDiscoveryEnabled)
-                EditorApplication.update += OnEditorUpdate;
         }
 
         internal VisualElement Controls => controls;
@@ -369,6 +368,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             if (branchDiscoveryEnabled)
             {
                 repositoryCoordinator.RequestBranches(repository.Url);
+                UpdateBranchPolling();
                 UpdateBranchTooltip();
             }
         }
@@ -598,8 +598,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 return;
 
             isDisposed = true;
-            if (branchDiscoveryEnabled)
-                EditorApplication.update -= OnEditorUpdate;
+            UnsubscribeBranchPolling();
             branchField.UnregisterValueChangedCallback(OnBranchChanged);
             installModeField.UnregisterValueChangedCallback(OnInstallModeChanged);
             repositoryCoordinator?.Dispose();
@@ -623,6 +622,31 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 ApplyCurrentBranchChoices(currentRepository.Url);
                 UpdateBranchTooltip();
             }
+
+            UpdateBranchPolling();
+        }
+
+        private void UpdateBranchPolling()
+        {
+            bool shouldSubscribe = !isDisposed &&
+                                   repositoryCoordinator?.HasPendingBranchWork == true;
+            if (shouldSubscribe == branchUpdateSubscribed)
+                return;
+
+            branchUpdateSubscribed = shouldSubscribe;
+            if (shouldSubscribe)
+                EditorApplication.update += OnEditorUpdate;
+            else
+                EditorApplication.update -= OnEditorUpdate;
+        }
+
+        private void UnsubscribeBranchPolling()
+        {
+            if (!branchUpdateSubscribed)
+                return;
+
+            branchUpdateSubscribed = false;
+            EditorApplication.update -= OnEditorUpdate;
         }
 
         private void ApplyCurrentBranchChoices(string repositoryUrl)

@@ -83,6 +83,17 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- GitHub catalogue refreshes now load two organizations concurrently while
+  keeping each owner's pagination and manifest validation serialized. Refresh
+  requests made during an active load are coalesced until the bounded reads
+  finish, and closing the last Package Manager host lets active reads terminate
+  naturally instead of force-cancelling live GitHub CLI process trees.
+- Reduced editor startup, idle, and domain-reload work by activating submodule
+  scans and operation polling only while their workflows are in use, retrying
+  Package Manager hooks only during bounded startup/repair windows, omitting an
+  unnecessary `git submodule status` process, retiring completed discovery and
+  branch polling, and suppressing unchanged snapshot rebuilds. Obsolete
+  internal helpers and stale legacy-window documentation were removed.
 - GitHub discovery now validates a normal 50-repository page with one bounded
   GraphQL request, automatically bisects oversized responses, and avoids
   redundant Package Manager projection, list rebuilds, and package lookup work

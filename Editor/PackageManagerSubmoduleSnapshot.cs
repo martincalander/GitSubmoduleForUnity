@@ -3,7 +3,6 @@ using System.Collections.Generic;
 using System.IO;
 using System.Threading;
 using UnityEditor;
-using UnityEditor.PackageManager;
 
 namespace MartinCalander.GitSubmoduleManager.Editor
 {
@@ -38,6 +37,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         private static double retryNotBefore;
         private static int consecutiveFailures;
         private static bool isReady;
+        private static bool isListening;
         private static volatile bool isShuttingDown;
         private static string lastError = string.Empty;
 
@@ -49,14 +49,6 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             // root on the main thread before any background Git discovery begins.
             ProjectRoot = GitUtility.ProjectRoot;
             GitModulesPath = Path.Combine(ProjectRoot, ".gitmodules");
-            observedRepositoryGeneration = GitOperationService.RepositoryGeneration;
-            observedGitModulesWriteTicks = GetGitModulesWriteTicks();
-
-            EditorApplication.update += Update;
-            EditorApplication.projectChanged += Refresh;
-            Events.registeredPackages += OnRegisteredPackages;
-            AssemblyReloadEvents.beforeAssemblyReload += OnBeforeAssemblyReload;
-            Refresh();
         }
 
         internal static bool IsReady
@@ -65,15 +57,6 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             {
                 lock (Gate)
                     return isReady;
-            }
-        }
-
-        internal static int Count
-        {
-            get
-            {
-                lock (Gate)
-                    return current.Count;
             }
         }
 
@@ -90,21 +73,13 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             }
         }
 
-        internal static string LastError
-        {
-            get
-            {
-                lock (Gate)
-                    return lastError;
-            }
-        }
-
         /// <summary>
         /// Requests a fresh asynchronous submodule snapshot. This method never
         /// runs Git synchronously and is safe for Package Manager host callbacks.
         /// </summary>
         internal static void Refresh()
         {
+            EnsureListening();
             lock (Gate)
             {
                 if (!isShuttingDown)
@@ -122,6 +97,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             bool isInstalled,
             out PackageManagerSubmoduleInfo info)
         {
+            EnsureListening();
             PackageManagerSubmoduleSnapshotData snapshot;
             bool ready;
             lock (Gate)
@@ -136,6 +112,19 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             return ready && snapshot.TryGet(packageName, localPath, isInstalled, out info);
         }
 
+        private static void EnsureListening()
+        {
+            if (isShuttingDown || isListening)
+                return;
+
+            observedRepositoryGeneration = GitOperationService.RepositoryGeneration;
+            observedGitModulesWriteTicks = GetGitModulesWriteTicks();
+            isListening = true;
+            EditorApplication.update += Update;
+            EditorApplication.projectChanged += Refresh;
+            AssemblyReloadEvents.beforeAssemblyReload += OnBeforeAssemblyReload;
+        }
+
         internal static bool ContainsGitHubRepository(
             string owner,
             string repository)
@@ -145,11 +134,6 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 return isReady &&
                        current.ContainsGitHubRepository(owner, repository);
             }
-        }
-
-        private static void OnRegisteredPackages(PackageRegistrationEventArgs _)
-        {
-            Refresh();
         }
 
         private static void Update()
@@ -280,14 +264,19 @@ namespace MartinCalander.GitSubmoduleManager.Editor
 
                 if (result.Success)
                 {
-                    current = PackageManagerSubmoduleSnapshotData.Create(
+                    PackageManagerSubmoduleSnapshotData refreshed =
+                        PackageManagerSubmoduleSnapshotData.Create(
                         result.Packages,
                         ProjectRoot);
+                    changed = !isReady ||
+                              !string.IsNullOrEmpty(lastError) ||
+                              !current.HasSameContent(refreshed);
+                    if (changed)
+                        current = refreshed;
                     isReady = true;
                     lastError = string.Empty;
                     consecutiveFailures = 0;
                     retryNotBefore = 0d;
-                    changed = true;
                 }
                 else if (!string.IsNullOrWhiteSpace(result.Error))
                 {
@@ -333,10 +322,13 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         private static void OnBeforeAssemblyReload()
         {
             isShuttingDown = true;
-            EditorApplication.update -= Update;
-            EditorApplication.projectChanged -= Refresh;
-            Events.registeredPackages -= OnRegisteredPackages;
-            AssemblyReloadEvents.beforeAssemblyReload -= OnBeforeAssemblyReload;
+            if (isListening)
+            {
+                isListening = false;
+                EditorApplication.update -= Update;
+                EditorApplication.projectChanged -= Refresh;
+                AssemblyReloadEvents.beforeAssemblyReload -= OnBeforeAssemblyReload;
+            }
 
             Thread threadToDrain;
             CancellationTokenSource cancellationToDispose;

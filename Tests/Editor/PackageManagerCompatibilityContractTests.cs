@@ -561,11 +561,11 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                     refreshTargets,
                     PackageManagerGitHubNativePresentationPatch
                         .GetPageRefreshPostfix());
-                RequireOwnedPrefixes(
+                RequireOwnedPostfixes(
                     report,
                     activationTargets,
                     PackageManagerGitHubNativePresentationPatch
-                        .GetPageActivationPrefix());
+                        .GetPageActivationPostfix());
                 RequireOwnedPostfixes(
                     report,
                     loadingTargets,
@@ -632,7 +632,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
             RequireParameterNames(
                 report,
                 PackageManagerGitHubNativePresentationPatch
-                    .GetPageActivationPrefix(),
+                    .GetPageActivationPostfix(),
                 "__0");
             RequireParameterNames(
                 report,
@@ -739,23 +739,6 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                 pageId.CanRead &&
                 pageId.PropertyType == typeof(string),
                 "IPage.id is missing or is no longer a readable string.");
-        }
-
-        private static void RequireOwnedPrefixes(
-            CompatibilityReport report,
-            IEnumerable<MethodInfo> targets,
-            MethodInfo prefix)
-        {
-            foreach (MethodInfo target in targets)
-            {
-                report.Require(
-                    PackageManagerGitHubNativePresentationPatch.IsPrefixApplied(
-                        target,
-                        prefix),
-                    "Resolved hook lacks the prefix owned by " +
-                    PackageManagerGitHubNativePresentationPatch.HarmonyId + ": " +
-                    DescribeMethod(target) + ".");
-            }
         }
 
         private static void RequireParameterNames(

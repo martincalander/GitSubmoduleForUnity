@@ -22,7 +22,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         private const string RepositorySearchProjection =
             "{total_count, items: [.items[] | {node_id, name, owner: {login: .owner.login}, clone_url, html_url, default_branch, private, description, updated_at}]}";
         private const string PackageManifestQuery =
-            "query($ids: [ID!]!) { nodes(ids: $ids) { ... on Repository { id packageManifest: object(expression: \"HEAD:package.json\") { __typename oid ... on Blob { byteSize isBinary isTruncated text } } } } rateLimit { cost remaining resetAt } }";
+            "query($ids: [ID!]!) { nodes(ids: $ids) { ... on Repository { id packageManifest: object(expression: \"HEAD:package.json\") { __typename oid ... on Blob { byteSize isBinary isTruncated text } } } } rateLimit { remaining resetAt } }";
 
         [Serializable]
         private sealed class PackageManifestGraphQlResponse
@@ -59,7 +59,6 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         [Serializable]
         private sealed class PackageManifestRateLimit
         {
-            public int cost;
             public int remaining;
             public string resetAt;
         }
@@ -135,8 +134,12 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         internal bool IsLoading =>
             pageFetchDeferredUntilOwnerKnown ||
             pageHandle != null && !pageHandle.IsComplete;
-        internal bool IsCheckingPackageManifest =>
-            packageJsonHandle != null || pendingPackageJsonTarget != null;
+        internal bool HasIncompleteCommands =>
+            IsIncomplete(usernameHandle) ||
+            IsIncomplete(orgsHandle) ||
+            IsIncomplete(pageHandle) ||
+            IsIncomplete(packageJsonHandle) ||
+            IsIncomplete(packageManifestBatchHandle);
         internal int CurrentPage => currentPage;
         internal string StatusMessage => pageFetchDeferredUntilOwnerKnown
             ? "Identifying the authenticated GitHub account..."
@@ -145,9 +148,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         internal string WarningMessage { get; private set; } = string.Empty;
 
         internal List<GitHubRepo> DisplayedRepos { get; private set; } = new();
-        internal bool HasResults => DisplayedRepos.Count > 0;
         internal bool HasNextPage { get; private set; }
-        internal bool HasPrevPage => currentPage > 1;
         internal bool PageChanged { get; private set; }
         internal bool IsValidatingPackageManifests =>
             validPackageFilterEnabled &&
@@ -165,6 +166,11 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             : 0;
         internal int PackageManifestUnavailableCount =>
             CountPackageManifestStates(PackageManifestState.Unavailable);
+
+        private static bool IsIncomplete(AsyncCommandHandle handle)
+        {
+            return handle != null && !handle.IsComplete;
+        }
 
         internal string Username => cachedUsername;
         internal string SelectedOwner => selectedOwner;
@@ -279,17 +285,6 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             }
 
             currentPage++;
-            FetchPage();
-        }
-
-        internal void PrevPage()
-        {
-            if (!HasPrevPage)
-            {
-                return;
-            }
-
-            currentPage--;
             FetchPage();
         }
 
@@ -1342,9 +1337,9 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             return !sharedAuthenticationBlocked && !commandsDraining;
         }
 
-        private static bool CanStartGitHubCommandNow =>
+        internal static bool CanStartGitHubCommandNow =>
             CanStartGitHubCommand(
-                false,
+                CliCommandRunner.IsGitHubAuthenticationReserved,
                 AsyncCommandDrainRegistry.IsDraining ||
                 CliCommandRunner.GitHubCommandRequiresEditorRestart);
 

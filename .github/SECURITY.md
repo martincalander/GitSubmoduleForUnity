@@ -44,10 +44,9 @@ The package launches `git` and optional `gh` processes with
   as unusable for structural parsing when incomplete;
 - commands have bounded timeouts;
 - interactive credential prompts are disabled;
-- missing CLI tools are never installed silently: supported native installer
-  commands are shown verbatim and require explicit confirmation;
-- install assistance is limited to fixed Git and GitHub CLI package identifiers
-  and never runs a downloaded install script or user-provided command.
+- missing CLI tools are never installed by the package; setup surfaces link only
+  to the official Git and GitHub CLI installation guidance, and the package
+  never runs a downloaded install script or user-provided command.
 
 ### Credentials
 

@@ -147,16 +147,18 @@ recovery instructions are reported in the Editor.
 ## Repository Discovery
 
 The native **Sources > GitHub** catalogue walks every repository page for the
-authenticated user and each visible organization. It validates root
-`package.json` files in bounded batches and publishes only confirmed UPM
-packages as results become available. **Refresh** starts a new project and
-GitHub scan.
+authenticated user and each visible organization. Two organization owners load
+concurrently, while pages and manifest validation remain ordered within each
+owner. It validates root `package.json` files in bounded batches and publishes
+only confirmed UPM packages as results become available. **Refresh** starts a
+new project and GitHub scan, or queues one replacement scan when a load is
+already active.
 
 Package Manager's native **Filters** menu can narrow the catalogue by repository
 visibility and organization. The per-user Preferences page supplies the initial
 visibility and organization when the page has no existing filter selection.
-Search uses Package Manager's native projected-package search, stale discovery
-requests are cancelled, and branch information is loaded only when requested.
+Search uses Package Manager's native projected-package search, and branch
+information is loaded only when requested.
 
 Without GitHub CLI, direct Git URLs and installed-submodule management remain
 available. The native GitHub source continues to show installed submodules when

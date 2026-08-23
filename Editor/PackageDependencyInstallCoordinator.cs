@@ -1468,6 +1468,8 @@ namespace MartinCalander.GitSubmoduleManager.Editor
     internal static class PackageDependencyInstallCoordinator
     {
         private static readonly PackageDependencyInstallCoordinatorCore Core;
+        private static bool updateSubscribed;
+        private static bool readOnlyCompletionSubscribed;
 
         internal static event Action<PackageDependencyInstallCompletion> Completed;
 
@@ -1478,9 +1480,8 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 SessionPackageDependencyInstallStateStore.Instance,
                 null,
                 OnCoreCompleted);
-            EditorApplication.update += Update;
-            PackageManagerReadOnlyGitInstallService.Completed +=
-                OnReadOnlyInstallCompleted;
+            SubscribeUpdateIfBusy();
+            UpdateReadOnlyCompletionSubscription();
             AssemblyReloadEvents.beforeAssemblyReload += OnBeforeAssemblyReload;
         }
 
@@ -1507,6 +1508,8 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         {
             if (!Core.TryStart(request, plan, onComplete, out error))
                 return false;
+            SubscribeUpdateIfBusy();
+            UpdateReadOnlyCompletionSubscription();
             return true;
         }
 
@@ -1526,6 +1529,48 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         {
             if (Core.IsBusy)
                 Core.Tick();
+            if (!Core.IsBusy)
+                UnsubscribeUpdate();
+            UpdateReadOnlyCompletionSubscription();
+        }
+
+        private static void SubscribeUpdateIfBusy()
+        {
+            if (!Core.IsBusy || updateSubscribed)
+                return;
+
+            updateSubscribed = true;
+            EditorApplication.update += Update;
+        }
+
+        private static void UnsubscribeUpdate()
+        {
+            if (!updateSubscribed)
+                return;
+
+            updateSubscribed = false;
+            EditorApplication.update -= Update;
+        }
+
+        private static void UpdateReadOnlyCompletionSubscription()
+        {
+            bool shouldSubscribe = Core.IsBusy &&
+                Core.ActiveInstallMode ==
+                    PackageManagerGitInstallMode.ReadOnlyPackage;
+            if (shouldSubscribe == readOnlyCompletionSubscribed)
+                return;
+
+            readOnlyCompletionSubscribed = shouldSubscribe;
+            if (shouldSubscribe)
+            {
+                PackageManagerReadOnlyGitInstallService.Completed +=
+                    OnReadOnlyInstallCompleted;
+            }
+            else
+            {
+                PackageManagerReadOnlyGitInstallService.Completed -=
+                    OnReadOnlyInstallCompleted;
+            }
         }
 
         private static void OnReadOnlyInstallCompleted(
@@ -1566,6 +1611,8 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         private static void OnCoreCompleted(
             PackageDependencyInstallCompletion completion)
         {
+            UnsubscribeUpdate();
+            UpdateReadOnlyCompletionSubscription();
             Invoke(Completed, completion);
         }
 
@@ -1592,9 +1639,13 @@ namespace MartinCalander.GitSubmoduleManager.Editor
 
         private static void OnBeforeAssemblyReload()
         {
-            EditorApplication.update -= Update;
-            PackageManagerReadOnlyGitInstallService.Completed -=
-                OnReadOnlyInstallCompleted;
+            UnsubscribeUpdate();
+            if (readOnlyCompletionSubscribed)
+            {
+                readOnlyCompletionSubscribed = false;
+                PackageManagerReadOnlyGitInstallService.Completed -=
+                    OnReadOnlyInstallCompleted;
+            }
             AssemblyReloadEvents.beforeAssemblyReload -= OnBeforeAssemblyReload;
         }
     }

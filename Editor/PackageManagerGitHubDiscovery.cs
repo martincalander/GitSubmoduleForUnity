@@ -183,8 +183,11 @@ namespace MartinCalander.GitSubmoduleManager.Editor
 
     /// <summary>
     /// Lazily discovers valid root UPM packages across the authenticated user's
-    /// repositories and every organization returned by GitHub CLI. The service
-    /// owns exactly one coordinator and publishes immutable page-sized progress.
+    /// repositories and every organization returned by GitHub CLI. Personal
+    /// repositories bootstrap identity and organization discovery; organization
+    /// owners then load through a small bounded lane pool while each owner's
+    /// pagination remains serialized. Results are still aggregated on Unity's
+    /// main thread and published as immutable page-sized progress.
     /// </summary>
     [InitializeOnLoad]
     internal static class PackageManagerGitHubDiscovery
@@ -193,6 +196,35 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         // disappear immediately, but stale repository authorization and
         // metadata must not be presented indefinitely either.
         internal const double RetainedCatalogueDurationSeconds = 15d * 60d;
+        internal const string GitHubCommandRestartRequiredMessage =
+            "A GitHub command could not confirm that every process stopped. " +
+            "Save your work and restart Unity before refreshing GitHub packages.";
+        // Two owner lanes hide network/process latency without exceeding the
+        // command concurrency already reached while personal repositories and
+        // organization membership load together during bootstrap.
+        internal const int MaximumConcurrentOrganizationLanes = 2;
+
+        private sealed class OrganizationLane : IDisposable
+        {
+            internal OrganizationLane(string owner)
+            {
+                Owner = owner ?? string.Empty;
+                Coordinator = new DiscoveryCoordinator();
+                Coordinator.SetValidPackageFilterEnabled(true);
+                Coordinator.SetOwner(Owner);
+                AwaitingPageResult = true;
+            }
+
+            internal string Owner { get; }
+            internal DiscoveryCoordinator Coordinator { get; }
+            internal bool AwaitingPageResult { get; set; }
+            internal bool PageProcessed { get; set; }
+
+            public void Dispose()
+            {
+                Coordinator.Dispose();
+            }
+        }
 
         private enum CataloguePhase
         {
@@ -212,6 +244,8 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         private static readonly Queue<string> PendingOrganizations = new();
         private static readonly HashSet<string> QueuedOrganizations =
             new(StringComparer.OrdinalIgnoreCase);
+        private static readonly List<OrganizationLane> ActiveOrganizationLanes =
+            new();
 
         private static DiscoveryCoordinator coordinator;
         private static PackageManagerGitHubDiscoverySnapshot current =
@@ -221,11 +255,18 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         private static string statusMessage = string.Empty;
         private static string errorMessage = string.Empty;
         private static string coverageWarningMessage = string.Empty;
+        private static string organizationWarningMessage = string.Empty;
+        private static string pendingOwnerFailureMessage = string.Empty;
+        private static string pendingFailureMessage = string.Empty;
         private static bool isStarted;
+        private static bool updateSubscribed;
         private static bool isLoading;
         private static bool awaitingPageResult;
         private static bool pageProcessed;
         private static bool organizationsQueued;
+        private static bool refreshQueued;
+        private static bool gracefulStopRequested;
+        private static bool restartAfterGracefulStop;
         private static bool isShuttingDown;
         private static bool isStopping;
         private static int completedPages;
@@ -243,6 +284,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         private static bool repositoriesDirty;
         private static bool isShowingRetainedRepositories;
         private static double retainedCatalogueExpiresAt;
+        private static double nextRetainedCatalogueInspection;
 
         internal static event Action SnapshotChanged;
 
@@ -264,19 +306,39 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         internal static string ErrorMessage => current.ErrorMessage;
 
         internal static bool IsStarted => isStarted;
+        internal static bool IsUpdateSubscribed => updateSubscribed;
+        internal static bool IsFailureDrainPending =>
+            !string.IsNullOrWhiteSpace(pendingFailureMessage);
 
         internal static void EnsureStarted()
         {
+            if (gracefulStopRequested && !isShuttingDown)
+            {
+                restartAfterGracefulStop = true;
+                return;
+            }
+
             if (isStarted || isShuttingDown || isStopping)
                 return;
 
             isStarted = true;
-            EditorApplication.update += Update;
+            if (GitHubCommandRestartRequired)
+            {
+                ReportGitHubCommandRestartRequired();
+                return;
+            }
+
             BeginRefresh();
         }
 
         internal static void Refresh()
         {
+            if (gracefulStopRequested && !isShuttingDown)
+            {
+                restartAfterGracefulStop = true;
+                return;
+            }
+
             if (isShuttingDown || isStopping)
                 return;
 
@@ -286,15 +348,63 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 return;
             }
 
+            if (GitHubCommandRestartRequired)
+            {
+                if (isLoading)
+                    BeginFailureDrain(GitHubCommandRestartRequiredMessage);
+                else
+                    ReportGitHubCommandRestartRequired();
+                return;
+            }
+
+            // Cancelling a live gh process cannot prove that its complete
+            // process tree exited on every supported platform. Coalesce an
+            // ordinary refresh behind the bounded read-only work instead of
+            // multiplying that lifecycle risk now that organization reads can
+            // overlap.
+            if (isLoading)
+            {
+                if (refreshQueued)
+                    return;
+
+                refreshQueued = true;
+                statusMessage = BuildStatusMessage();
+                PublishSnapshot();
+                return;
+            }
+
             BeginRefresh();
         }
 
         internal static void Dispose()
         {
+            if (gracefulStopRequested)
+            {
+                // A host may reopen and close again while the previous reads
+                // are draining. The latest host state wins: do not restart an
+                // owner scan after that second close.
+                restartAfterGracefulStop = false;
+                return;
+            }
+
             if (isStopping)
                 return;
 
             isStopping = true;
+            if (isLoading && HasIncompleteCoordinatorCommands())
+            {
+                // Closing the last Package Manager host is routine, not an
+                // Editor lifecycle emergency. Let the at-most-two active reads
+                // finish under their normal timeout so reopening GitHub does
+                // not inherit an unconfirmed forced process-tree cancellation.
+                gracefulStopRequested = true;
+                restartAfterGracefulStop = false;
+                refreshQueued = false;
+                PendingOrganizations.Clear();
+                SubscribeUpdate();
+                return;
+            }
+
             try
             {
                 Stop(publishEmptySnapshot: true);
@@ -307,6 +417,14 @@ namespace MartinCalander.GitSubmoduleManager.Editor
 
         private static void BeginRefresh()
         {
+            if (GitHubCommandRestartRequired)
+            {
+                ReportGitHubCommandRestartRequired();
+                return;
+            }
+
+            SubscribeUpdate();
+            refreshQueued = false;
             double currentTime = EditorApplication.timeSinceStartup;
             if (isShowingRetainedRepositories &&
                 currentTime >= retainedCatalogueExpiresAt)
@@ -338,7 +456,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 retainedCatalogueExpiresAt = 0d;
             }
 
-            DisposeCoordinator();
+            DisposeCoordinators();
             ResetAggregation();
 
             coordinator = new DiscoveryCoordinator();
@@ -358,7 +476,27 @@ namespace MartinCalander.GitSubmoduleManager.Editor
 
         private static void Update()
         {
-            Tick(EditorApplication.timeSinceStartup);
+            ProcessEditorUpdate(EditorApplication.timeSinceStartup);
+        }
+
+        /// <summary>
+        /// Drives the actual editor-update entry point with an explicit time so
+        /// retention expiry and subscription behavior remain deterministic in
+        /// EditMode tests.
+        /// </summary>
+        internal static void ProcessEditorUpdate(double currentTime)
+        {
+            if (!isLoading &&
+                currentTime < nextRetainedCatalogueInspection)
+            {
+                return;
+            }
+
+            nextRetainedCatalogueInspection = isLoading
+                ? 0d
+                : currentTime + 1d;
+            Tick(currentTime);
+            UpdateSubscription();
         }
 
         /// <summary>
@@ -370,10 +508,46 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             if (!isStarted || isShuttingDown)
                 return;
 
+            if (gracefulStopRequested)
+            {
+                TickGracefulStop();
+                return;
+            }
+
             if (ReleaseRetainedCatalogueIfExpired(currentTime))
                 PublishSnapshot();
 
-            if (!isLoading || coordinator == null)
+            if (!isLoading)
+                return;
+
+            if (!string.IsNullOrWhiteSpace(pendingFailureMessage))
+            {
+                TickFailureDrain();
+                return;
+            }
+
+            if (GitHubCommandRestartRequired)
+            {
+                BeginFailureDrain(GitHubCommandRestartRequiredMessage);
+                return;
+            }
+
+            if (phase == CataloguePhase.OrganizationRepositories)
+            {
+                try
+                {
+                    TickOrganizationLanes(currentTime);
+                }
+                catch (Exception exception)
+                {
+                    BeginFailureDrain(
+                        "GitHub organization discovery failed unexpectedly: " +
+                        GitHubUtility.SanitizeUiDiagnostic(exception.Message));
+                }
+                return;
+            }
+
+            if (coordinator == null)
                 return;
 
             try
@@ -388,7 +562,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
 
                 if (!string.IsNullOrWhiteSpace(coordinator.ErrorMessage))
                 {
-                    Fail(coordinator.ErrorMessage);
+                    BeginFailureDrain(coordinator.ErrorMessage);
                     return;
                 }
 
@@ -410,7 +584,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                     !coordinator.IsLoading &&
                     !coordinator.IsValidatingPackageManifests)
                 {
-                    ConsumeSettledPage();
+                    ConsumePersonalSettledPage();
                     return;
                 }
 
@@ -426,13 +600,13 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             }
             catch (Exception exception)
             {
-                Fail(
+                BeginFailureDrain(
                     "GitHub package discovery failed unexpectedly: " +
                     GitHubUtility.SanitizeUiDiagnostic(exception.Message));
             }
         }
 
-        private static void ConsumeSettledPage()
+        private static void ConsumePersonalSettledPage()
         {
             pageProcessed = true;
             completedPages++;
@@ -450,21 +624,17 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             }
 
             completedOwners++;
-            if (phase == CataloguePhase.PersonalRepositories)
+            phase = CataloguePhase.WaitingForOrganizations;
+            activeOwner = coordinator.Username;
+            if (coordinator.OrgsLoaded)
             {
-                phase = CataloguePhase.WaitingForOrganizations;
-                activeOwner = coordinator.Username;
-                if (coordinator.OrgsLoaded)
-                    QueueOrganizationsAndContinue();
-                else
-                {
-                    statusMessage = "Loading GitHub organizations...";
-                    PublishSnapshot();
-                }
-                return;
+                QueueOrganizationsAndContinue();
             }
-
-            StartNextOrganizationOrComplete();
+            else
+            {
+                statusMessage = "Loading GitHub organizations...";
+                PublishSnapshot();
+            }
         }
 
         private static void QueueOrganizationsAndContinue()
@@ -473,6 +643,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             {
                 organizationsQueued = true;
                 string username = coordinator.Username;
+                organizationWarningMessage = coordinator.WarningMessage ?? string.Empty;
                 foreach (string organization in coordinator.Organizations)
                 {
                     string normalized = organization?.Trim() ?? string.Empty;
@@ -489,28 +660,157 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 totalOwners = 1 + PendingOrganizations.Count;
             }
 
-            StartNextOrganizationOrComplete();
+            phase = CataloguePhase.OrganizationRepositories;
+            activeOwner = string.Empty;
+            DisposePersonalCoordinator();
+            StartOrganizationLanesOrComplete();
         }
 
-        private static void StartNextOrganizationOrComplete()
+        private static void StartOrganizationLanesOrComplete()
         {
-            if (PendingOrganizations.Count == 0)
+            while (string.IsNullOrWhiteSpace(pendingOwnerFailureMessage) &&
+                   ActiveOrganizationLanes.Count < MaximumConcurrentOrganizationLanes &&
+                   PendingOrganizations.Count > 0)
             {
-                Complete();
+                ActiveOrganizationLanes.Add(
+                    new OrganizationLane(PendingOrganizations.Dequeue()));
+            }
+
+            if (ActiveOrganizationLanes.Count == 0 &&
+                PendingOrganizations.Count == 0)
+            {
+                if (string.IsNullOrWhiteSpace(pendingOwnerFailureMessage))
+                    Complete();
+                else
+                    Fail(pendingOwnerFailureMessage);
                 return;
             }
 
-            activeOwner = PendingOrganizations.Dequeue();
-            phase = CataloguePhase.OrganizationRepositories;
-            coordinator.SetOwner(activeOwner);
-            awaitingPageResult = true;
-            pageProcessed = false;
             statusMessage = BuildStatusMessage();
             PublishSnapshot();
         }
 
+        private static void TickOrganizationLanes(double currentTime)
+        {
+            bool changed = false;
+            bool laneSettled = false;
+            OrganizationLane[] lanes = ActiveOrganizationLanes.ToArray();
+            foreach (OrganizationLane lane in lanes)
+            {
+                if (!ActiveOrganizationLanes.Contains(lane))
+                    continue;
+
+                DiscoveryCoordinator ownerCoordinator = lane.Coordinator;
+                bool laneChanged = ownerCoordinator.Tick(currentTime);
+                changed |= laneChanged;
+                if (ownerCoordinator.PageChanged)
+                {
+                    lane.AwaitingPageResult = false;
+                    lane.PageProcessed = false;
+                    changed = true;
+                }
+
+                if (!string.IsNullOrWhiteSpace(ownerCoordinator.ErrorMessage))
+                {
+                    BeginOwnerFailure(ownerCoordinator.ErrorMessage);
+                    RemoveOrganizationLane(lane);
+                    laneSettled = true;
+                    changed = true;
+                    continue;
+                }
+
+                // Worker threads only publish terminal command results. Mutable
+                // repository aggregation stays on this main-thread tick.
+                if (laneChanged && !lane.AwaitingPageResult)
+                {
+                    changed |= AddValidRepositories(
+                        ownerCoordinator.DisplayedRepos);
+                }
+
+                if (!lane.AwaitingPageResult &&
+                    !lane.PageProcessed &&
+                    !ownerCoordinator.IsLoading &&
+                    !ownerCoordinator.IsValidatingPackageManifests)
+                {
+                    ConsumeOrganizationSettledPage(lane);
+                    laneSettled = true;
+                    changed = true;
+                }
+            }
+
+            if (laneSettled)
+            {
+                StartOrganizationLanesOrComplete();
+                return;
+            }
+
+            string nextStatus = BuildStatusMessage();
+            if (!string.Equals(statusMessage, nextStatus, StringComparison.Ordinal))
+            {
+                statusMessage = nextStatus;
+                changed = true;
+            }
+
+            if (changed)
+                PublishSnapshot();
+        }
+
+        private static void ConsumeOrganizationSettledPage(
+            OrganizationLane lane)
+        {
+            DiscoveryCoordinator ownerCoordinator = lane.Coordinator;
+            lane.PageProcessed = true;
+            completedPages++;
+            unavailableManifestCount +=
+                ownerCoordinator.PackageManifestUnavailableCount;
+            AddValidRepositories(ownerCoordinator.DisplayedRepos);
+
+            if (string.IsNullOrWhiteSpace(pendingOwnerFailureMessage) &&
+                ownerCoordinator.HasNextPage)
+            {
+                ownerCoordinator.NextPage();
+                lane.AwaitingPageResult = true;
+                lane.PageProcessed = false;
+                return;
+            }
+
+            if (!ownerCoordinator.HasNextPage)
+                completedOwners++;
+            RemoveOrganizationLane(lane);
+        }
+
+        private static void BeginOwnerFailure(string message)
+        {
+            if (string.IsNullOrWhiteSpace(pendingOwnerFailureMessage))
+            {
+                pendingOwnerFailureMessage =
+                    GitHubUtility.SanitizeUiDiagnostic(message);
+            }
+
+            // Do not start more owners, but let already-running bounded reads
+            // reach terminal results naturally. This avoids forced gh process
+            // cancellation during an ordinary network failure.
+            PendingOrganizations.Clear();
+        }
+
+        private static void RemoveOrganizationLane(OrganizationLane lane)
+        {
+            if (lane == null || !ActiveOrganizationLanes.Remove(lane))
+                return;
+
+            lane.Dispose();
+        }
+
         private static void Complete()
         {
+            if (GitHubCommandRestartRequired)
+            {
+                Fail(GitHubCommandRestartRequiredMessage);
+                return;
+            }
+
+            bool startQueuedRefresh = refreshQueued;
+            refreshQueued = false;
             phase = CataloguePhase.Complete;
             isLoading = false;
             activeOwner = string.Empty;
@@ -518,7 +818,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             string unavailableSuffix = unavailableManifestCount > 0
                 ? $" {unavailableManifestCount} repositories could not be validated."
                 : string.Empty;
-            string organizationWarning = coordinator?.WarningMessage;
+            string organizationWarning = organizationWarningMessage;
             coverageWarningMessage = organizationWarning ?? string.Empty;
             bool hasCompleteCoverage = HasCompleteCoverage();
             bool canKeepRetainedCatalogue =
@@ -546,9 +846,20 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                     "because refresh coverage was incomplete.";
             }
 
+            DisposeCoordinators();
             // Only a warning-free catalogue with complete owner and manifest
             // coverage may become the next stale-while-revalidate baseline.
             PublishSnapshot(markSuccessfulCatalogue: hasCompleteCoverage);
+            UpdateSubscription();
+            if (startQueuedRefresh &&
+                !isLoading &&
+                isStarted &&
+                !isStopping &&
+                !isShuttingDown &&
+                !GitHubCommandRestartRequired)
+            {
+                BeginRefresh();
+            }
         }
 
         private static bool HasCompleteCoverage()
@@ -561,18 +872,92 @@ namespace MartinCalander.GitSubmoduleManager.Editor
 
         private static void Fail(string message)
         {
+            bool restartRequired = GitHubCommandRestartRequired;
+            bool startQueuedRefresh = refreshQueued && !restartRequired;
+            refreshQueued = false;
             phase = CataloguePhase.Failed;
             isLoading = false;
-            errorMessage = GitHubUtility.SanitizeUiDiagnostic(message);
+            errorMessage = restartRequired
+                ? GitHubCommandRestartRequiredMessage
+                : GitHubUtility.SanitizeUiDiagnostic(message);
             statusMessage = isShowingRetainedRepositories
                 ? "Repository refresh stopped; previously loaded packages remain " +
                   "available temporarily."
                 : Repositories.Count == 0
                 ? "GitHub package discovery did not complete."
                 : $"Discovery stopped after finding {Repositories.Count} valid UPM packages.";
-            DisposeCoordinator();
+            DisposeCoordinators();
             PublishSnapshot();
+            UpdateSubscription();
+            if (startQueuedRefresh &&
+                !isLoading &&
+                isStarted &&
+                !isStopping &&
+                !isShuttingDown &&
+                !GitHubCommandRestartRequired)
+            {
+                BeginRefresh();
+            }
         }
+
+        private static void BeginFailureDrain(string message)
+        {
+            string sanitizedMessage = GitHubCommandRestartRequired
+                ? GitHubCommandRestartRequiredMessage
+                : GitHubUtility.SanitizeUiDiagnostic(message);
+            if (string.IsNullOrWhiteSpace(pendingFailureMessage))
+                pendingFailureMessage = sanitizedMessage;
+
+            if (GitHubCommandRestartRequired)
+                refreshQueued = false;
+
+            if (!HasIncompleteCoordinatorCommands())
+            {
+                CompleteFailureDrain();
+                return;
+            }
+
+            string nextStatus = BuildStatusMessage();
+            if (!string.Equals(statusMessage, nextStatus, StringComparison.Ordinal))
+            {
+                statusMessage = nextStatus;
+                PublishSnapshot();
+            }
+        }
+
+        private static void TickFailureDrain()
+        {
+            if (HasIncompleteCoordinatorCommands())
+                return;
+
+            CompleteFailureDrain();
+        }
+
+        private static void CompleteFailureDrain()
+        {
+            string message = pendingFailureMessage;
+            pendingFailureMessage = string.Empty;
+            Fail(message);
+        }
+
+        private static void ReportGitHubCommandRestartRequired()
+        {
+            if (!isLoading &&
+                phase == CataloguePhase.Failed &&
+                string.Equals(
+                    errorMessage,
+                    GitHubCommandRestartRequiredMessage,
+                    StringComparison.Ordinal))
+            {
+                return;
+            }
+
+            Fail(GitHubCommandRestartRequiredMessage);
+        }
+
+        private static bool GitHubCommandRestartRequired =>
+            CliCommandRunner.GitHubCommandRequiresEditorRestart ||
+            AsyncCommandDrainRegistry.RequiresEditorRestart;
 
         private static bool ReleaseRetainedCatalogueIfExpired(double currentTime)
         {
@@ -604,6 +989,42 @@ namespace MartinCalander.GitSubmoduleManager.Editor
 
         private static string BuildStatusMessage()
         {
+            if (!string.IsNullOrWhiteSpace(pendingFailureMessage))
+            {
+                return WithRetentionNotice(
+                    "Finishing in-flight GitHub requests before reporting the " +
+                    "refresh failure...");
+            }
+
+            if (phase == CataloguePhase.OrganizationRepositories)
+            {
+                int activeLaneCount = ActiveOrganizationLanes.Count;
+                int queuedOwnerCount = PendingOrganizations.Count;
+                if (!string.IsNullOrWhiteSpace(pendingOwnerFailureMessage))
+                {
+                    return WithRetentionNotice(
+                        activeLaneCount > 0
+                            ? $"Finishing {activeLaneCount} in-flight GitHub owner " +
+                              (activeLaneCount == 1 ? "request" : "requests") +
+                              " before reporting the refresh failure..."
+                            : "Finishing GitHub package discovery...");
+                }
+
+                int validationCompleted = ActiveOrganizationLanes.Sum(
+                    lane => lane.Coordinator.PackageManifestCheckCompleted);
+                int validationTotal = ActiveOrganizationLanes.Sum(
+                    lane => lane.Coordinator.PackageManifestCheckTotal);
+                string validationSuffix = validationTotal > 0
+                    ? $" Validating {validationCompleted}/{validationTotal} packages " +
+                      "across the active owners."
+                    : string.Empty;
+                return WithRetentionNotice(
+                    $"Loading GitHub organizations in parallel: " +
+                    $"{completedOwners}/{totalOwners} owners complete, " +
+                    $"{activeLaneCount} active, {queuedOwnerCount} queued." +
+                    validationSuffix);
+            }
+
             if (coordinator == null)
                 return statusMessage;
 
@@ -638,9 +1059,13 @@ namespace MartinCalander.GitSubmoduleManager.Editor
 
         private static string WithRetentionNotice(string message)
         {
-            return isShowingRetainedRepositories
+            string result = isShowingRetainedRepositories
                 ? message + " Previously loaded packages remain available."
                 : message;
+            return refreshQueued
+                ? result +
+                  " Another refresh will start when the active GitHub requests finish."
+                : result;
         }
 
         private static bool AddValidRepositories(IEnumerable<GitHubRepo> repositories)
@@ -841,28 +1266,71 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             statusMessage = string.Empty;
             errorMessage = string.Empty;
             coverageWarningMessage = string.Empty;
+            organizationWarningMessage = string.Empty;
+            pendingOwnerFailureMessage = string.Empty;
+            pendingFailureMessage = string.Empty;
             isLoading = false;
             awaitingPageResult = false;
             pageProcessed = false;
             organizationsQueued = false;
+            refreshQueued = false;
             completedPages = 0;
             completedOwners = 0;
             totalOwners = 0;
             unavailableManifestCount = 0;
         }
 
-        private static void DisposeCoordinator()
+        private static void DisposePersonalCoordinator()
         {
             coordinator?.Dispose();
             coordinator = null;
         }
 
+        private static void DisposeCoordinators()
+        {
+            DisposePersonalCoordinator();
+            foreach (OrganizationLane lane in ActiveOrganizationLanes.ToArray())
+                lane.Dispose();
+            ActiveOrganizationLanes.Clear();
+        }
+
+        private static bool HasIncompleteCoordinatorCommands()
+        {
+            if (coordinator?.HasIncompleteCommands == true)
+                return true;
+
+            return ActiveOrganizationLanes.Any(
+                lane => lane.Coordinator.HasIncompleteCommands);
+        }
+
+        private static void TickGracefulStop()
+        {
+            if (HasIncompleteCoordinatorCommands())
+                return;
+
+            bool restart = restartAfterGracefulStop;
+            gracefulStopRequested = false;
+            restartAfterGracefulStop = false;
+            try
+            {
+                Stop(publishEmptySnapshot: true);
+            }
+            finally
+            {
+                isStopping = false;
+            }
+
+            if (restart && !isShuttingDown)
+                EnsureStarted();
+        }
+
         private static void Stop(bool publishEmptySnapshot)
         {
-            if (isStarted)
-                EditorApplication.update -= Update;
+            gracefulStopRequested = false;
+            restartAfterGracefulStop = false;
+            UnsubscribeUpdate();
             isStarted = false;
-            DisposeCoordinator();
+            DisposeCoordinators();
             ResetAggregation();
             isShowingRetainedRepositories = false;
             retainedCatalogueExpiresAt = 0d;
@@ -876,6 +1344,37 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 publishedRepositories = current.Repositories;
                 repositoriesDirty = false;
             }
+        }
+
+        private static void UpdateSubscription()
+        {
+            if (isStarted && !isShuttingDown &&
+                (isLoading || isShowingRetainedRepositories))
+            {
+                SubscribeUpdate();
+            }
+            else
+            {
+                UnsubscribeUpdate();
+            }
+        }
+
+        private static void SubscribeUpdate()
+        {
+            if (updateSubscribed || isShuttingDown)
+                return;
+
+            updateSubscribed = true;
+            EditorApplication.update += Update;
+        }
+
+        private static void UnsubscribeUpdate()
+        {
+            if (!updateSubscribed)
+                return;
+
+            updateSubscribed = false;
+            EditorApplication.update -= Update;
         }
 
         private static void OnBeforeAssemblyReload()

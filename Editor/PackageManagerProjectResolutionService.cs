@@ -58,6 +58,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         private static PackageManagerProjectResolutionState activeState;
         private static bool registeredPackagesChanged;
         private static bool resolutionProgressObserved;
+        private static bool activeEventsSubscribed;
         private static bool isShuttingDown;
         private static double nextInspectionNotBefore;
         private static double nextResolveAttemptNotBefore;
@@ -68,9 +69,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         {
             activeState = LoadActiveState();
             resolutionProgressObserved = activeState?.ResolveRequested == true;
-            EditorApplication.update += Update;
-            Events.registeredPackages += OnRegisteredPackages;
-            AssemblyReloadEvents.beforeAssemblyReload += OnBeforeAssemblyReload;
+            SubscribeActiveEvents();
         }
 
         internal static bool IsBusy => activeState != null;
@@ -139,6 +138,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             {
                 SaveActiveState(prepared);
                 activeState = prepared;
+                SubscribeActiveEvents();
                 registeredPackagesChanged = false;
                 resolutionProgressObserved = false;
                 nextResolveAttemptNotBefore = 0d;
@@ -618,6 +618,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         private static void ClearActiveState()
         {
             activeState = null;
+            UnsubscribeActiveEvents();
             registeredPackagesChanged = false;
             resolutionProgressObserved = false;
             nextInspectionNotBefore = 0d;
@@ -625,6 +626,28 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             nextResolveWarningNotBefore = 0d;
             expectationSatisfiedSinceUtcTicks = 0L;
             SessionState.EraseString(ActiveStateKey);
+        }
+
+        private static void SubscribeActiveEvents()
+        {
+            if (activeState == null || activeEventsSubscribed || isShuttingDown)
+                return;
+
+            activeEventsSubscribed = true;
+            EditorApplication.update += Update;
+            Events.registeredPackages += OnRegisteredPackages;
+            AssemblyReloadEvents.beforeAssemblyReload += OnBeforeAssemblyReload;
+        }
+
+        private static void UnsubscribeActiveEvents()
+        {
+            if (!activeEventsSubscribed)
+                return;
+
+            activeEventsSubscribed = false;
+            EditorApplication.update -= Update;
+            Events.registeredPackages -= OnRegisteredPackages;
+            AssemblyReloadEvents.beforeAssemblyReload -= OnBeforeAssemblyReload;
         }
 
         private static void OnRegisteredPackages(PackageRegistrationEventArgs args)
@@ -677,9 +700,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         private static void OnBeforeAssemblyReload()
         {
             isShuttingDown = true;
-            EditorApplication.update -= Update;
-            Events.registeredPackages -= OnRegisteredPackages;
-            AssemblyReloadEvents.beforeAssemblyReload -= OnBeforeAssemblyReload;
+            UnsubscribeActiveEvents();
         }
 
         private static string SanitizeMessage(string message)

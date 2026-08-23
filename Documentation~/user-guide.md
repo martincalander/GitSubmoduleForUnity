@@ -90,9 +90,11 @@ batches, and only manifests with a valid reverse-domain UPM package name and
 SemVer 2.0 version enter the catalogue.
 
 Results appear incrementally and are grouped under **Organization - _owner_**.
-Installed GitHub packages remain in the same list throughout the scan. Choose
-Package Manager's **Refresh** action to discard stale catalogue state and rescan
-the project and GitHub.
+Installed GitHub packages remain in the same list throughout the scan. Two
+organizations can load concurrently, while pages within each organization stay
+ordered. Choose Package Manager's **Refresh** action to rescan the project and
+GitHub; if a scan is active, one replacement refresh starts after its bounded
+GitHub reads finish.
 
 Use Unity's native **Filters** control in the Package Manager toolbar to narrow
 the page by:

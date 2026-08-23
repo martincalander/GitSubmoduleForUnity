@@ -52,7 +52,6 @@ namespace MartinCalander.GitSubmoduleManager.Editor
 
         private static Harmony harmony;
         private static bool shuttingDown;
-        private static bool patchRequested = true;
         private static bool presentationRefreshQueued;
         private static bool presentationRebuildQueued;
         private static bool forcedPresentationRebuildQueued;
@@ -60,17 +59,13 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         private static IReadOnlyList<PackageManagerGitHubRepository>
             observedRepositories =
                 PackageManagerGitHubDiscovery.Current.Repositories;
-        private static double nextAttempt;
-
         static PackageManagerGitHubNativePresentationPatch()
         {
-            AppDomain.CurrentDomain.AssemblyLoad += OnAssemblyLoad;
             PackageManagerGitHubDiscovery.SnapshotChanged +=
                 OnDiscoverySnapshotChanged;
             PackageManagerSubmoduleSnapshot.SnapshotChanged +=
                 OnSubmoduleSnapshotChanged;
             AssemblyReloadEvents.beforeAssemblyReload += OnBeforeAssemblyReload;
-            EditorApplication.update += RetryOnUpdate;
             EditorApplication.delayCall += TryPatchDelayed;
         }
 
@@ -127,7 +122,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 foreach (MethodInfo target in GetPageActivationTargets())
                 {
                     foundTarget = true;
-                    PatchPrefixIfNeeded(target, GetPageActivationPrefix());
+                    PatchPostfixIfNeeded(target, GetPageActivationPostfix());
                 }
 
                 foreach (MethodInfo target in GetPageLoadingTargets())
@@ -156,12 +151,10 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                         GetPageSupportedFiltersRefreshPostfix());
                 }
 
-                patchRequested = !foundTarget;
                 return foundTarget;
             }
             catch
             {
-                patchRequested = true;
                 return false;
             }
         }
@@ -474,10 +467,10 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 AnyStatic);
         }
 
-        internal static MethodInfo GetPageActivationPrefix()
+        internal static MethodInfo GetPageActivationPostfix()
         {
             return typeof(PackageManagerGitHubNativePresentationPatch).GetMethod(
-                nameof(PageActivationPrefix),
+                nameof(PageActivationPostfix),
                 AnyStatic);
         }
 
@@ -559,30 +552,6 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 foreach (Patch patch in patches.Postfixes)
                 {
                     if (patch.owner == HarmonyId && patch.PatchMethod == postfix)
-                        return true;
-                }
-            }
-            catch
-            {
-                return false;
-            }
-
-            return false;
-        }
-
-        internal static bool IsPrefixApplied(MethodBase target, MethodInfo prefix)
-        {
-            if (target == null || prefix == null)
-                return false;
-
-            try
-            {
-                Patches patches = Harmony.GetPatchInfo(target);
-                if (patches == null)
-                    return false;
-                foreach (Patch patch in patches.Prefixes)
-                {
-                    if (patch.owner == HarmonyId && patch.PatchMethod == prefix)
                         return true;
                 }
             }
@@ -866,16 +835,6 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             harmony.Patch(target, postfix: new HarmonyMethod(postfix));
         }
 
-        private static void PatchPrefixIfNeeded(
-            MethodInfo target,
-            MethodInfo prefix)
-        {
-            if (target == null || prefix == null || IsPrefixApplied(target, prefix))
-                return;
-
-            harmony.Patch(target, prefix: new HarmonyMethod(prefix));
-        }
-
         private static void TechnicalNameRefreshPostfix(
             object __instance,
             object __0)
@@ -1017,16 +976,17 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                     return;
 
                 PackageManagerSubmoduleNativePage.TryConfigureFilters(__0);
+                if (!ShouldForwardDiscoveryRefresh(
+                        PackageManagerGitHubPackageProjection.IsUpdatingPackageDatabase))
+                    return;
+
                 // Refreshing the remote catalogue must not invalidate or start a
                 // reader for the last known-good installed-submodule snapshot.
                 // That snapshot already follows package registration, project,
                 // repository-generation, and .gitmodules changes. Keeping the
                 // two lifecycles independent leaves safe uninstall actions usable
                 // throughout a potentially long GitHub discovery refresh.
-                if (!PackageManagerGitHubDiscovery.IsStarted)
-                    PackageManagerGitHubDiscovery.EnsureStarted();
-                else if (!PackageManagerGitHubDiscovery.IsLoading)
-                    PackageManagerGitHubDiscovery.Refresh();
+                PackageManagerGitHubDiscovery.Refresh();
             }
             catch
             {
@@ -1034,7 +994,13 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             }
         }
 
-        private static void PageActivationPrefix(object __0)
+        internal static bool ShouldForwardDiscoveryRefresh(
+            bool packageDatabaseUpdateInProgress)
+        {
+            return !packageDatabaseUpdateInProgress;
+        }
+
+        private static void PageActivationPostfix(object __0)
         {
             try
             {
@@ -1415,27 +1381,8 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             return null;
         }
 
-        private static void OnAssemblyLoad(object _, AssemblyLoadEventArgs __)
-        {
-            patchRequested = true;
-        }
-
         private static void TryPatchDelayed()
         {
-            if (TryPatch())
-                EnsureDiscoveryForOpenGitHubPages();
-        }
-
-        private static void RetryOnUpdate()
-        {
-            if (shuttingDown ||
-                !patchRequested ||
-                EditorApplication.timeSinceStartup < nextAttempt)
-            {
-                return;
-            }
-
-            nextAttempt = EditorApplication.timeSinceStartup + 1d;
             if (TryPatch())
                 EnsureDiscoveryForOpenGitHubPages();
         }
@@ -1443,13 +1390,11 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         private static void OnBeforeAssemblyReload()
         {
             shuttingDown = true;
-            EditorApplication.update -= RetryOnUpdate;
             EditorApplication.delayCall -= RefreshOpenPackageManagerPages;
             PackageManagerGitHubDiscovery.SnapshotChanged -=
                 OnDiscoverySnapshotChanged;
             PackageManagerSubmoduleSnapshot.SnapshotChanged -=
                 OnSubmoduleSnapshotChanged;
-            AppDomain.CurrentDomain.AssemblyLoad -= OnAssemblyLoad;
             AssemblyReloadEvents.beforeAssemblyReload -= OnBeforeAssemblyReload;
             try
             {
