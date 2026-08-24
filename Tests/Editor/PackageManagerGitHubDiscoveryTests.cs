@@ -1294,11 +1294,20 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                         "{\"name\":\"" + packageName +
                         "\",\"displayName\":\"" + packageName +
                         "\",\"version\":\"1.0.0\"}";
+                    char manifestOidSeed = nodeId switch
+                    {
+                        "NODE-PERSONAL" => 'a',
+                        "NODE-ALPHA-FIRST" => 'b',
+                        "NODE-ALPHA-SECOND" => 'c',
+                        "NODE-BETA" => 'd',
+                        "NODE-GAMMA" => 'e',
+                        _ => 'f'
+                    };
                     nodes.Add(
                         "{\"id\":\"" + nodeId +
                         "\",\"packageManifest\":{" +
                         "\"__typename\":\"Blob\"," +
-                        "\"oid\":\"" + new string('c', 40) + "\"," +
+                        "\"oid\":\"" + new string(manifestOidSeed, 40) + "\"," +
                         "\"byteSize\":" + Encoding.UTF8.GetByteCount(manifest) + "," +
                         "\"isBinary\":false," +
                         "\"isTruncated\":false," +

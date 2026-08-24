@@ -31,15 +31,6 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         internal const string PackageNameRule =
             "Use a lowercase reverse-domain UPM name (for example com.company.package); hyphens and underscores are supported.";
 
-        internal static bool CanStart =>
-            !GitOperationService.IsBusy &&
-            !PackageManagerProjectResolutionService.IsBusy &&
-            !PackageManagerReadOnlyGitInstallService.IsBusy &&
-            !PackageManagerSubmoduleSnapshot.IsReaderActive &&
-            !GitSubmoduleInstallProbe.IsReaderActive &&
-            !AsyncCommandDrainRegistry.IsDraining &&
-            string.IsNullOrWhiteSpace(GitOperationService.RecoveryWarning);
-
         internal static string ValidateInput(
             string url,
             string packageName,
@@ -75,40 +66,6 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 return $"Package path already exists: {path}";
 
             return string.Empty;
-        }
-
-        internal static bool TryStart(
-            string url,
-            string branch,
-            string packageName,
-            Action<GitSubmoduleAddCompletion> onComplete,
-            out string error)
-        {
-            return TryStart(
-                url,
-                branch,
-                packageName,
-                string.Empty,
-                onComplete,
-                out error);
-        }
-
-        internal static bool TryStart(
-            string url,
-            string branch,
-            string packageName,
-            string expectedVersion,
-            Action<GitSubmoduleAddCompletion> onComplete,
-            out string error)
-        {
-            return TryStart(
-                url,
-                branch,
-                packageName,
-                expectedVersion,
-                string.Empty,
-                onComplete,
-                out error);
         }
 
         internal static bool TryStart(
@@ -199,44 +156,6 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                     PackageResolutionExpectation =
                         PackageManagerResolutionExpectation.Embedded
                 });
-        }
-
-        internal static CommandResult RunAddSubmoduleTask(
-            string url,
-            string branch,
-            string packageName,
-            string path,
-            GitSubmoduleAddTaskState state,
-            CancellationToken cancellationToken)
-        {
-            return RunAddSubmoduleTask(
-                url,
-                branch,
-                packageName,
-                string.Empty,
-                path,
-                state,
-                cancellationToken);
-        }
-
-        internal static CommandResult RunAddSubmoduleTask(
-            string url,
-            string branch,
-            string packageName,
-            string expectedVersion,
-            string path,
-            GitSubmoduleAddTaskState state,
-            CancellationToken cancellationToken)
-        {
-            return RunAddSubmoduleTask(
-                url,
-                branch,
-                packageName,
-                expectedVersion,
-                string.Empty,
-                path,
-                state,
-                cancellationToken);
         }
 
         internal static CommandResult RunAddSubmoduleTask(

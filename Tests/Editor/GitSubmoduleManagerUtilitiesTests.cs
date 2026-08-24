@@ -941,41 +941,6 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
         }
 
         [Test]
-        public void DiscoveryCoordinator_SearchUsesSearchApi()
-        {
-            var runner = new FakeCommandRunner(spec =>
-            {
-                if (spec.FileName == "gh" && spec.Arguments.Contains("api user --jq"))
-                {
-                    return Success("EssentialsForUnity");
-                }
-
-                if (spec.FileName == "gh" && spec.Arguments.Contains("search/repositories"))
-                {
-                    return Success("{\"total_count\":1,\"items\":" + BuildRepoJson(1, 1) + "}");
-                }
-
-                return Fail(spec, "Unexpected");
-            });
-            CliCommandRunner.CurrentRunner = runner;
-
-            using var coordinator = new DiscoveryCoordinator();
-            coordinator.EnsureUsername();
-
-            // Wait for username to resolve
-            WaitForDiscovery(coordinator, 2);
-
-            coordinator.SetSearchQuery("test", 0);
-            coordinator.Tick(1.0); // past debounce — triggers search fetch
-
-            WaitForDiscovery(coordinator, 2, 1.0);
-
-            Assert.That(coordinator.DisplayedRepos, Has.Count.EqualTo(1));
-            var searchCall = runner.Calls.FirstOrDefault(c => c.Arguments.Contains("search/repositories"));
-            Assert.That(searchCall, Is.Not.Null);
-        }
-
-        [Test]
         public void DiscoveryCoordinator_PaginationWorks()
         {
             var runner = new FakeCommandRunner(spec =>
@@ -1010,7 +975,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
             var timeoutAt = DateTime.UtcNow.AddSeconds(2);
             while (DateTime.UtcNow < timeoutAt)
             {
-                coordinator.Tick(0);
+                coordinator.Tick();
                 if (coordinator.DisplayedRepos.Count != 50)
                     break;
                 Thread.Sleep(10);
@@ -1018,38 +983,6 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
 
             Assert.That(coordinator.CurrentPage, Is.EqualTo(2));
             Assert.That(coordinator.DisplayedRepos, Has.Count.EqualTo(10));
-        }
-
-        [Test]
-        public void DiscoveryCoordinator_NewerSearchSupersedesInFlightPage()
-        {
-            var runner = new FakeCommandRunner(spec =>
-            {
-                if (spec.Arguments.Contains("api user --jq"))
-                    return Success("owner");
-
-                if (spec.Arguments.Contains("user/repos"))
-                {
-                    Thread.Sleep(30);
-                    return Success(BuildRepoJson(1, 50));
-                }
-
-                if (spec.Arguments.Contains("search/repositories"))
-                    return Success("{\"total_count\":1,\"items\":" + BuildRepoJson(100, 1) + "}");
-
-                return Fail(spec, "Unexpected");
-            });
-            CliCommandRunner.CurrentRunner = runner;
-
-            using var coordinator = new DiscoveryCoordinator();
-            coordinator.LoadInitialPage();
-            coordinator.SetSearchQuery("newest", 0);
-            coordinator.Tick(1.0);
-
-            WaitForDiscovery(coordinator, 2, 1.0);
-
-            Assert.That(coordinator.DisplayedRepos, Has.Count.EqualTo(1));
-            Assert.That(coordinator.DisplayedRepos[0].Name, Is.EqualTo("repo-100"));
         }
 
         [Test]
@@ -1071,7 +1004,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
             while (DateTime.UtcNow < timeoutAt &&
                    (string.IsNullOrEmpty(coordinator.Username) || !coordinator.OrgsLoaded))
             {
-                coordinator.Tick(0);
+                coordinator.Tick();
                 Thread.Sleep(10);
             }
 
@@ -1435,13 +1368,13 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                 ?.GetValue(instance);
         }
 
-        private static void WaitForDiscovery(DiscoveryCoordinator coordinator, int timeoutSeconds, double tickTime = 0)
+        private static void WaitForDiscovery(DiscoveryCoordinator coordinator, int timeoutSeconds)
         {
             var timeoutAt = DateTime.UtcNow.AddSeconds(timeoutSeconds);
             bool gotResults = false;
             while (DateTime.UtcNow < timeoutAt)
             {
-                bool changed = coordinator.Tick(tickTime);
+                bool changed = coordinator.Tick();
                 if (changed && coordinator.DisplayedRepos.Count > 0)
                 {
                     gotResults = true;
@@ -1456,7 +1389,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                 {
                     // Still might need one more tick to process completed handle
                     Thread.Sleep(10);
-                    coordinator.Tick(tickTime);
+                    coordinator.Tick();
                     break;
                 }
 

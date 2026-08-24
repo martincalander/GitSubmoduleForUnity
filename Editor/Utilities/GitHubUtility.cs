@@ -334,54 +334,6 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             return repos;
         }
 
-        internal static List<GitHubRepo> ParseSearchJson(string json)
-        {
-            var repos = new List<GitHubRepo>();
-            if (string.IsNullOrEmpty(json))
-            {
-                return repos;
-            }
-
-            var wrapper = JsonUtility.FromJson<SearchResultWrapper>(json);
-            if (wrapper?.items == null)
-            {
-                return repos;
-            }
-
-            foreach (var repoJson in wrapper.items)
-            {
-                repos.Add(new GitHubRepo
-                {
-                    NodeId = repoJson.node_id,
-                    Name = repoJson.name,
-                    Owner = repoJson.owner != null ? repoJson.owner.login : string.Empty,
-                    Url = GetCloneUrl(repoJson),
-                    DefaultBranch = repoJson.default_branch,
-                    IsPrivate = repoJson.@private,
-                    Description = repoJson.description,
-                    UpdatedAt = repoJson.updated_at
-                });
-            }
-
-            return repos;
-        }
-
-        internal static int ParseSearchTotalCount(string json)
-        {
-            if (string.IsNullOrWhiteSpace(json))
-                return 0;
-
-            try
-            {
-                var wrapper = JsonUtility.FromJson<SearchResultWrapper>(json);
-                return wrapper?.total_count ?? 0;
-            }
-            catch
-            {
-                return 0;
-            }
-        }
-
         internal static string BuildRepoListError(string message, CommandResult result)
         {
             return BuildError(message, result);
@@ -449,15 +401,6 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             return sb.ToString();
         }
 
-        internal static bool IsNotFoundResult(CommandResult result)
-        {
-            if (result == null)
-                return false;
-
-            string combined = $"{result.StdOut}\n{result.StdErr}".ToLowerInvariant();
-            return combined.Contains("not found") || combined.Contains("404");
-        }
-
         internal static string SanitizeUiDiagnostic(string value)
         {
             string sanitized = GitUtility.RedactCredentials(value ?? string.Empty).Trim();
@@ -493,13 +436,6 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         [Serializable]
         private sealed class RepoListWrapper
         {
-            public RepoJson[] items;
-        }
-
-        [Serializable]
-        private sealed class SearchResultWrapper
-        {
-            public int total_count;
             public RepoJson[] items;
         }
 

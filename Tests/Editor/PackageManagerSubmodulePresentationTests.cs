@@ -33,6 +33,78 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
             public string id { get; set; }
         }
 
+        private enum FakePageFilterStatus
+        {
+            None,
+            Downloaded
+        }
+
+        private sealed class FakePageFilters
+        {
+            private readonly IReadOnlyList<string> selectedLabels;
+            private readonly IReadOnlyList<string> selectedCategories;
+
+            internal FakePageFilters(
+                IReadOnlyList<string> labels,
+                IReadOnlyList<string> categories)
+            {
+                selectedLabels = labels;
+                selectedCategories = categories;
+            }
+
+            public int StatusReadCount { get; private set; }
+            public int LabelsReadCount { get; private set; }
+            public int CategoriesReadCount { get; private set; }
+
+            public FakePageFilterStatus status
+            {
+                get
+                {
+                    StatusReadCount++;
+                    return FakePageFilterStatus.Downloaded;
+                }
+            }
+
+            public IReadOnlyList<string> labels
+            {
+                get
+                {
+                    LabelsReadCount++;
+                    return selectedLabels;
+                }
+            }
+
+            public IReadOnlyList<string> categories
+            {
+                get
+                {
+                    CategoriesReadCount++;
+                    return selectedCategories;
+                }
+            }
+        }
+
+        private sealed class FakeFilterPage
+        {
+            private readonly FakePageFilters pageFilters;
+
+            internal FakeFilterPage(FakePageFilters pageFilters)
+            {
+                this.pageFilters = pageFilters;
+            }
+
+            public int FiltersReadCount { get; private set; }
+
+            public FakePageFilters filters
+            {
+                get
+                {
+                    FiltersReadCount++;
+                    return pageFilters;
+                }
+            }
+        }
+
         private sealed class FakePageManager
         {
             public object activePage { get; set; }
@@ -1511,6 +1583,68 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
             Assert.That(value.tooltip, Is.EqualTo(expectedTooltip));
             Assert.That(title.enableRichText, Is.False);
             Assert.That(value.enableRichText, Is.False);
+        }
+
+        [Test]
+        public void NativeVisibilityFilterContract_CachesSuccessfulResolution()
+        {
+            FieldInfo contractField = typeof(
+                    PackageManagerGitHubNativePresentationPatch)
+                .GetField(
+                    "pageVisibilityFilterContract",
+                    BindingFlags.Static | BindingFlags.NonPublic);
+
+            Assert.That(contractField, Is.Not.Null);
+            Assert.That(
+                PackageManagerGitHubNativePresentationPatch
+                    .HasPageVisibilityFilterContract(),
+                Is.True);
+            object first = contractField.GetValue(null);
+            Assert.That(first, Is.Not.Null);
+
+            Assert.That(
+                PackageManagerGitHubNativePresentationPatch
+                    .HasPageVisibilityFilterContract(),
+                Is.True);
+            Assert.That(contractField.GetValue(null), Is.SameAs(first));
+        }
+
+        [Test]
+        public void NativeVisibilityFilterState_ReadsOnceWithoutCopyingLists()
+        {
+            IReadOnlyList<string> labels = new List<string>
+            {
+                PackageManagerSubmodulePresentation.PublicRepositoryTagLabel
+            };
+            IReadOnlyList<string> categories = new[]
+            {
+                PackageManagerSubmoduleNativePage
+                    .CreateOrganizationFilterLabel("martincalander")
+            };
+            var filters = new FakePageFilters(labels, categories);
+            var page = new FakeFilterPage(filters);
+            const BindingFlags flags =
+                BindingFlags.Instance | BindingFlags.Public;
+
+            bool read = PackageManagerGitHubNativePresentationPatch
+                .TryReadSelectedFilterValues(
+                    page,
+                    typeof(FakeFilterPage).GetProperty("filters", flags),
+                    typeof(FakePageFilters).GetProperty("status", flags),
+                    typeof(FakePageFilters).GetProperty("labels", flags),
+                    typeof(FakePageFilters).GetProperty("categories", flags),
+                    out string statusName,
+                    out IReadOnlyList<string> selectedLabels,
+                    out IReadOnlyList<string> selectedCategories);
+
+            Assert.That(read, Is.True);
+            Assert.That(statusName, Is.EqualTo("Downloaded"));
+            Assert.That(selectedLabels, Is.SameAs(labels));
+            Assert.That(selectedCategories, Is.SameAs(categories));
+            Assert.That(page.FiltersReadCount, Is.EqualTo(1));
+            Assert.That(filters.StatusReadCount, Is.EqualTo(1));
+            Assert.That(filters.LabelsReadCount, Is.EqualTo(1));
+            Assert.That(filters.CategoriesReadCount, Is.EqualTo(1));
         }
 
         [Test]

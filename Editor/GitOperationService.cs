@@ -76,7 +76,6 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         private static bool HasConflictingJournalFiles =>
             HaveConflictingJournalFiles(CurrentJournalPath, LegacyJournalPath);
 
-        private static AsyncCommandHandle commandHandle;
         private static Thread taskThread;
         private static CancellationTokenSource taskCancellationSource;
         private static CommandResult taskResult;
@@ -139,7 +138,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             get
             {
                 lock (Gate)
-                    return reserved || commandHandle != null || taskThread != null;
+                    return reserved || taskThread != null;
             }
         }
 
@@ -152,15 +151,6 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             }
         }
 
-        internal static float Progress
-        {
-            get
-            {
-                lock (Gate)
-                    return commandHandle != null ? commandHandle.Progress : IsBusy ? 0.1f : 0f;
-            }
-        }
-
         static GitOperationService()
         {
             LoadRecoveryWarning();
@@ -168,155 +158,6 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             EditorApplication.quitting += HandleEditorQuitting;
         }
 
-        internal static bool TryStartCommand(
-            string label,
-            string fileName,
-            string arguments,
-            int timeoutMs,
-            bool suppressAutoRefresh,
-            Func<CommandResult, GitOperationCompletionOutcome> onComplete,
-            out string error,
-            GitOperationMetadata metadata = null)
-        {
-            return TryStartCommandCore(
-                label,
-                fileName,
-                arguments,
-                timeoutMs,
-                suppressAutoRefresh,
-                onComplete,
-                null,
-                out error,
-                metadata);
-        }
-
-        internal static bool TryStartCommand(
-            string label,
-            string fileName,
-            string arguments,
-            int timeoutMs,
-            bool suppressAutoRefresh,
-            Func<CommandResult, GitOperationCompletionOutcome> resolveOutcome,
-            Action<CommandResult> notifyComplete,
-            out string error,
-            GitOperationMetadata metadata = null)
-        {
-            Action<CommandResult, GitOperationCompletionOutcome> effectiveNotification =
-                notifyComplete == null
-                    ? null
-                    : (result, _) => notifyComplete(result);
-            return TryStartCommandCore(
-                label,
-                fileName,
-                arguments,
-                timeoutMs,
-                suppressAutoRefresh,
-                resolveOutcome,
-                effectiveNotification,
-                out error,
-                metadata);
-        }
-
-        internal static bool TryStartCommand(
-            string label,
-            string fileName,
-            string arguments,
-            int timeoutMs,
-            bool suppressAutoRefresh,
-            Func<CommandResult, GitOperationCompletionOutcome> resolveOutcome,
-            Action<CommandResult, GitOperationCompletionOutcome> notifyComplete,
-            out string error,
-            GitOperationMetadata metadata = null)
-        {
-            return TryStartCommandCore(
-                label,
-                fileName,
-                arguments,
-                timeoutMs,
-                suppressAutoRefresh,
-                resolveOutcome,
-                notifyComplete,
-                out error,
-                metadata);
-        }
-
-        private static bool TryStartCommandCore(
-            string label,
-            string fileName,
-            string arguments,
-            int timeoutMs,
-            bool suppressAutoRefresh,
-            Func<CommandResult, GitOperationCompletionOutcome> resolveOutcome,
-            Action<CommandResult, GitOperationCompletionOutcome> notifyComplete,
-            out string error,
-            GitOperationMetadata metadata)
-        {
-            error = string.Empty;
-            if (!TryReserve(
-                    label,
-                    suppressAutoRefresh,
-                    resolveOutcome,
-                    notifyComplete,
-                    metadata,
-                    out error))
-                return false;
-
-            try
-            {
-                TryUpdateActiveJournalState("running");
-                RegisterPolling();
-                commandHandle = CliCommandRunner.RunAsync(fileName, arguments, GitUtility.ProjectRoot, timeoutMs);
-                return true;
-            }
-            catch (Exception ex)
-            {
-                error = $"Failed to start the Git operation: {ex.Message}";
-                FinalizeReservation(GitOperationCompletionOutcome.FailedButRolledBack);
-                return false;
-            }
-        }
-
-        internal static bool TryStartTask(
-            string label,
-            Func<CancellationToken, CommandResult> task,
-            bool suppressAutoRefresh,
-            Func<CommandResult, GitOperationCompletionOutcome> onComplete,
-            out string error,
-            GitOperationMetadata metadata = null)
-        {
-            return TryStartTaskCore(
-                label,
-                task,
-                suppressAutoRefresh,
-                onComplete,
-                (Action<CommandResult, GitOperationCompletionOutcome>)null,
-                out error,
-                metadata);
-        }
-
-        internal static bool TryStartTask(
-            string label,
-            Func<CancellationToken, CommandResult> task,
-            bool suppressAutoRefresh,
-            Func<CommandResult, GitOperationCompletionOutcome> resolveOutcome,
-            Action<CommandResult> notifyComplete,
-            out string error,
-            GitOperationMetadata metadata = null)
-        {
-            Action<CommandResult, GitOperationCompletionOutcome> effectiveNotification =
-                notifyComplete == null
-                    ? null
-                    : (result, _) => notifyComplete(result);
-            return TryStartTaskCore(
-                label,
-                task,
-                suppressAutoRefresh,
-                resolveOutcome,
-                effectiveNotification,
-                out error,
-                metadata);
-        }
-
         internal static bool TryStartTask(
             string label,
             Func<CancellationToken, CommandResult> task,
@@ -325,25 +166,6 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             Action<CommandResult, GitOperationCompletionOutcome> notifyComplete,
             out string error,
             GitOperationMetadata metadata = null)
-        {
-            return TryStartTaskCore(
-                label,
-                task,
-                suppressAutoRefresh,
-                resolveOutcome,
-                notifyComplete,
-                out error,
-                metadata);
-        }
-
-        private static bool TryStartTaskCore(
-            string label,
-            Func<CancellationToken, CommandResult> task,
-            bool suppressAutoRefresh,
-            Func<CommandResult, GitOperationCompletionOutcome> resolveOutcome,
-            Action<CommandResult, GitOperationCompletionOutcome> notifyComplete,
-            out string error,
-            GitOperationMetadata metadata)
         {
             error = string.Empty;
             if (task == null)
@@ -385,87 +207,11 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             }
         }
 
-        internal static bool TryStartTask(
-            string label,
-            Func<CommandResult> task,
-            bool suppressAutoRefresh,
-            Func<CommandResult, GitOperationCompletionOutcome> onComplete,
-            out string error,
-            GitOperationMetadata metadata = null)
-        {
-            return TryStartTask(
-                label,
-                task,
-                suppressAutoRefresh,
-                onComplete,
-                (Action<CommandResult, GitOperationCompletionOutcome>)null,
-                out error,
-                metadata);
-        }
-
-        internal static bool TryStartTask(
-            string label,
-            Func<CommandResult> task,
-            bool suppressAutoRefresh,
-            Func<CommandResult, GitOperationCompletionOutcome> resolveOutcome,
-            Action<CommandResult> notifyComplete,
-            out string error,
-            GitOperationMetadata metadata = null)
-        {
-            if (task == null)
-            {
-                error = "The Git task was not provided.";
-                return false;
-            }
-
-            return TryStartTask(
-                label,
-                cancellationToken =>
-                {
-                    cancellationToken.ThrowIfCancellationRequested();
-                    return task();
-                },
-                suppressAutoRefresh,
-                resolveOutcome,
-                notifyComplete,
-                out error,
-                metadata);
-        }
-
-        internal static bool TryStartTask(
-            string label,
-            Func<CommandResult> task,
-            bool suppressAutoRefresh,
-            Func<CommandResult, GitOperationCompletionOutcome> resolveOutcome,
-            Action<CommandResult, GitOperationCompletionOutcome> notifyComplete,
-            out string error,
-            GitOperationMetadata metadata = null)
-        {
-            if (task == null)
-            {
-                error = "The Git task was not provided.";
-                return false;
-            }
-
-            return TryStartTask(
-                label,
-                cancellationToken =>
-                {
-                    cancellationToken.ThrowIfCancellationRequested();
-                    return task();
-                },
-                suppressAutoRefresh,
-                resolveOutcome,
-                notifyComplete,
-                out error,
-                metadata);
-        }
-
         internal static bool TryAcknowledgeRecoveryWarning(out string error)
         {
             lock (Gate)
             {
-                if (reserved || commandHandle != null || taskThread != null)
+                if (reserved || taskThread != null)
                 {
                     error = $"Another repository operation is already running: {activeLabel}";
                     return false;
@@ -510,7 +256,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             bool shouldRestoreAutoRefresh;
             lock (Gate)
             {
-                if (reserved || commandHandle != null || taskThread != null)
+                if (reserved || taskThread != null)
                 {
                     error = $"Another repository operation is already running: {activeLabel}";
                     return false;
@@ -676,7 +422,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
 
             lock (Gate)
             {
-                if (reserved || commandHandle != null || taskThread != null)
+                if (reserved || taskThread != null)
                 {
                     error = $"Another repository operation is already running: {activeLabel}";
                     return false;
@@ -808,22 +554,14 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             CommandResult result;
             Func<CommandResult, GitOperationCompletionOutcome> resolver;
             Action<CommandResult, GitOperationCompletionOutcome> notification;
-            AsyncCommandHandle completedCommand = null;
-            Thread completedTask = null;
+            Thread completedTask;
 
             lock (Gate)
             {
                 if (finalizing)
                     return;
 
-                if (commandHandle != null)
-                {
-                    if (!commandHandle.IsComplete)
-                        return;
-                    completedCommand = commandHandle;
-                    result = commandHandle.Result;
-                }
-                else if (taskThread != null)
+                if (taskThread != null)
                 {
                     if (Volatile.Read(ref taskComplete) == 0)
                         return;
@@ -842,9 +580,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
 
             // Completion is published immediately before the worker returns. Do
             // not release repository ownership until the worker itself has ended.
-            if (completedCommand != null && !completedCommand.WaitForCompletion(0))
-                return;
-            if (completedTask != null && completedTask.IsAlive)
+            if (completedTask.IsAlive)
                 return;
 
             lock (Gate)
@@ -1237,7 +973,6 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         {
             lock (Gate)
             {
-                commandHandle = null;
                 taskThread = null;
                 taskCancellationSource = null;
                 taskResult = null;
@@ -1284,7 +1019,6 @@ namespace MartinCalander.GitSubmoduleManager.Editor
 
         private static void CancelAndDrainForLifecycle(string lifecycleEvent)
         {
-            AsyncCommandHandle activeCommand;
             Thread activeTask;
             CancellationTokenSource activeTaskCancellation;
 
@@ -1296,24 +1030,14 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 if (finalizing)
                     return;
 
-                if (!reserved && commandHandle == null && taskThread == null)
+                if (!reserved && taskThread == null)
                     return;
 
-                activeCommand = commandHandle;
                 activeTask = taskThread;
                 activeTaskCancellation = taskCancellationSource;
             }
 
             TryUpdateActiveJournalState("cancelling-for-" + lifecycleEvent.Replace(' ', '-'));
-
-            try
-            {
-                activeCommand?.Cancel();
-            }
-            catch (Exception ex)
-            {
-                Debug.LogWarning($"[Git Submodule Manager] Failed to request command cancellation: {ex.Message}");
-            }
 
             try
             {
@@ -1324,13 +1048,11 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 Debug.LogWarning($"[Git Submodule Manager] Failed to request task cancellation: {ex.Message}");
             }
 
-            bool commandTerminated = activeCommand == null ||
-                                     activeCommand.WaitForCompletion(LifecycleDrainTimeoutMs);
             bool taskTerminated = activeTask == null ||
                                   !activeTask.IsAlive ||
                                   activeTask.Join(LifecycleDrainTimeoutMs);
 
-            if (!commandTerminated || !taskTerminated)
+            if (!taskTerminated)
             {
                 TryUpdateActiveJournalState("cancellation-not-drained");
                 SetRecoveryWarning(
@@ -1784,11 +1506,6 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 SessionState.SetBool(LegacyAutoRefreshSessionKey, false);
         }
 
-        private static bool TryReadJournal(out GitOperationJournal journal, out string error)
-        {
-            return TryReadJournal(JournalPath, out journal, out error);
-        }
-
         private static bool TryReadJournal(
             string journalPath,
             out GitOperationJournal journal,
@@ -1828,11 +1545,6 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 journal = null;
                 return false;
             }
-        }
-
-        private static bool TryDeleteJournal(out string error)
-        {
-            return TryDeleteJournal(JournalPath, string.Empty, out error);
         }
 
         private static bool TryDeleteJournal(

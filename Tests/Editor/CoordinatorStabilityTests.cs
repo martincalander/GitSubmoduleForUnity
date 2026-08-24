@@ -59,7 +59,9 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                 "Content-Type: application/json\r\n" +
                 "Link: <https://api.github.com/user/repos?page=1>; rel=\"first\"\r\n\r\n" +
                 BuildRepositoryPageJson(50);
-            var runner = new RecordingRunner(_ => Success(response));
+            var runner = new RecordingRunner(spec => IsGraphQlCall(spec)
+                ? Success(BuildManifestGraphQlResponse(GetGraphQlNodeIds(spec)))
+                : Success(response));
             CliCommandRunner.CurrentRunner = runner;
             using var coordinator = new DiscoveryCoordinator();
 
@@ -67,7 +69,9 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
             TickUntil(coordinator, () => coordinator.DisplayedRepos.Count == 50);
 
             Assert.That(coordinator.HasNextPage, Is.False);
-            Assert.That(runner.SnapshotArguments().Single(), Does.Contain("--include"));
+            Assert.That(
+                runner.SnapshotArguments().Single(call => call.Contains("user/repos")),
+                Does.Contain("--include"));
         }
 
         [Test]
@@ -86,100 +90,6 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
             Assert.That(found, Is.True);
             Assert.That(body, Is.EqualTo("[]"));
             Assert.That(hasNextPage, Is.True);
-        }
-
-        [Test]
-        public void Search_WaitsForAuthenticatedOwnerAndNeverStartsGlobally()
-        {
-            using var usernameStarted = new ManualResetEventSlim(false);
-            using var releaseUsername = new ManualResetEventSlim(false);
-            var runner = new RecordingRunner(spec =>
-            {
-                string arguments = GetArguments(spec);
-                if (arguments.Contains("api user --jq"))
-                {
-                    usernameStarted.Set();
-                    releaseUsername.Wait(TimeSpan.FromSeconds(2));
-                    return Success("authenticated-owner");
-                }
-
-                if (arguments.Contains("search/repositories"))
-                    return Success(BuildSearchRepositoryPageJson(1, 1));
-
-                return Success(string.Empty);
-            });
-            CliCommandRunner.CurrentRunner = runner;
-            using var coordinator = new DiscoveryCoordinator();
-
-            try
-            {
-                coordinator.SetSearchQuery("safe package", 0);
-                coordinator.Tick(1.0);
-                Assert.That(usernameStarted.Wait(TimeSpan.FromSeconds(2)), Is.True);
-                Assert.That(
-                    runner.SnapshotArguments().Any(call => call.Contains("search/repositories")),
-                    Is.False,
-                    "Search must not run without an authenticated owner qualifier.");
-
-                releaseUsername.Set();
-                TickUntil(
-                    coordinator,
-                    () => runner.SnapshotArguments().Any(call => call.Contains("search/repositories")) &&
-                          coordinator.DisplayedRepos.Count == 1);
-
-                string searchCall = runner.SnapshotArguments().Single(call => call.Contains("search/repositories"));
-                Assert.That(searchCall, Does.Contain("q=user:authenticated-owner+safe%20package"));
-            }
-            finally
-            {
-                releaseUsername.Set();
-            }
-        }
-
-        [Test]
-        public void Search_FailsClosedWhenAuthenticatedOwnerCannotBeResolved()
-        {
-            var runner = new RecordingRunner(spec =>
-            {
-                if (GetArguments(spec).Contains("api user --jq"))
-                {
-                    return new CommandResult
-                    {
-                        ExitCode = 1,
-                        StdErr = "authentication lookup failed",
-                        TerminationConfirmed = true
-                    };
-                }
-
-                return Success(BuildSearchRepositoryPageJson(1, 1));
-            });
-            CliCommandRunner.CurrentRunner = runner;
-            using var coordinator = new DiscoveryCoordinator();
-
-            coordinator.SetSearchQuery("must stay scoped", 0);
-            coordinator.Tick(1.0);
-            TickUntil(coordinator, () => !string.IsNullOrWhiteSpace(coordinator.ErrorMessage));
-
-            Assert.That(
-                runner.SnapshotArguments().Any(call => call.Contains("search/repositories")),
-                Is.False);
-            Assert.That(coordinator.ErrorMessage, Does.Contain("search was not started"));
-        }
-
-        [TestCase(19, 1500, true)]
-        [TestCase(20, 1500, false)]
-        [TestCase(20, 1000, false)]
-        [TestCase(1, 51, true)]
-        [TestCase(1, 50, false)]
-        [TestCase(0, 1500, false)]
-        public void SearchPagination_NeverOffersResultsBeyondGitHubSearchLimit(
-            int currentPage,
-            int reportedTotalCount,
-            bool expected)
-        {
-            Assert.That(
-                DiscoveryCoordinator.CanLoadNextSearchPage(currentPage, reportedTotalCount),
-                Is.EqualTo(expected));
         }
 
         [Test]
@@ -245,7 +155,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
         }
 
         [Test]
-        public void IdentityReset_PreservesValidPackageFilterForReplacementAccount()
+        public void IdentityReset_RestartsPackageManifestValidationForReplacementAccount()
         {
             int graphQlCalls = 0;
             var runner = new RecordingRunner(spec =>
@@ -264,7 +174,6 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
             CliCommandRunner.CurrentRunner = runner;
             using var coordinator = new DiscoveryCoordinator();
 
-            coordinator.SetValidPackageFilterEnabled(true);
             coordinator.ResetGitHubIdentityState();
             coordinator.LoadInitialPage();
             TickUntil(coordinator, () =>
@@ -495,53 +404,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
         }
 
         [Test]
-        public void PackageJsonChecks_SerializeAndOnlyRunNewestPendingSelection()
-        {
-            using var firstStarted = new ManualResetEventSlim(false);
-            using var releaseFirst = new ManualResetEventSlim(false);
-            var runner = new RecordingRunner(spec =>
-            {
-                if (spec.Arguments.Contains("repos/owner/first/contents/package.json"))
-                {
-                    firstStarted.Set();
-                    releaseFirst.Wait(TimeSpan.FromSeconds(2));
-                }
-
-                return Success(string.Empty);
-            });
-            CliCommandRunner.CurrentRunner = runner;
-            using var coordinator = new DiscoveryCoordinator();
-            var first = Repo("first");
-            var skipped = Repo("skipped");
-            var newest = Repo("newest");
-
-            try
-            {
-                coordinator.CheckPackageJson(first);
-                Assert.That(firstStarted.Wait(TimeSpan.FromSeconds(2)), Is.True);
-
-                coordinator.CheckPackageJson(skipped);
-                coordinator.CheckPackageJson(newest);
-
-                Assert.That(runner.CallCount, Is.EqualTo(1));
-                releaseFirst.Set();
-                TickUntil(coordinator, () => newest.PackageJsonChecked);
-
-                string[] calls = runner.SnapshotArguments();
-                Assert.That(calls, Has.Length.EqualTo(2));
-                Assert.That(calls.Any(call => call.Contains("repos/owner/first/contents/package.json")), Is.True);
-                Assert.That(calls.Any(call => call.Contains("repos/owner/newest/contents/package.json")), Is.True);
-                Assert.That(calls.Any(call => call.Contains("repos/owner/skipped/contents/package.json")), Is.False);
-                Assert.That(calls.All(call => call.Contains("--hostname github.com")), Is.True);
-            }
-            finally
-            {
-                releaseFirst.Set();
-            }
-        }
-
-        [Test]
-        public void ValidPackageFilter_UsesSingleFullPageBatchAndClassifiesManifestStates()
+        public void PackageManifestValidation_UsesSingleFullPageBatchAndClassifiesManifestStates()
         {
             var graphQlCalls = new List<CommandSpec>();
             var runner = new RecordingRunner(spec =>
@@ -564,7 +427,6 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
 
             coordinator.LoadInitialPage();
             TickUntil(coordinator, () => coordinator.DisplayedRepos.Count == 50);
-            coordinator.SetValidPackageFilterEnabled(true);
             TickUntil(coordinator, () => !coordinator.IsValidatingPackageManifests);
 
             CommandSpec[] calls;
@@ -588,7 +450,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
         }
 
         [Test]
-        public void ValidPackageFilter_CachedManifestRetainsLicenseMetadata()
+        public void PackageManifestValidation_CachedManifestRetainsLicenseMetadata()
         {
             int graphQlCalls = 0;
             var runner = new RecordingRunner(spec =>
@@ -612,12 +474,11 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
 
             coordinator.LoadInitialPage();
             TickUntil(coordinator, () => coordinator.DisplayedRepos.Count == 1);
-            coordinator.SetValidPackageFilterEnabled(true);
             TickUntil(coordinator, () => !coordinator.IsValidatingPackageManifests);
 
             Assert.That(coordinator.DisplayedRepos.Single().DeclaredLicense, Is.EqualTo("MIT"));
 
-            coordinator.ReloadCurrentPage();
+            coordinator.LoadInitialPage();
             TickUntil(
                 coordinator,
                 () => Volatile.Read(ref graphQlCalls) == 2 &&
@@ -629,7 +490,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
         }
 
         [Test]
-        public void ValidPackageFilter_TruncatedBatchBisectsUntilResponsesFit()
+        public void PackageManifestValidation_TruncatedBatchBisectsUntilResponsesFit()
         {
             var graphQlBatchSizes = new List<int>();
             var runner = new RecordingRunner(spec =>
@@ -660,7 +521,6 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
 
             coordinator.LoadInitialPage();
             TickUntil(coordinator, () => coordinator.DisplayedRepos.Count == 10);
-            coordinator.SetValidPackageFilterEnabled(true);
             TickUntil(coordinator, () => !coordinator.IsValidatingPackageManifests);
 
             int[] sizes;
@@ -675,7 +535,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
         }
 
         [Test]
-        public void ValidPackageFilter_RequestFailureStopsRemainingBatchesAndFailsClosed()
+        public void PackageManifestValidation_RequestFailureStopsRemainingBatchesAndFailsClosed()
         {
             int graphQlCallCount = 0;
             var runner = new RecordingRunner(spec =>
@@ -703,7 +563,6 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
 
             coordinator.LoadInitialPage();
             TickUntil(coordinator, () => coordinator.DisplayedRepos.Count == 51);
-            coordinator.SetValidPackageFilterEnabled(true);
             TickUntil(coordinator, () => !coordinator.IsValidatingPackageManifests);
 
             Assert.That(graphQlCallCount, Is.EqualTo(1), "A failed request must stop queued GitHub work.");
@@ -714,7 +573,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
         }
 
         [Test]
-        public void ValidPackageFilter_SingleRepositoryTruncationIsolatedWhileSiblingsContinue()
+        public void PackageManifestValidation_SingleRepositoryTruncationIsolatedWhileSiblingsContinue()
         {
             var graphQlBatches = new List<string[]>();
             var runner = new RecordingRunner(spec =>
@@ -746,7 +605,6 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
 
             coordinator.LoadInitialPage();
             TickUntil(coordinator, () => coordinator.DisplayedRepos.Count == 5);
-            coordinator.SetValidPackageFilterEnabled(true);
             TickUntil(coordinator, () => !coordinator.IsValidatingPackageManifests);
 
             string[][] batches;
@@ -770,7 +628,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
         }
 
         [Test]
-        public void ValidPackageFilter_TruncationRetriesStopAtBoundedRequestBudget()
+        public void PackageManifestValidation_TruncationRetriesStopAtBoundedRequestBudget()
         {
             int graphQlCallCount = 0;
             var runner = new RecordingRunner(spec =>
@@ -794,7 +652,6 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
 
             coordinator.LoadInitialPage();
             TickUntil(coordinator, () => coordinator.DisplayedRepos.Count == 50);
-            coordinator.SetValidPackageFilterEnabled(true);
             TickUntil(coordinator, () => !coordinator.IsValidatingPackageManifests);
 
             Assert.That(
@@ -815,7 +672,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                 "Queued repositories should explain that validation stopped at the request ceiling.");
 
             for (int index = 0; index < 10; index++)
-                coordinator.Tick(0);
+                coordinator.Tick();
             Assert.That(
                 graphQlCallCount,
                 Is.EqualTo(
@@ -824,13 +681,13 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
         }
 
         [Test]
-        public void ValidPackageFilter_MalformedSuccessfulResponseStopsRemainingBatchesAndFailsClosed()
+        public void PackageManifestValidation_MalformedSuccessfulResponseStopsRemainingBatchesAndFailsClosed()
         {
             AssertUnusableManifestResponseStopsQueuedWork(() => Success("not valid GraphQL JSON"));
         }
 
         [Test]
-        public void ValidPackageFilter_AcceptsOpaquePunctuationNodeIdsUsingRawStringFields()
+        public void PackageManifestValidation_AcceptsOpaquePunctuationNodeIdsUsingRawStringFields()
         {
             const string nodeId = "R:future.v2@repo?x";
             CommandSpec graphQlCall = null;
@@ -853,7 +710,6 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
 
             coordinator.LoadInitialPage();
             TickUntil(coordinator, () => coordinator.DisplayedRepos.Count == 1);
-            coordinator.SetValidPackageFilterEnabled(true);
             TickUntil(coordinator, () => !coordinator.IsValidatingPackageManifests);
 
             Assert.That(graphQlCall, Is.Not.Null);
@@ -864,7 +720,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
         }
 
         [Test]
-        public void ValidPackageFilter_RejectsNodeIdsContainingControlWhitespace()
+        public void PackageManifestValidation_RejectsNodeIdsContainingControlWhitespace()
         {
             const string nodeId = "unsafe\nidentity";
             var runner = new RecordingRunner(spec =>
@@ -879,122 +735,32 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
 
             coordinator.LoadInitialPage();
             TickUntil(coordinator, () => coordinator.DisplayedRepos.Count == 1);
-            coordinator.SetValidPackageFilterEnabled(true);
 
             Assert.That(runner.SnapshotArguments().Count(call => call.Contains("graphql")), Is.EqualTo(0));
             Assert.That(coordinator.DisplayedRepos.Single().ManifestState, Is.EqualTo(PackageManifestState.Unavailable));
         }
 
         [Test]
-        public void ReloadCurrentPage_PreservesSearchModeQueryAndPage()
+        public void DiscoveryCoordinator_DisposeCancelsLiveManifestBatchAndAllowsFreshPage()
         {
+            using var firstStarted = new ManualResetEventSlim(false);
+            using var releaseFirst = new ManualResetEventSlim(false);
+            int graphQlCalls = 0;
             var runner = new RecordingRunner(spec =>
             {
                 string arguments = GetArguments(spec);
-                if (arguments.Contains("api user --jq"))
-                    return Success("owner");
-                if (arguments.Contains("search/repositories"))
-                    return Success(BuildSearchRepositoryPageJson(150, 50));
-
-                return Success(string.Empty);
-            });
-            CliCommandRunner.CurrentRunner = runner;
-            using var coordinator = new DiscoveryCoordinator();
-
-            coordinator.SetSearchQuery("future package", 0);
-            coordinator.Tick(1.0);
-            TickUntil(coordinator, () => coordinator.DisplayedRepos.Count == 50);
-
-            coordinator.NextPage();
-            TickUntil(coordinator, () =>
-                runner.SnapshotArguments().Count(call => call.Contains("search/repositories")) == 2 &&
-                !coordinator.IsLoading);
-
-            coordinator.ReloadCurrentPage();
-            TickUntil(coordinator, () =>
-                runner.SnapshotArguments().Count(call => call.Contains("search/repositories")) == 3 &&
-                !coordinator.IsLoading);
-
-            string lastCall = runner.SnapshotArguments().Last(call => call.Contains("search/repositories"));
-            Assert.That(coordinator.CurrentPage, Is.EqualTo(2));
-            Assert.That(lastCall, Does.Contain("search/repositories?q=user:owner+future%20package"));
-            Assert.That(lastCall, Does.Contain("page=2"));
-        }
-
-        [Test]
-        public void LoadInitialPage_ResetsSearchModeQueryAndPage()
-        {
-            var runner = new RecordingRunner(spec =>
-            {
-                string arguments = GetArguments(spec);
-                if (arguments.Contains("api user --jq"))
-                    return Success("owner");
-                if (arguments.Contains("search/repositories"))
-                    return Success(BuildSearchRepositoryPageJson(150, 50));
                 if (arguments.Contains("user/repos"))
                     return Success(BuildRepositoryPageJson(1));
 
-                return Success(string.Empty);
-            });
-            CliCommandRunner.CurrentRunner = runner;
-            using var coordinator = new DiscoveryCoordinator();
-
-            coordinator.SetSearchQuery("old package", 0);
-            coordinator.Tick(1.0);
-            TickUntil(coordinator, () => coordinator.DisplayedRepos.Count == 50);
-            coordinator.NextPage();
-            TickUntil(coordinator, () => coordinator.CurrentPage == 2 && !coordinator.IsLoading);
-
-            coordinator.SetSearchQuery("stale pending search", -1);
-            coordinator.LoadInitialPage();
-            TickUntil(coordinator, () => coordinator.CurrentPage == 1 && coordinator.DisplayedRepos.Count == 1);
-
-            string lastCall = runner.SnapshotArguments().Last();
-            Assert.That(lastCall, Does.Contain("user/repos"));
-            Assert.That(lastCall, Does.Contain("page=1"));
-            Assert.That(lastCall, Does.Not.Contain("search/repositories"));
-            Assert.That(lastCall, Does.Not.Contain("old%20package"));
-            Assert.That(runner.SnapshotArguments().All(call =>
-                !call.Contains("stale%20pending%20search")), Is.True);
-        }
-
-        [Test]
-        public void SetOwner_ReappliesVisibleSearchToTheNewOwner()
-        {
-            var runner = new RecordingRunner(spec =>
-            {
-                if (GetArguments(spec).Contains("search/repositories"))
-                    return Success(BuildSearchRepositoryPageJson(1, 1));
-
-                return Success(string.Empty);
-            });
-            CliCommandRunner.CurrentRunner = runner;
-            using var coordinator = new DiscoveryCoordinator();
-
-            coordinator.SetOwner("example-org", "shared package");
-            TickUntil(coordinator, () => coordinator.DisplayedRepos.Count == 1);
-
-            string lastCall = runner.SnapshotArguments().Last();
-            Assert.That(lastCall, Does.Contain("search/repositories?q=org:example-org+shared%20package"));
-            Assert.That(lastCall, Does.Contain("page=1"));
-            Assert.That(coordinator.CurrentPage, Is.EqualTo(1));
-        }
-
-        [Test]
-        public void ValidPackageFilter_DisablingDuringRequestDiscardsStaleResults()
-        {
-            using var requestStarted = new ManualResetEventSlim(false);
-            using var releaseRequest = new ManualResetEventSlim(false);
-            var runner = new RecordingRunner(spec =>
-            {
-                string arguments = GetArguments(spec);
-                if (arguments.Contains("user/repos"))
-                    return Success(BuildRepositoryPageJson(2));
-
                 if (IsGraphQlCall(spec))
                 {
-                    requestStarted.Set();
-                    releaseRequest.Wait(TimeSpan.FromSeconds(2));
+                    int call = Interlocked.Increment(ref graphQlCalls);
+                    if (call == 1)
+                    {
+                        firstStarted.Set();
+                        releaseFirst.Wait(TimeSpan.FromSeconds(2));
+                    }
+
                     return Success(BuildManifestGraphQlResponse(GetGraphQlNodeIds(spec)));
                 }
 
@@ -1006,80 +772,25 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
             try
             {
                 coordinator.LoadInitialPage();
-                TickUntil(coordinator, () => coordinator.DisplayedRepos.Count == 2);
-                coordinator.SetValidPackageFilterEnabled(true);
-                Assert.That(requestStarted.Wait(TimeSpan.FromSeconds(2)), Is.True);
-
-                coordinator.SetValidPackageFilterEnabled(false);
-                releaseRequest.Set();
-                TickUntil(coordinator, () => runner.CallCount >= 2);
-                Thread.Sleep(30);
-                coordinator.Tick(0);
-
-                Assert.That(coordinator.DisplayedRepos.All(repo => repo.ManifestState == PackageManifestState.Unknown), Is.True);
-            }
-            finally
-            {
-                releaseRequest.Set();
-            }
-        }
-
-        [Test]
-        public void SelectedRepositoryCheck_RequiresAValidDecodedManifest()
-        {
-            string validManifest = Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(
-                "{\"name\":\"com.example.valid\",\"version\":\"1.2.3\"}"));
-            var runner = new RecordingRunner(_ => Success(validManifest));
-            CliCommandRunner.CurrentRunner = runner;
-            using var coordinator = new DiscoveryCoordinator();
-            var repo = Repo("valid");
-
-            coordinator.CheckPackageJson(repo);
-            TickUntil(coordinator, () => repo.PackageJsonChecked);
-
-            Assert.That(repo.ManifestState, Is.EqualTo(PackageManifestState.Valid));
-            Assert.That(repo.DeclaredPackageName, Is.EqualTo("com.example.valid"));
-            Assert.That(runner.SnapshotArguments().Single(), Does.Contain("--jq .content"));
-        }
-
-        [Test]
-        public void DiscoveryCoordinator_DisposeCancelsLiveCheckAndAllowsFreshRequest()
-        {
-            using var firstStarted = new ManualResetEventSlim(false);
-            using var releaseFirst = new ManualResetEventSlim(false);
-            var runner = new RecordingRunner(spec =>
-            {
-                if (spec.Arguments.Contains("repos/owner/first/contents/package.json"))
-                {
-                    firstStarted.Set();
-                    releaseFirst.Wait(TimeSpan.FromSeconds(2));
-                }
-
-                return Success(string.Empty);
-            });
-            CliCommandRunner.CurrentRunner = runner;
-            using var coordinator = new DiscoveryCoordinator();
-            var first = Repo("first");
-            var newest = Repo("newest");
-
-            try
-            {
-                coordinator.CheckPackageJson(first);
-                Assert.That(firstStarted.Wait(TimeSpan.FromSeconds(2)), Is.True);
+                TickUntil(coordinator, () => firstStarted.IsSet);
 
                 coordinator.Dispose();
-                coordinator.CheckPackageJson(newest);
+                coordinator.LoadInitialPage();
                 Assert.That(
-                    runner.CallCount,
+                    Volatile.Read(ref graphQlCalls),
                     Is.EqualTo(1),
                     "Replacement work must wait until the canceled worker is terminal.");
 
                 releaseFirst.Set();
-                TickUntil(coordinator, () => newest.PackageJsonChecked);
+                TickUntil(coordinator, () =>
+                    Volatile.Read(ref graphQlCalls) == 2 &&
+                    coordinator.DisplayedRepos.Count == 1 &&
+                    !coordinator.IsValidatingPackageManifests);
 
-                Assert.That(runner.CallCount, Is.EqualTo(2));
-                Assert.That(first.PackageJsonChecked, Is.False);
-                Assert.That(newest.PackageJsonChecked, Is.True);
+                Assert.That(Volatile.Read(ref graphQlCalls), Is.EqualTo(2));
+                Assert.That(
+                    coordinator.DisplayedRepos.Single().ManifestState,
+                    Is.EqualTo(PackageManifestState.Valid));
             }
             finally
             {
@@ -1131,16 +842,6 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
             {
                 releaseFirst.Set();
             }
-        }
-
-        private static GitHubRepo Repo(string name)
-        {
-            return new GitHubRepo
-            {
-                Owner = "owner",
-                Name = name,
-                Url = $"https://github.com/owner/{name}.git"
-            };
         }
 
         private static bool IsGraphQlCall(CommandSpec spec)
@@ -1208,12 +909,6 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                    "}]";
         }
 
-        private static string BuildSearchRepositoryPageJson(int totalCount, int pageCount)
-        {
-            return $"{{\"total_count\":{totalCount},\"items\":" +
-                   BuildRepositoryPageJson(pageCount) + "}";
-        }
-
         private static string BuildManifestGraphQlResponse(IEnumerable<string> nodeIds)
         {
             var nodes = new List<string>();
@@ -1272,7 +967,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
             DateTime timeoutAt = DateTime.UtcNow.AddSeconds(2);
             while (DateTime.UtcNow < timeoutAt)
             {
-                coordinator.Tick(0);
+                coordinator.Tick();
                 if (condition())
                     return;
                 Thread.Sleep(10);
@@ -1318,7 +1013,6 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
 
             coordinator.LoadInitialPage();
             TickUntil(coordinator, () => coordinator.DisplayedRepos.Count == 51);
-            coordinator.SetValidPackageFilterEnabled(true);
             TickUntil(coordinator, () => !coordinator.IsValidatingPackageManifests);
 
             Assert.That(graphQlCallCount, Is.EqualTo(1), "An unusable response must stop queued GitHub work.");

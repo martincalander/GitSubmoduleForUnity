@@ -172,19 +172,6 @@ namespace MartinCalander.GitSubmoduleManager.Editor
 
         internal static bool TryStartToReadOnly(
             PackageManagerSubmoduleInfo info,
-            Action<GitPackageConversionCompletion> onComplete,
-            out string error)
-        {
-            return TryStartToReadOnly(
-                info,
-                null,
-                false,
-                onComplete,
-                out error);
-        }
-
-        internal static bool TryStartToReadOnly(
-            PackageManagerSubmoduleInfo info,
             SubmoduleRemovalAssessment confirmedAssessment,
             bool discardLocalWork,
             Action<GitPackageConversionCompletion> onComplete,

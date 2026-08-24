@@ -726,7 +726,15 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                 Assert.That(details.IsInstallConfirmationPending, Is.True);
 
                 SendNavigationSubmit(details.CancelInstallButton);
-                yield return null;
+                for (int frame = 0;
+                     frame < 10 &&
+                     !ReferenceEquals(
+                         host.rootVisualElement.focusController.focusedElement,
+                         details.InstallMenu);
+                     frame++)
+                {
+                    yield return null;
+                }
 
                 Assert.That(installCount, Is.Zero);
                 Assert.That(details.IsInstallConfirmationPending, Is.False);

@@ -66,6 +66,10 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic;
 
         private static Harmony harmony;
+        private static readonly object PageVisibilityFilterContractGate =
+            new object();
+        private static volatile PageVisibilityFilterContract
+            pageVisibilityFilterContract;
         private static bool shuttingDown;
         private static bool presentationRefreshQueued;
         private static bool presentationRebuildQueued;
@@ -156,8 +160,10 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                     PatchPostfixIfNeeded(target, GetPageLoadingPostfix());
                 }
 
+                TryGetPageVisibilityFilterContract(
+                    out PageVisibilityFilterContract visibilityFilterContract);
                 MethodInfo visibilityFilterTarget =
-                    GetPageVisibilityFilterTarget();
+                    visibilityFilterContract?.VisibilityFilterTarget;
                 if (visibilityFilterTarget != null)
                 {
                     foundTarget = true;
@@ -167,6 +173,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 }
 
                 MethodInfo supportedFiltersRefreshTarget =
+                    visibilityFilterContract?.SupportedFiltersRefreshTarget ??
                     GetPageSupportedFiltersRefreshTarget();
                 if (supportedFiltersRefreshTarget != null)
                 {
@@ -470,17 +477,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
 
         internal static bool HasPageVisibilityFilterContract()
         {
-            return GetPageVisibilityFilterTarget() != null &&
-                   GetPagePackageDatabaseField() != null &&
-                   GetPagePackageLookupMethod() != null &&
-                   GetPageFiltersProperty() != null &&
-                   GetPageFilterStatusProperty() != null &&
-                   GetPageFilterLabelsProperty() != null &&
-                   GetPageFilterCategoriesProperty() != null &&
-                   GetPageFilterSupportedCategoriesProperty() != null &&
-                   GetPageVisualStatesProperty() != null &&
-                   GetPageOrderedGroupNamesProperty() != null &&
-                   GetPageSupportedFiltersRefreshTarget() != null;
+            return TryGetPageVisibilityFilterContract(out _);
         }
 
         internal static MethodInfo GetTechnicalNamePostfix()
@@ -725,8 +722,19 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             object page,
             out IReadOnlyList<string> supportedCategories)
         {
+            if (TryGetPageVisibilityFilterContract(
+                    out PageVisibilityFilterContract contract))
+            {
+                return TryGetFilterStringList(
+                    page,
+                    contract.FiltersProperty,
+                    contract.SupportedCategoriesProperty,
+                    out supportedCategories);
+            }
+
             return TryGetFilterStringList(
                 page,
+                GetPageFiltersProperty(),
                 GetPageFilterSupportedCategoriesProperty(),
                 out supportedCategories);
         }
@@ -736,9 +744,19 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             out IReadOnlyList<string> groupNames)
         {
             groupNames = null;
-            PropertyInfo visualStatesProperty = GetPageVisualStatesProperty();
-            PropertyInfo orderedGroupNamesProperty =
-                GetPageOrderedGroupNamesProperty();
+            PropertyInfo visualStatesProperty;
+            PropertyInfo orderedGroupNamesProperty;
+            if (TryGetPageVisibilityFilterContract(
+                    out PageVisibilityFilterContract contract))
+            {
+                visualStatesProperty = contract.VisualStatesProperty;
+                orderedGroupNamesProperty = contract.OrderedGroupNamesProperty;
+            }
+            else
+            {
+                visualStatesProperty = GetPageVisualStatesProperty();
+                orderedGroupNamesProperty = GetPageOrderedGroupNamesProperty();
+            }
             if (page == null ||
                 visualStatesProperty == null ||
                 orderedGroupNamesProperty == null)
@@ -1324,14 +1342,13 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 // native Downloaded status for extension pages, so that status and
                 // our repository facets only narrow an otherwise native match.
                 if (!__result || !IsGitHubPage(__instance) ||
-                    !TryGetSelectedStatusName(
+                    !TryGetPageVisibilityFilterContract(
+                        out PageVisibilityFilterContract contract) ||
+                    !TryReadSelectedFilters(
                         __instance,
-                        out string selectedStatusName) ||
-                    !TryGetSelectedLabels(
-                        __instance,
-                        out IReadOnlyList<string> selectedLabels) ||
-                    !TryGetSelectedCategories(
-                        __instance,
+                        contract,
+                        out string selectedStatusName,
+                        out IReadOnlyList<string> selectedLabels,
                         out IReadOnlyList<string> selectedCategories))
                 {
                     return;
@@ -1348,7 +1365,11 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 if (repositoryFiltersInactive && downloadedFilterInactive)
                     return;
 
-                if (!TryGetPagePackage(__instance, __0, out object package))
+                if (!TryGetPagePackage(
+                        __instance,
+                        __0,
+                        contract,
+                        out object package))
                     return;
 
                 if (!MatchesDownloadedFilter(
@@ -1407,55 +1428,34 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 StringComparison.Ordinal);
         }
 
-        private static bool TryGetSelectedLabels(
-            object page,
-            out IReadOnlyList<string> selectedLabels)
-        {
-            return TryGetFilterStringList(
-                page,
-                GetPageFilterLabelsProperty(),
-                out selectedLabels);
-        }
-
-        private static bool TryGetSelectedStatusName(
-            object page,
-            out string selectedStatusName)
-        {
-            selectedStatusName = string.Empty;
-            PropertyInfo filtersProperty = GetPageFiltersProperty();
-            PropertyInfo statusProperty = GetPageFilterStatusProperty();
-            if (page == null || filtersProperty == null || statusProperty == null)
-                return false;
-
-            object filters = filtersProperty.GetValue(page, null);
-            if (filters == null)
-                return false;
-
-            object status = statusProperty.GetValue(filters, null);
-            if (status == null)
-                return false;
-
-            selectedStatusName = status.ToString();
-            return true;
-        }
-
         internal static bool TryGetSelectedCategories(
             object page,
             out IReadOnlyList<string> selectedCategories)
         {
+            if (TryGetPageVisibilityFilterContract(
+                    out PageVisibilityFilterContract contract))
+            {
+                return TryGetFilterStringList(
+                    page,
+                    contract.FiltersProperty,
+                    contract.CategoriesProperty,
+                    out selectedCategories);
+            }
+
             return TryGetFilterStringList(
                 page,
+                GetPageFiltersProperty(),
                 GetPageFilterCategoriesProperty(),
                 out selectedCategories);
         }
 
         private static bool TryGetFilterStringList(
             object page,
+            PropertyInfo filtersProperty,
             PropertyInfo listProperty,
             out IReadOnlyList<string> values)
         {
             values = null;
-            PropertyInfo filtersProperty = GetPageFiltersProperty();
             if (page == null || filtersProperty == null || listProperty == null)
                 return false;
 
@@ -1463,32 +1463,206 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             if (filters == null)
                 return false;
             object list = listProperty.GetValue(filters, null);
-            if (!(list is IEnumerable<string> enumerable))
+            if (!(list is IReadOnlyList<string> readOnlyList))
                 return false;
 
-            values = new List<string>(enumerable);
+            values = readOnlyList;
+            return true;
+        }
+
+        private static bool TryReadSelectedFilters(
+            object page,
+            PageVisibilityFilterContract contract,
+            out string selectedStatusName,
+            out IReadOnlyList<string> selectedLabels,
+            out IReadOnlyList<string> selectedCategories)
+        {
+            return TryReadSelectedFilterValues(
+                page,
+                contract?.FiltersProperty,
+                contract?.StatusProperty,
+                contract?.LabelsProperty,
+                contract?.CategoriesProperty,
+                out selectedStatusName,
+                out selectedLabels,
+                out selectedCategories);
+        }
+
+        internal static bool TryReadSelectedFilterValues(
+            object page,
+            PropertyInfo filtersProperty,
+            PropertyInfo statusProperty,
+            PropertyInfo labelsProperty,
+            PropertyInfo categoriesProperty,
+            out string selectedStatusName,
+            out IReadOnlyList<string> selectedLabels,
+            out IReadOnlyList<string> selectedCategories)
+        {
+            selectedStatusName = string.Empty;
+            selectedLabels = null;
+            selectedCategories = null;
+            if (page == null ||
+                filtersProperty == null ||
+                statusProperty == null ||
+                labelsProperty == null ||
+                categoriesProperty == null)
+            {
+                return false;
+            }
+
+            object filters = filtersProperty.GetValue(page, null);
+            if (filters == null)
+                return false;
+
+            object status = statusProperty.GetValue(filters, null);
+            if (status == null ||
+                !(labelsProperty.GetValue(filters, null) is
+                    IReadOnlyList<string> labels) ||
+                !(categoriesProperty.GetValue(filters, null) is
+                    IReadOnlyList<string> categories))
+            {
+                return false;
+            }
+
+            selectedStatusName = status.ToString();
+            selectedLabels = labels;
+            selectedCategories = categories;
             return true;
         }
 
         private static bool TryGetPagePackage(
             object page,
             string packageUniqueId,
+            PageVisibilityFilterContract contract,
             out object package)
         {
             package = null;
-            if (page == null || string.IsNullOrEmpty(packageUniqueId))
+            if (page == null ||
+                string.IsNullOrEmpty(packageUniqueId) ||
+                contract == null)
+            {
+                return false;
+            }
+
+            object packageDatabase = contract.PackageDatabaseField.GetValue(page);
+            if (packageDatabase == null)
                 return false;
 
-            FieldInfo packageDatabaseField = GetPagePackageDatabaseField();
-            MethodInfo getPackage = GetPagePackageLookupMethod();
-            object packageDatabase = packageDatabaseField?.GetValue(page);
-            if (packageDatabase == null || getPackage == null)
-                return false;
-
-            package = getPackage.Invoke(
+            package = contract.PackageLookupMethod.Invoke(
                 packageDatabase,
                 new object[] { packageUniqueId });
             return package != null;
+        }
+
+        private static bool TryGetPageVisibilityFilterContract(
+            out PageVisibilityFilterContract contract)
+        {
+            contract = pageVisibilityFilterContract;
+            if (contract != null)
+                return true;
+
+            // Package Manager assemblies can load after this class during Editor
+            // startup. Cache only a complete positive probe so a delayed load can
+            // be retried and a partial contract never reaches the filter postfix.
+            PageVisibilityFilterContract candidate =
+                PageVisibilityFilterContract.TryCreate();
+            if (candidate == null)
+                return false;
+
+            lock (PageVisibilityFilterContractGate)
+            {
+                if (pageVisibilityFilterContract == null)
+                    pageVisibilityFilterContract = candidate;
+                contract = pageVisibilityFilterContract;
+                return true;
+            }
+        }
+
+        private sealed class PageVisibilityFilterContract
+        {
+            private PageVisibilityFilterContract(
+                MethodInfo visibilityFilterTarget,
+                FieldInfo packageDatabaseField,
+                MethodInfo packageLookupMethod,
+                PropertyInfo filtersProperty,
+                PropertyInfo statusProperty,
+                PropertyInfo labelsProperty,
+                PropertyInfo categoriesProperty,
+                PropertyInfo supportedCategoriesProperty,
+                PropertyInfo visualStatesProperty,
+                PropertyInfo orderedGroupNamesProperty,
+                MethodInfo supportedFiltersRefreshTarget)
+            {
+                VisibilityFilterTarget = visibilityFilterTarget;
+                PackageDatabaseField = packageDatabaseField;
+                PackageLookupMethod = packageLookupMethod;
+                FiltersProperty = filtersProperty;
+                StatusProperty = statusProperty;
+                LabelsProperty = labelsProperty;
+                CategoriesProperty = categoriesProperty;
+                SupportedCategoriesProperty = supportedCategoriesProperty;
+                VisualStatesProperty = visualStatesProperty;
+                OrderedGroupNamesProperty = orderedGroupNamesProperty;
+                SupportedFiltersRefreshTarget = supportedFiltersRefreshTarget;
+            }
+
+            internal MethodInfo VisibilityFilterTarget { get; }
+            internal FieldInfo PackageDatabaseField { get; }
+            internal MethodInfo PackageLookupMethod { get; }
+            internal PropertyInfo FiltersProperty { get; }
+            internal PropertyInfo StatusProperty { get; }
+            internal PropertyInfo LabelsProperty { get; }
+            internal PropertyInfo CategoriesProperty { get; }
+            internal PropertyInfo SupportedCategoriesProperty { get; }
+            internal PropertyInfo VisualStatesProperty { get; }
+            internal PropertyInfo OrderedGroupNamesProperty { get; }
+            internal MethodInfo SupportedFiltersRefreshTarget { get; }
+
+            internal static PageVisibilityFilterContract TryCreate()
+            {
+                MethodInfo visibilityFilterTarget =
+                    GetPageVisibilityFilterTarget();
+                FieldInfo packageDatabaseField = GetPagePackageDatabaseField();
+                MethodInfo packageLookupMethod = GetPagePackageLookupMethod();
+                PropertyInfo filtersProperty = GetPageFiltersProperty();
+                PropertyInfo statusProperty = GetPageFilterStatusProperty();
+                PropertyInfo labelsProperty = GetPageFilterLabelsProperty();
+                PropertyInfo categoriesProperty = GetPageFilterCategoriesProperty();
+                PropertyInfo supportedCategoriesProperty =
+                    GetPageFilterSupportedCategoriesProperty();
+                PropertyInfo visualStatesProperty = GetPageVisualStatesProperty();
+                PropertyInfo orderedGroupNamesProperty =
+                    GetPageOrderedGroupNamesProperty();
+                MethodInfo supportedFiltersRefreshTarget =
+                    GetPageSupportedFiltersRefreshTarget();
+                if (visibilityFilterTarget == null ||
+                    packageDatabaseField == null ||
+                    packageLookupMethod == null ||
+                    filtersProperty == null ||
+                    statusProperty == null ||
+                    labelsProperty == null ||
+                    categoriesProperty == null ||
+                    supportedCategoriesProperty == null ||
+                    visualStatesProperty == null ||
+                    orderedGroupNamesProperty == null ||
+                    supportedFiltersRefreshTarget == null)
+                {
+                    return null;
+                }
+
+                return new PageVisibilityFilterContract(
+                    visibilityFilterTarget,
+                    packageDatabaseField,
+                    packageLookupMethod,
+                    filtersProperty,
+                    statusProperty,
+                    labelsProperty,
+                    categoriesProperty,
+                    supportedCategoriesProperty,
+                    visualStatesProperty,
+                    orderedGroupNamesProperty,
+                    supportedFiltersRefreshTarget);
+            }
         }
 
         private static string GetPageId(object page)
@@ -1713,6 +1887,8 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         private static void OnBeforeAssemblyReload()
         {
             shuttingDown = true;
+            lock (PageVisibilityFilterContractGate)
+                pageVisibilityFilterContract = null;
             EditorApplication.delayCall -= RefreshOpenPackageManagerPages;
             PackageManagerGitHubDiscovery.SnapshotChanged -=
                 OnDiscoverySnapshotChanged;

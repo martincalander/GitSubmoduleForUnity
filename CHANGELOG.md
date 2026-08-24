@@ -86,6 +86,9 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- Package Manager's GitHub filter predicate now caches its verified reflection
+  contract and reuses Unity's native filter lists, avoiding repeated assembly
+  scans and list copies while rebuilding rows.
 - Discovered GitHub package details now use one native **Install** dropdown with
   **Install as Git Submodule** and **Install as Read-Only Package** actions
   instead of a separate install-mode field and button.
@@ -170,6 +173,12 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Removed
 
+- Removed unused mutation-service overloads and the unreachable direct-command
+  lifecycle; all active repository mutations continue through the cancellable,
+  journaled task path with current assessment and fingerprint checks.
+- Removed unreachable coordinator paths for the former custom GitHub search,
+  debounce, and selected-repository REST manifest checks. Native Package Manager
+  search now works over the catalogue validated by batched GraphQL requests.
 - Removed the former package menu, management EditorWindow compatibility
   redirect, embedded manager, **In Project** tab, and interactive **Valid UPM
   Packages** filter. The native GitHub catalogue always admits only validated
@@ -177,6 +186,8 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- Reset retained-catalogue inspection throttling with each discovery lifecycle,
+  so an earlier host timestamp cannot postpone expiry after refresh or teardown.
 - Make the native GitHub package **Install** action and the Package Manager **+**
   installer use inline confirmation, progress, and error states so they remain
   responsive in automated GUI Editors where Unity suppresses modal dialogs.

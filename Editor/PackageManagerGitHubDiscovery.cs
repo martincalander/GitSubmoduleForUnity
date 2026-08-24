@@ -213,7 +213,6 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             {
                 Owner = owner ?? string.Empty;
                 Coordinator = new DiscoveryCoordinator();
-                Coordinator.SetValidPackageFilterEnabled(true);
                 Coordinator.SetOwner(Owner);
                 AwaitingPageResult = true;
             }
@@ -508,7 +507,6 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             ResetAggregation();
 
             coordinator = new DiscoveryCoordinator();
-            coordinator.SetValidPackageFilterEnabled(true);
             coordinator.EnsureUsername();
             coordinator.LoadInitialPage();
 
@@ -584,7 +582,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             {
                 try
                 {
-                    TickOrganizationLanes(currentTime);
+                    TickOrganizationLanes();
                 }
                 catch (Exception exception)
                 {
@@ -600,7 +598,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
 
             try
             {
-                bool changed = coordinator.Tick(currentTime);
+                bool changed = coordinator.Tick();
                 if (coordinator.PageChanged)
                 {
                     awaitingPageResult = false;
@@ -738,7 +736,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             PublishSnapshot();
         }
 
-        private static void TickOrganizationLanes(double currentTime)
+        private static void TickOrganizationLanes()
         {
             bool changed = false;
             bool laneSettled = false;
@@ -749,7 +747,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                     continue;
 
                 DiscoveryCoordinator ownerCoordinator = lane.Coordinator;
-                bool laneChanged = ownerCoordinator.Tick(currentTime);
+                bool laneChanged = ownerCoordinator.Tick();
                 changed |= laneChanged;
                 if (ownerCoordinator.PageChanged)
                 {
@@ -1301,6 +1299,10 @@ namespace MartinCalander.GitSubmoduleManager.Editor
 
         private static void ResetAggregation()
         {
+            // Inspection timestamps belong to one catalogue lifecycle. A
+            // retained-result throttle from an earlier host must never postpone
+            // expiry after a refresh or stop resets the state machine.
+            nextRetainedCatalogueInspection = 0d;
             if (Repositories.Count > 0 || publishedRepositories.Count > 0)
                 repositoriesDirty = true;
 

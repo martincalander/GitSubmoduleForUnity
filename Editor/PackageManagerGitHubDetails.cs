@@ -44,9 +44,6 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         internal const string InstallingText = "Installing...";
         internal const string InstalledText = "Installed";
         internal const string RepositoryLinkText = "Repository";
-        internal const string GitSubmoduleInstallModeText = "Git Submodule";
-        internal const string ReadOnlyPackageInstallModeText =
-            "Read-Only Package";
         internal const string InstallAsGitSubmoduleText =
             "Install as Git Submodule";
         internal const string InstallAsReadOnlyPackageText =

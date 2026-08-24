@@ -1,6 +1,5 @@
 using System;
 using System.Collections.Generic;
-using System.Text;
 using UnityEngine;
 
 namespace MartinCalander.GitSubmoduleManager.Editor
@@ -8,19 +7,15 @@ namespace MartinCalander.GitSubmoduleManager.Editor
     internal sealed class DiscoveryCoordinator : IDisposable
     {
         private const int PageSize = 50;
-        private const int MaximumSearchResults = 1000;
         private const int InitialPackageManifestBatchSize = PageSize;
         internal const int MaximumPackageManifestRequestsPerValidation = 32;
         private const int MaximumPackageManifestBytes = 64 * 1024;
         private const int MaximumManifestCacheEntries = 2048;
-        private const double SearchDebounceSeconds = 0.3;
         private const string PackageManifestRequestBudgetExhaustedMessage =
             "Package validation stopped after reaching the bounded GitHub request limit " +
             "for this page. Refresh the page to retry.";
         private const string RepositoryListProjection =
             "[.[] | {node_id, name, owner: {login: .owner.login}, clone_url, html_url, default_branch, private, description, updated_at}]";
-        private const string RepositorySearchProjection =
-            "{total_count, items: [.items[] | {node_id, name, owner: {login: .owner.login}, clone_url, html_url, default_branch, private, description, updated_at}]}";
         private const string PackageManifestQuery =
             "query($ids: [ID!]!) { nodes(ids: $ids) { ... on Repository { id packageManifest: object(expression: \"HEAD:package.json\") { __typename oid ... on Blob { byteSize isBinary isTruncated text } } } } rateLimit { remaining resetAt } }";
 
@@ -95,8 +90,6 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         private sealed class PageRequest
         {
             public string Arguments;
-            public bool IsSearch;
-            public int Page;
         }
 
         private string cachedUsername = string.Empty;
@@ -106,22 +99,9 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         private bool organizationsRequested;
 
         private AsyncCommandHandle pageHandle;
-        private PageRequest activePageRequest;
         private PageRequest pendingPageRequest;
-        private bool discardActivePageResult;
-        private bool pageFetchDeferredUntilOwnerKnown;
         private int currentPage = 1;
-        private string currentSearchQuery = string.Empty;
-        private bool isSearchMode;
         private string selectedOwner = string.Empty;
-
-        private double pendingSearchTime;
-        private string pendingSearchQuery;
-
-        private AsyncCommandHandle packageJsonHandle;
-        private GitHubRepo packageJsonTarget;
-        private GitHubRepo pendingPackageJsonTarget;
-        private bool discardActivePackageJsonResult;
 
         private readonly Queue<PackageManifestBatch> pendingPackageManifestBatches = new();
         private readonly Dictionary<string, PackageManifestCacheEntry> packageManifestCache =
@@ -130,21 +110,15 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         private PackageManifestBatch activePackageManifestBatch;
         private int packageManifestValidationGeneration;
         private int packageManifestRequestCount;
-        private bool validPackageFilterEnabled;
 
-        internal bool IsLoading =>
-            pageFetchDeferredUntilOwnerKnown ||
-            pageHandle != null && !pageHandle.IsComplete;
+        internal bool IsLoading => pageHandle != null && !pageHandle.IsComplete;
         internal bool HasIncompleteCommands =>
             IsIncomplete(usernameHandle) ||
             IsIncomplete(orgsHandle) ||
             IsIncomplete(pageHandle) ||
-            IsIncomplete(packageJsonHandle) ||
             IsIncomplete(packageManifestBatchHandle);
         internal int CurrentPage => currentPage;
-        internal string StatusMessage => pageFetchDeferredUntilOwnerKnown
-            ? "Identifying the authenticated GitHub account..."
-            : pageHandle?.StatusMessage ?? string.Empty;
+        internal string StatusMessage => pageHandle?.StatusMessage ?? string.Empty;
         internal string ErrorMessage { get; private set; } = string.Empty;
         internal string WarningMessage { get; private set; } = string.Empty;
 
@@ -152,19 +126,14 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         internal bool HasNextPage { get; private set; }
         internal bool PageChanged { get; private set; }
         internal bool IsValidatingPackageManifests =>
-            validPackageFilterEnabled &&
-            (packageManifestBatchHandle != null ||
-             pendingPackageManifestBatches.Count > 0 ||
-             packageJsonHandle != null && packageJsonTarget != null && DisplayedRepos.Contains(packageJsonTarget));
-        internal int PackageManifestCheckTotal => validPackageFilterEnabled
-            ? DisplayedRepos.Count
-            : 0;
-        internal int PackageManifestCheckCompleted => validPackageFilterEnabled
-            ? CountPackageManifestStates(PackageManifestState.Valid) +
-              CountPackageManifestStates(PackageManifestState.Missing) +
-              CountPackageManifestStates(PackageManifestState.Invalid) +
-              CountPackageManifestStates(PackageManifestState.Unavailable)
-            : 0;
+            packageManifestBatchHandle != null ||
+            pendingPackageManifestBatches.Count > 0;
+        internal int PackageManifestCheckTotal => DisplayedRepos.Count;
+        internal int PackageManifestCheckCompleted =>
+            CountPackageManifestStates(PackageManifestState.Valid) +
+            CountPackageManifestStates(PackageManifestState.Missing) +
+            CountPackageManifestStates(PackageManifestState.Invalid) +
+            CountPackageManifestStates(PackageManifestState.Unavailable);
         internal int PackageManifestUnavailableCount =>
             CountPackageManifestStates(PackageManifestState.Unavailable);
 
@@ -231,51 +200,17 @@ namespace MartinCalander.GitSubmoduleManager.Editor
 
         internal void SetOwner(string owner)
         {
-            SetOwner(owner, string.Empty);
-        }
-
-        internal void SetOwner(string owner, string searchQuery)
-        {
             if (string.Equals(selectedOwner, owner, StringComparison.OrdinalIgnoreCase))
                 return;
 
             selectedOwner = owner ?? string.Empty;
-            if (string.IsNullOrWhiteSpace(searchQuery))
-            {
-                LoadInitialPage();
-                return;
-            }
-
-            currentPage = 1;
-            isSearchMode = true;
-            currentSearchQuery = searchQuery;
-            pendingSearchQuery = null;
-            FetchPage();
+            LoadInitialPage();
         }
 
         internal void LoadInitialPage()
         {
             currentPage = 1;
-            isSearchMode = false;
-            currentSearchQuery = string.Empty;
-            pendingSearchQuery = null;
             FetchPage();
-        }
-
-        internal void ReloadCurrentPage()
-        {
-            FetchPage();
-        }
-
-        internal void SetSearchQuery(string query, double currentTime)
-        {
-            if (string.Equals(query, pendingSearchQuery, StringComparison.OrdinalIgnoreCase))
-            {
-                return;
-            }
-
-            pendingSearchQuery = query;
-            pendingSearchTime = currentTime + SearchDebounceSeconds;
         }
 
         internal void NextPage()
@@ -289,76 +224,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             FetchPage();
         }
 
-        internal void CheckPackageJson(GitHubRepo repo)
-        {
-            if (repo == null || repo.ManifestState != PackageManifestState.Unknown)
-                return;
-
-            if (packageJsonHandle != null)
-            {
-                if (ReferenceEquals(packageJsonTarget, repo) && !discardActivePackageJsonResult)
-                {
-                    pendingPackageJsonTarget = null;
-                    return;
-                }
-
-                // Detail selection can change every GUI frame. Keep one live gh
-                // request and only remember the newest target.
-                pendingPackageJsonTarget = repo;
-                return;
-            }
-
-            if (!StartPackageJsonCheck(repo))
-                pendingPackageJsonTarget = repo;
-        }
-
-        private bool StartPackageJsonCheck(GitHubRepo repo)
-        {
-            if (repo == null || !CanStartGitHubCommandNow)
-                return false;
-
-            packageJsonTarget = repo;
-            discardActivePackageJsonResult = false;
-            repo.ManifestState = PackageManifestState.Checking;
-            repo.PackageManifestMessage = string.Empty;
-            string owner = Uri.EscapeDataString(repo.Owner ?? string.Empty);
-            string name = Uri.EscapeDataString(repo.Name ?? string.Empty);
-            packageJsonHandle = CliCommandRunner.RunAsync("gh",
-                GitHubUtility.BuildApiArguments(
-                    $"repos/{owner}/{name}/contents/package.json --jq .content"),
-                GitUtility.ProjectRoot);
-            return true;
-        }
-
-        internal void SetValidPackageFilterEnabled(bool enabled)
-        {
-            if (validPackageFilterEnabled == enabled)
-            {
-                if (enabled && !IsValidatingPackageManifests)
-                    SchedulePackageManifestValidation();
-                return;
-            }
-
-            validPackageFilterEnabled = enabled;
-            packageManifestValidationGeneration++;
-            pendingPackageManifestBatches.Clear();
-            packageManifestRequestCount = 0;
-
-            foreach (GitHubRepo repo in DisplayedRepos)
-            {
-                if (repo.ManifestState == PackageManifestState.Checking &&
-                    !ReferenceEquals(repo, packageJsonTarget))
-                {
-                    repo.ManifestState = PackageManifestState.Unknown;
-                    repo.PackageManifestMessage = string.Empty;
-                }
-            }
-
-            if (enabled)
-                SchedulePackageManifestValidation();
-        }
-
-        internal bool Tick(double currentTime)
+        internal bool Tick()
         {
             bool changed = false;
             PageChanged = false;
@@ -370,16 +236,6 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 PageRequest request = pendingPageRequest;
                 pendingPageRequest = null;
                 StartPageRequest(request);
-                changed = true;
-            }
-
-            if (packageJsonHandle == null && pendingPackageJsonTarget != null &&
-                CanStartGitHubCommandNow)
-            {
-                GitHubRepo target = pendingPackageJsonTarget;
-                pendingPackageJsonTarget = null;
-                if (target.ManifestState == PackageManifestState.Unknown)
-                    StartPackageJsonCheck(target);
                 changed = true;
             }
 
@@ -409,18 +265,14 @@ namespace MartinCalander.GitSubmoduleManager.Editor
 
                 if (usernameResolved)
                 {
-                    if (pageFetchDeferredUntilOwnerKnown)
-                        FetchPage();
-
                     if (!OrgsLoaded)
                         organizationsRequested = true;
                     TryStartOrganizationsRequest();
                 }
                 else
                 {
-                    pageFetchDeferredUntilOwnerKnown = false;
                     ErrorMessage = GitHubUtility.BuildRepoListError(
-                        "Could not identify the authenticated GitHub account; repository search was not started",
+                        "Could not identify the authenticated GitHub account; GitHub discovery could not continue",
                         usernameResult);
                 }
 
@@ -462,38 +314,13 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 changed = true;
             }
 
-            if (pendingSearchQuery != null && currentTime >= pendingSearchTime)
-            {
-                string query = pendingSearchQuery;
-                pendingSearchQuery = null;
-
-                if (string.IsNullOrWhiteSpace(query))
-                {
-                    if (isSearchMode)
-                    {
-                        LoadInitialPage();
-                    }
-                }
-                else
-                {
-                    currentPage = 1;
-                    isSearchMode = true;
-                    currentSearchQuery = query;
-                    FetchPage();
-                }
-            }
-
             if (pageHandle != null && pageHandle.IsComplete)
             {
                 var result = pageHandle.Result;
-                bool discardResult = discardActivePageResult;
                 pageHandle = null;
-                var completedRequest = activePageRequest;
-                activePageRequest = null;
-                discardActivePageResult = false;
 
-                // A search/owner/page change superseded this response. Start the
-                // newest request without flashing stale results in the window.
+                // A queued owner/page request superseded this response. Start
+                // the newest request without publishing stale results.
                 if (pendingPageRequest != null)
                 {
                     var nextRequest = pendingPageRequest;
@@ -503,40 +330,24 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                     return true;
                 }
 
-                if (discardResult)
-                    return true;
-
-                pendingPackageJsonTarget = null;
                 if (result != null && result.IsSuccess && !result.StdOutTruncated)
                 {
                     try
                     {
                         string json = (result.StdOut ?? string.Empty).Trim();
-                        List<GitHubRepo> repos;
-
-                        if (completedRequest != null && completedRequest.IsSearch)
-                        {
-                            repos = GitHubUtility.ParseSearchJson(json);
-                            int totalCount = GitHubUtility.ParseSearchTotalCount(json);
-                            HasNextPage = CanLoadNextSearchPage(completedRequest.Page, totalCount);
-                        }
-                        else
-                        {
-                            bool hasPaginationMetadata = TryExtractPaginationMetadata(
-                                json,
-                                out json,
-                                out bool metadataHasNextPage);
-                            repos = GitHubUtility.ParseRepoJson(json);
-                            HasNextPage = hasPaginationMetadata
-                                ? metadataHasNextPage
-                                : repos != null && repos.Count == PageSize;
-                        }
+                        bool hasPaginationMetadata = TryExtractPaginationMetadata(
+                            json,
+                            out json,
+                            out bool metadataHasNextPage);
+                        List<GitHubRepo> repos = GitHubUtility.ParseRepoJson(json);
+                        HasNextPage = hasPaginationMetadata
+                            ? metadataHasNextPage
+                            : repos != null && repos.Count == PageSize;
 
                         DisplayedRepos = repos ?? new List<GitHubRepo>();
                         ErrorMessage = string.Empty;
                         PageChanged = true;
-                        if (validPackageFilterEnabled)
-                            SchedulePackageManifestValidation();
+                        SchedulePackageManifestValidation();
                     }
                     catch (Exception ex)
                     {
@@ -552,51 +363,6 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                     HasNextPage = false;
                     ErrorMessage = GitHubUtility.BuildRepoListError("Failed to load GitHub repositories", result);
                     PageChanged = true;
-                }
-
-                changed = true;
-            }
-
-            if (packageJsonHandle != null && packageJsonHandle.IsComplete)
-            {
-                var result = packageJsonHandle.Result;
-                var target = packageJsonTarget;
-                bool discardResult = discardActivePackageJsonResult;
-                packageJsonHandle = null;
-                packageJsonTarget = null;
-                discardActivePackageJsonResult = false;
-
-                if (!discardResult && target != null)
-                {
-                    if (result != null && result.IsSuccess && !result.StdOutTruncated)
-                        ApplyEncodedPackageManifestResult(target, result.StdOut);
-                    else if (GitHubUtility.IsNotFoundResult(result))
-                    {
-                        SetManifestState(
-                            target,
-                            PackageManifestState.Missing,
-                            "No package.json was found at the repository root.");
-                    }
-                    else
-                    {
-                        SetManifestState(
-                            target,
-                            PackageManifestState.Unavailable,
-                            BuildPackageManifestFailureMessage(result));
-                    }
-                }
-                else if (target != null && target.ManifestState == PackageManifestState.Checking)
-                {
-                    target.ManifestState = PackageManifestState.Unknown;
-                }
-
-                GitHubRepo pendingTarget = pendingPackageJsonTarget;
-                pendingPackageJsonTarget = null;
-                if (pendingTarget != null &&
-                    pendingTarget.ManifestState == PackageManifestState.Unknown)
-                {
-                    if (!StartPackageJsonCheck(pendingTarget))
-                        pendingPackageJsonTarget = pendingTarget;
                 }
 
                 changed = true;
@@ -630,7 +396,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             pendingPackageManifestBatches.Clear();
             packageManifestRequestCount = 0;
 
-            if (!validPackageFilterEnabled || DisplayedRepos == null || DisplayedRepos.Count == 0)
+            if (DisplayedRepos == null || DisplayedRepos.Count == 0)
                 return;
 
             int generation = packageManifestValidationGeneration;
@@ -639,12 +405,6 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             {
                 if (repo == null || repo.PackageJsonChecked)
                     continue;
-
-                if (ReferenceEquals(repo, packageJsonTarget) &&
-                    repo.ManifestState == PackageManifestState.Checking)
-                {
-                    continue;
-                }
 
                 if (repo.ManifestState == PackageManifestState.Unavailable ||
                     repo.ManifestState == PackageManifestState.Checking)
@@ -985,61 +745,6 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             CacheManifestResult(blob.oid, repo);
         }
 
-        private void ApplyEncodedPackageManifestResult(GitHubRepo repo, string encodedContent)
-        {
-            try
-            {
-                byte[] bytes = Convert.FromBase64String(encodedContent ?? string.Empty);
-                if (bytes.Length > MaximumPackageManifestBytes)
-                {
-                    SetManifestState(
-                        repo,
-                        PackageManifestState.Invalid,
-                        $"package.json exceeds the {MaximumPackageManifestBytes / 1024} KiB validation limit.");
-                    return;
-                }
-
-                string content = new UTF8Encoding(false, true).GetString(bytes);
-                if (GitUtility.TryReadPackageManifestMetadataFromJson(
-                        content,
-                        out PackageManifestMetadata metadata,
-                        out string validationError))
-                {
-                    SetManifestState(
-                        repo,
-                        PackageManifestState.Valid,
-                        string.Empty,
-                        metadata.PackageName,
-                        string.Empty,
-                        metadata.DisplayName,
-                        metadata.Version,
-                        metadata.Description,
-                        metadata.MinimumUnityVersion,
-                        metadata.AuthorName,
-                        metadata.License,
-                        metadata.DocumentationUrl,
-                        metadata.ChangelogUrl,
-                        metadata.LicensesUrl,
-                        metadata.Dependencies);
-                }
-                else
-                {
-                    SetManifestState(repo, PackageManifestState.Invalid, validationError);
-                }
-            }
-            catch (FormatException)
-            {
-                SetManifestState(
-                    repo,
-                    PackageManifestState.Unavailable,
-                    "GitHub returned malformed package.json content. Refresh to retry.");
-            }
-            catch (DecoderFallbackException)
-            {
-                SetManifestState(repo, PackageManifestState.Invalid, "package.json is not valid UTF-8 text.");
-            }
-        }
-
         private void CacheManifestResult(string oid, GitHubRepo repo)
         {
             if (string.IsNullOrEmpty(oid) || repo == null)
@@ -1257,43 +962,16 @@ namespace MartinCalander.GitSubmoduleManager.Editor
 
         private void FetchPage()
         {
-            if (packageJsonHandle != null)
-                discardActivePackageJsonResult = true;
-            pendingPackageJsonTarget = null;
             packageManifestValidationGeneration++;
             pendingPackageManifestBatches.Clear();
             packageManifestRequestCount = 0;
-
-            if (isSearchMode &&
-                !string.IsNullOrWhiteSpace(currentSearchQuery) &&
-                string.IsNullOrWhiteSpace(selectedOwner))
-            {
-                // Search without an owner qualifier would become a global GitHub
-                // search. Resolve the authenticated account first and fail closed
-                // if that request cannot provide a trustworthy owner.
-                pageFetchDeferredUntilOwnerKnown = true;
-                EnsureUsername();
-                return;
-            }
-
-            pageFetchDeferredUntilOwnerKnown = false;
 
             string owner = selectedOwner;
             bool isOwnRepos = string.IsNullOrEmpty(owner) ||
                 string.Equals(owner, cachedUsername, StringComparison.OrdinalIgnoreCase);
 
             string args;
-            if (isSearchMode && !string.IsNullOrWhiteSpace(currentSearchQuery))
-            {
-                string qualifier = !string.IsNullOrEmpty(owner)
-                    ? (isOwnRepos ? $"user:{owner}+" : $"org:{owner}+")
-                    : string.Empty;
-                string encoded = Uri.EscapeDataString(currentSearchQuery);
-                args = GitHubUtility.BuildApiArguments(
-                    $"\"search/repositories?q={qualifier}{encoded}&per_page={PageSize}&page={currentPage}\" " +
-                    $"--jq {GitUtility.Quote(RepositorySearchProjection)}");
-            }
-            else if (isOwnRepos)
+            if (isOwnRepos)
             {
                 args = GitHubUtility.BuildApiArguments(
                     $"user/repos?affiliation=owner&sort=updated&direction=desc&per_page={PageSize}&page={currentPage} --include " +
@@ -1308,9 +986,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
 
             var request = new PageRequest
             {
-                Arguments = args,
-                IsSearch = isSearchMode,
-                Page = currentPage
+                Arguments = args
             };
 
             // A completed handle still owns an unprocessed result. Queue behind
@@ -1331,8 +1007,6 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 return false;
 
             ErrorMessage = string.Empty;
-            activePageRequest = request;
-            discardActivePageResult = false;
             pageHandle = CliCommandRunner.RunAsync("gh", request.Arguments, GitUtility.ProjectRoot);
             return true;
         }
@@ -1350,15 +1024,6 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 AsyncCommandDrainRegistry.IsDraining ||
                 CliCommandRunner.GitHubCommandRequiresEditorRestart);
 
-        internal static bool CanLoadNextSearchPage(int currentPage, int reportedTotalCount)
-        {
-            if (currentPage < 1 || reportedTotalCount <= 0)
-                return false;
-
-            int accessibleResultCount = Math.Min(reportedTotalCount, MaximumSearchResults);
-            return (long)currentPage * PageSize < accessibleResultCount;
-        }
-
         internal static string BuildMalformedRepositoryDataError(Exception exception)
         {
             const string summary = "GitHub returned malformed repository data";
@@ -1370,8 +1035,6 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         internal void ResetGitHubIdentityState()
         {
             pendingPageRequest = null;
-            pendingPackageJsonTarget = null;
-            pageFetchDeferredUntilOwnerKnown = false;
 
             // A reset can happen while an earlier account still owns processes.
             // Retire every handle before dropping it so a replacement account
@@ -1380,18 +1043,12 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             AsyncCommandDrainRegistry.Retire(usernameHandle);
             AsyncCommandDrainRegistry.Retire(orgsHandle);
             AsyncCommandDrainRegistry.Retire(pageHandle);
-            AsyncCommandDrainRegistry.Retire(packageJsonHandle);
             AsyncCommandDrainRegistry.Retire(packageManifestBatchHandle);
             usernameHandle = null;
             orgsHandle = null;
             pageHandle = null;
-            packageJsonHandle = null;
             packageManifestBatchHandle = null;
-            activePageRequest = null;
-            packageJsonTarget = null;
             activePackageManifestBatch = null;
-            discardActivePageResult = false;
-            discardActivePackageJsonResult = false;
             usernameRequested = false;
             organizationsRequested = false;
 
@@ -1408,10 +1065,6 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             currentPage = 1;
             HasNextPage = false;
             PageChanged = true;
-            isSearchMode = false;
-            currentSearchQuery = string.Empty;
-            pendingSearchQuery = null;
-            pendingSearchTime = 0d;
             ErrorMessage = string.Empty;
             WarningMessage = string.Empty;
         }
@@ -1419,7 +1072,6 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         public void Dispose()
         {
             ResetGitHubIdentityState();
-            validPackageFilterEnabled = false;
         }
     }
 }

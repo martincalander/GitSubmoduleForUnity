@@ -78,19 +78,6 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             return string.Empty;
         }
 
-        internal static bool TryStart(
-            PackageManagerSubmoduleInfo info,
-            Action<GitSubmoduleRemoveCompletion> onComplete,
-            out string error)
-        {
-            return TryStart(
-                info,
-                null,
-                false,
-                onComplete,
-                out error);
-        }
-
         internal static bool TryStartAssessment(
             PackageManagerSubmoduleInfo info,
             Action<GitSubmoduleRemovalAssessmentCompletion> onComplete,
@@ -237,19 +224,6 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                     PackageResolutionExpectation =
                         PackageManagerResolutionExpectation.Absent
                 });
-        }
-
-        internal static CommandResult RunRemoveSubmoduleTask(
-            string path,
-            GitSubmoduleRemoveTaskState state,
-            CancellationToken cancellationToken)
-        {
-            return RunRemoveSubmoduleTask(
-                path,
-                null,
-                false,
-                state,
-                cancellationToken);
         }
 
         internal static CommandResult RunAssessmentTask(
