@@ -47,8 +47,22 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             "UnityEditor.PackageManager.UI.Internal.IPage";
         internal const string SimplePageWithPackagesTypeName =
             "UnityEditor.PackageManager.UI.Internal.SimplePageWithPackages";
+        internal const string LegacyExtensionPageTypeName =
+            "UnityEditor.PackageManager.UI.Internal.ExtensionPage";
+        internal const string LegacyFiltersWindowTypeName =
+            "UnityEditor.PackageManager.UI.Internal.PackageManagerFiltersWindow";
+        internal const string LegacyUpmFiltersWindowTypeName =
+            "UnityEditor.PackageManager.UI.Internal.UpmFiltersWindow";
+        internal const string LegacyDetailsTabTypeName =
+            "UnityEditor.PackageManager.UI.Internal.PackageDetailsDescriptionTab";
         internal const string DetailsInformationCardsContainerName =
             "detailInformationCardsContainer";
+        internal const string LegacyDetailsInformationCardsContainerName =
+            "git-submodule-manager-legacy-information-cards";
+        internal const string LegacyVisibilityFoldoutName =
+            "git-submodule-manager-legacy-visibility-filters";
+        internal const string LegacyOrganizationFoldoutName =
+            "git-submodule-manager-legacy-organization-filters";
         internal const string LicenseInformationCardName =
             "git-submodule-manager-license-information-card";
         internal const string DefaultBranchInformationCardName =
@@ -68,8 +82,11 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         private static Harmony harmony;
         private static readonly object PageVisibilityFilterContractGate =
             new object();
+        private static readonly object LegacyPageFilterContractGate =
+            new object();
         private static volatile PageVisibilityFilterContract
             pageVisibilityFilterContract;
+        private static volatile LegacyPageFilterContract legacyPageFilterContract;
         private static bool shuttingDown;
         private static bool presentationRefreshQueued;
         private static bool presentationRebuildQueued;
@@ -183,6 +200,21 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                         GetPageSupportedFiltersRefreshPostfix());
                 }
 
+                if (TryGetLegacyPageFilterContract(
+                        out LegacyPageFilterContract legacyFilterContract))
+                {
+                    foundTarget = true;
+                    PatchPostfixIfNeeded(
+                        legacyFilterContract.VisibilityFilterTarget,
+                        GetLegacyPageVisibilityFilterPostfix());
+                    PatchPostfixIfNeeded(
+                        legacyFilterContract.FiltersDisplayTarget,
+                        GetLegacyFiltersDisplayPostfix());
+                    PatchPostfixIfNeeded(
+                        legacyFilterContract.FiltersSizeTarget,
+                        GetLegacyFiltersSizePostfix());
+                }
+
                 return foundTarget;
             }
             catch
@@ -235,10 +267,24 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 "RefreshContent",
                 typeof(void),
                 PackageVersionInterfaceTypeName);
+            if (targets.Count == 1 &&
+                string.Equals(
+                    targets[0].DeclaringType?.FullName,
+                    PackageDetailsDetailsTabTypeName,
+                    StringComparison.Ordinal))
+            {
+                return targets[0];
+            }
+
+            targets = FindSingleArgumentTargets(
+                LegacyDetailsTabTypeName,
+                "RefreshContent",
+                typeof(void),
+                PackageVersionInterfaceTypeName);
             return targets.Count == 1 &&
                    string.Equals(
                        targets[0].DeclaringType?.FullName,
-                       PackageDetailsDetailsTabTypeName,
+                       LegacyDetailsTabTypeName,
                        StringComparison.Ordinal)
                 ? targets[0]
                 : null;
@@ -557,6 +603,27 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 AnyStatic);
         }
 
+        internal static MethodInfo GetLegacyPageVisibilityFilterPostfix()
+        {
+            return typeof(PackageManagerGitHubNativePresentationPatch).GetMethod(
+                nameof(LegacyPageVisibilityFilterPostfix),
+                AnyStatic);
+        }
+
+        internal static MethodInfo GetLegacyFiltersDisplayPostfix()
+        {
+            return typeof(PackageManagerGitHubNativePresentationPatch).GetMethod(
+                nameof(LegacyFiltersDisplayPostfix),
+                AnyStatic);
+        }
+
+        internal static MethodInfo GetLegacyFiltersSizePostfix()
+        {
+            return typeof(PackageManagerGitHubNativePresentationPatch).GetMethod(
+                nameof(LegacyFiltersSizePostfix),
+                AnyStatic);
+        }
+
         internal static MethodInfo GetPackageStatusUpdateMethod()
         {
             return PackageManagerSubmoduleHarmonyPatch
@@ -752,6 +819,13 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 visualStatesProperty = contract.VisualStatesProperty;
                 orderedGroupNamesProperty = contract.OrderedGroupNamesProperty;
             }
+            else if (TryGetLegacyPageFilterContract(
+                         out LegacyPageFilterContract legacyContract))
+            {
+                visualStatesProperty = legacyContract.VisualStatesProperty;
+                orderedGroupNamesProperty =
+                    legacyContract.OrderedGroupNamesProperty;
+            }
             else
             {
                 visualStatesProperty = GetPageVisualStatesProperty();
@@ -824,6 +898,32 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                    HasPageVisibilityFilterContract() &&
                    GetPackageStatusUpdateMethod() != null &&
                    GetPackageStatusBarProperty() != null;
+        }
+
+        internal static bool HasRequiredLegacyDiscoveryLifecycleContract()
+        {
+            return GetPageRefreshTargets().Count > 0 &&
+                   GetPageActivationTargets().Count > 0 &&
+                   GetPageLoadingTargets().Count > 0 &&
+                   GetDetailsInformationCardsTarget() != null &&
+                   TryGetLegacyPageFilterContract(out _) &&
+                   GetPackageStatusUpdateMethod() != null &&
+                   GetPackageStatusBarProperty() != null;
+        }
+
+        internal static bool AreLegacyPageFilterPatchesApplied()
+        {
+            return TryGetLegacyPageFilterContract(
+                       out LegacyPageFilterContract contract) &&
+                   IsPatchApplied(
+                       contract.VisibilityFilterTarget,
+                       GetLegacyPageVisibilityFilterPostfix()) &&
+                   IsPatchApplied(
+                       contract.FiltersDisplayTarget,
+                       GetLegacyFiltersDisplayPostfix()) &&
+                   IsPatchApplied(
+                       contract.FiltersSizeTarget,
+                       GetLegacyFiltersSizePostfix());
         }
 
         internal static bool TryCreateDependencyInfos(
@@ -1036,8 +1136,36 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             if (!(detailsTab is VisualElement tab))
                 return false;
 
+            bool isLegacyDetailsTab = string.Equals(
+                tab.GetType().FullName,
+                LegacyDetailsTabTypeName,
+                StringComparison.Ordinal);
+            if (isLegacyDetailsTab && repository == null)
+            {
+                RemoveOwnedLegacyInformationCardsContainer(tab);
+                return true;
+            }
+
             VisualElement container = tab.Q<VisualElement>(
                 DetailsInformationCardsContainerName);
+            if (container == null && isLegacyDetailsTab)
+            {
+                container = tab.Q<VisualElement>(
+                    LegacyDetailsInformationCardsContainerName);
+                if (container == null && repository != null)
+                {
+                    container = new VisualElement
+                    {
+                        name = LegacyDetailsInformationCardsContainerName
+                    };
+                    container.style.flexDirection = FlexDirection.Row;
+                    container.style.flexWrap = Wrap.Wrap;
+                    container.style.marginTop = 6f;
+                    container.style.marginBottom = 4f;
+                    tab.Add(container);
+                }
+            }
+
             if (container == null)
             {
                 tab.Q<VisualElement>(LicenseInformationCardName)
@@ -1078,7 +1206,50 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 L10n.Tr("Default Branch"),
                 NormalizeInformationCardValue(repository.DefaultBranch),
                 string.Empty);
+            if (isLegacyDetailsTab)
+                ApplyLegacyInformationCardLayout(container);
             return true;
+        }
+
+        internal static bool RemoveOwnedLegacyInformationCardsContainer(
+            VisualElement detailsTab)
+        {
+            VisualElement container = FindDirectChild(
+                detailsTab,
+                LegacyDetailsInformationCardsContainerName);
+            if (container == null)
+                return false;
+
+            container.RemoveFromHierarchy();
+            return true;
+        }
+
+        private static void ApplyLegacyInformationCardLayout(
+            VisualElement container)
+        {
+            if (container == null)
+                return;
+
+            foreach (VisualElement card in container.Children())
+            {
+                card.style.flexGrow = 1f;
+                card.style.flexBasis = 180f;
+                card.style.minWidth = 180f;
+                card.style.marginRight = 8f;
+                card.style.marginBottom = 4f;
+                card.style.paddingLeft = 6f;
+                card.style.paddingRight = 6f;
+                card.style.paddingTop = 4f;
+                card.style.paddingBottom = 4f;
+
+                Label title = card.Q<Label>(
+                    className: InformationCardTitleClassName);
+                if (title != null)
+                {
+                    title.style.unityFontStyleAndWeight = FontStyle.Bold;
+                    title.style.marginBottom = 2f;
+                }
+            }
         }
 
         private static void UpsertInformationCard(
@@ -1404,6 +1575,329 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             }
         }
 
+        private static void LegacyPageVisibilityFilterPostfix(
+            object __instance,
+            object __0,
+            ref bool __result)
+        {
+            try
+            {
+                if (!__result || !IsGitHubPage(__instance) || __0 == null ||
+                    !TryGetLegacyPageFilterContract(
+                        out LegacyPageFilterContract contract) ||
+                    !contract.PackageType.IsInstanceOfType(__0) ||
+                    !TryReadLegacySelectedFilters(
+                        __instance,
+                        contract,
+                        out string selectedStatusName,
+                        out IReadOnlyList<string> selectedLabels,
+                        out IReadOnlyList<string> selectedCategories))
+                {
+                    return;
+                }
+
+                if (!MatchesDownloadedFilter(
+                        selectedStatusName,
+                        PackageManagerSubmoduleNativePage.IsDownloadedPackage(
+                            __0)))
+                {
+                    __result = false;
+                    return;
+                }
+
+                if (MatchesRepositoryFilters(
+                        null,
+                        string.Empty,
+                        selectedLabels,
+                        selectedCategories))
+                {
+                    return;
+                }
+
+                bool? isPrivate = TryGetPackageRepositoryPrivacy(
+                    __0,
+                    PackageManagerGitHubDiscovery.Current,
+                    out bool resolvedPrivacy)
+                    ? resolvedPrivacy
+                    : null;
+                __result = MatchesRepositoryFilters(
+                    isPrivate,
+                    PackageManagerSubmoduleNativePage
+                        .GetGitHubRepositoryOwner(__0),
+                    selectedLabels,
+                    selectedCategories);
+            }
+            catch
+            {
+                // A partial legacy contract must never hide unrelated packages.
+            }
+        }
+
+        private static void LegacyFiltersDisplayPostfix(
+            object __instance,
+            object __0)
+        {
+            try
+            {
+                if (!IsGitHubPage(__0) ||
+                    !TryGetLegacyPageFilterContract(
+                        out LegacyPageFilterContract contract) ||
+                    !contract.FiltersWindowType.IsInstanceOfType(__instance))
+                {
+                    return;
+                }
+
+                object filters = contract.FiltersField.GetValue(__instance);
+                if (filters == null ||
+                    !contract.FiltersType.IsInstanceOfType(filters) ||
+                    !(contract.ContainerField.GetValue(__instance) is
+                        VisualElement container))
+                {
+                    return;
+                }
+
+                FindDirectChild(container, LegacyVisibilityFoldoutName)
+                    ?.RemoveFromHierarchy();
+                FindDirectChild(container, LegacyOrganizationFoldoutName)
+                    ?.RemoveFromHierarchy();
+
+                IReadOnlyList<string> selectedLabels =
+                    contract.LabelsProperty.GetValue(filters, null) as
+                        IReadOnlyList<string> ?? Array.Empty<string>();
+                IReadOnlyList<string> selectedCategories =
+                    contract.CategoriesProperty.GetValue(filters, null) as
+                        IReadOnlyList<string> ?? Array.Empty<string>();
+
+                Foldout visibilityFoldout = CreateLegacyFilterFoldout(
+                    LegacyVisibilityFoldoutName,
+                    L10n.Tr("Visibility"),
+                    PackageManagerSubmoduleNativePage
+                        .GetSupportedVisibilityLabels(),
+                    selectedLabels,
+                    contract);
+                IReadOnlyList<string> supportedOrganizations =
+                    PackageManagerSubmoduleNativePage
+                        .GetSupportedOrganizationFilters(__0);
+                Foldout organizationFoldout = CreateLegacyFilterFoldout(
+                    LegacyOrganizationFoldoutName,
+                    L10n.Tr("Organization"),
+                    supportedOrganizations,
+                    selectedCategories,
+                    contract);
+
+                RegisterLegacyFilterCallbacks(
+                    __instance,
+                    visibilityFoldout,
+                    organizationFoldout,
+                    contract);
+                container.Add(visibilityFoldout);
+                if (supportedOrganizations.Count > 0)
+                    container.Add(organizationFoldout);
+            }
+            catch
+            {
+                // Keep Unity's status-only legacy filter popup intact on drift.
+            }
+        }
+
+        private static void LegacyFiltersSizePostfix(
+            object __instance,
+            object __0,
+            ref Vector2 __result)
+        {
+            try
+            {
+                if (!IsGitHubPage(__0) ||
+                    !TryGetLegacyPageFilterContract(
+                        out LegacyPageFilterContract contract) ||
+                    !contract.FiltersWindowType.IsInstanceOfType(__instance) ||
+                    !(contract.ContainerField.GetValue(__instance) is
+                        VisualElement container))
+                {
+                    return;
+                }
+
+                float addedHeight = GetLegacyFilterFoldoutHeight(
+                    FindDirectChild(container, LegacyVisibilityFoldoutName),
+                    contract);
+                addedHeight += GetLegacyFilterFoldoutHeight(
+                    FindDirectChild(container, LegacyOrganizationFoldoutName),
+                    contract);
+                __result = new Vector2(
+                    __result.x,
+                    Mathf.Min(__result.y + addedHeight, contract.MaximumHeight));
+            }
+            catch
+            {
+                // Preserve Unity's original popup size on contract drift.
+            }
+        }
+
+        private static Foldout CreateLegacyFilterFoldout(
+            string elementName,
+            string title,
+            IReadOnlyList<string> values,
+            IReadOnlyList<string> selectedValues,
+            LegacyPageFilterContract contract)
+        {
+            var foldout = new Foldout
+            {
+                name = elementName,
+                text = title
+            };
+            foldout.AddToClassList(contract.FoldoutClassName);
+
+            if (values == null)
+                return foldout;
+
+            for (int index = 0; index < values.Count; index++)
+            {
+                string value = values[index];
+                if (string.IsNullOrWhiteSpace(value))
+                    continue;
+
+                var toggle = new Toggle(L10n.Tr(value))
+                {
+                    name = value,
+                    tooltip = value
+                };
+                toggle.AddToClassList(contract.ToggleClassName);
+                toggle.SetValueWithoutNotify(
+                    ContainsFilterValue(selectedValues, value));
+                foldout.Add(toggle);
+            }
+
+            return foldout;
+        }
+
+        private static void RegisterLegacyFilterCallbacks(
+            object filterWindow,
+            Foldout visibilityFoldout,
+            Foldout organizationFoldout,
+            LegacyPageFilterContract contract)
+        {
+            void Register(Foldout foldout)
+            {
+                if (foldout == null)
+                    return;
+
+                foreach (VisualElement child in foldout.Children())
+                {
+                    if (child is Toggle toggle)
+                    {
+                        toggle.RegisterValueChangedCallback(_ =>
+                            OnLegacyFilterSelectionChanged(
+                                filterWindow,
+                                visibilityFoldout,
+                                organizationFoldout,
+                                contract));
+                    }
+                }
+            }
+
+            Register(visibilityFoldout);
+            Register(organizationFoldout);
+        }
+
+        private static void OnLegacyFilterSelectionChanged(
+            object filterWindow,
+            Foldout visibilityFoldout,
+            Foldout organizationFoldout,
+            LegacyPageFilterContract contract)
+        {
+            try
+            {
+                if (filterWindow == null || contract == null ||
+                    !contract.FiltersWindowType.IsInstanceOfType(filterWindow))
+                {
+                    return;
+                }
+
+                object filters = contract.FiltersField.GetValue(filterWindow);
+                object cloned = contract.CloneFiltersMethod.Invoke(filters, null);
+                if (cloned == null ||
+                    !contract.FiltersType.IsInstanceOfType(cloned))
+                {
+                    return;
+                }
+
+                contract.LabelsProperty.SetValue(
+                    cloned,
+                    GetSelectedLegacyFilterValues(visibilityFoldout),
+                    null);
+                contract.CategoriesProperty.SetValue(
+                    cloned,
+                    GetSelectedLegacyFilterValues(organizationFoldout),
+                    null);
+                contract.FiltersField.SetValue(filterWindow, cloned);
+                contract.NotifyFiltersChangedMethod.Invoke(filterWindow, null);
+            }
+            catch
+            {
+                // Leave the last native PageFilters clone unchanged on drift.
+            }
+        }
+
+        private static List<string> GetSelectedLegacyFilterValues(
+            Foldout foldout)
+        {
+            var values = new List<string>();
+            if (foldout == null)
+                return values;
+
+            foreach (VisualElement child in foldout.Children())
+            {
+                if (child is Toggle toggle &&
+                    toggle.value &&
+                    !string.IsNullOrWhiteSpace(toggle.name))
+                {
+                    values.Add(toggle.name);
+                }
+            }
+
+            return values;
+        }
+
+        private static float GetLegacyFilterFoldoutHeight(
+            VisualElement foldout,
+            LegacyPageFilterContract contract)
+        {
+            if (foldout == null)
+                return 0f;
+
+            int toggleCount = 0;
+            foreach (VisualElement child in foldout.Children())
+            {
+                if (child is Toggle)
+                    toggleCount++;
+            }
+
+            return toggleCount == 0
+                ? 0f
+                : contract.FoldoutHeight + toggleCount * contract.ToggleHeight;
+        }
+
+        private static bool ContainsFilterValue(
+            IReadOnlyList<string> values,
+            string candidate)
+        {
+            if (values == null || string.IsNullOrEmpty(candidate))
+                return false;
+
+            for (int index = 0; index < values.Count; index++)
+            {
+                if (string.Equals(
+                        values[index],
+                        candidate,
+                        StringComparison.OrdinalIgnoreCase))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
         private static void PageSupportedFiltersRefreshPostfix(object __instance)
         {
             try
@@ -1552,6 +2046,513 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 packageDatabase,
                 new object[] { packageUniqueId });
             return package != null;
+        }
+
+        private static bool TryReadLegacySelectedFilters(
+            object page,
+            LegacyPageFilterContract contract,
+            out string selectedStatusName,
+            out IReadOnlyList<string> selectedLabels,
+            out IReadOnlyList<string> selectedCategories)
+        {
+            selectedStatusName = string.Empty;
+            selectedLabels = null;
+            selectedCategories = null;
+            if (page == null || contract == null ||
+                !contract.ExtensionPageType.IsInstanceOfType(page))
+            {
+                return false;
+            }
+
+            object filters = contract.PageFiltersProperty.GetValue(page, null);
+            if (filters == null ||
+                !contract.FiltersType.IsInstanceOfType(filters))
+            {
+                return false;
+            }
+
+            object status = contract.StatusField.GetValue(filters);
+            if (status == null ||
+                !(contract.LabelsProperty.GetValue(filters, null) is
+                    IReadOnlyList<string> labels) ||
+                !(contract.CategoriesProperty.GetValue(filters, null) is
+                    IReadOnlyList<string> categories))
+            {
+                return false;
+            }
+
+            selectedStatusName = status.ToString();
+            selectedLabels = labels;
+            selectedCategories = categories;
+            return true;
+        }
+
+        internal static bool TryUpdateLegacyPageFilters(
+            object page,
+            object currentFilters,
+            IReadOnlyList<string> labels,
+            IReadOnlyList<string> categories)
+        {
+            try
+            {
+                if (!TryGetLegacyPageFilterContract(
+                        out LegacyPageFilterContract contract) ||
+                    page == null ||
+                    !contract.ExtensionPageType.IsInstanceOfType(page) ||
+                    currentFilters == null ||
+                    !contract.FiltersType.IsInstanceOfType(currentFilters))
+                {
+                    return false;
+                }
+
+                object cloned = contract.CloneFiltersMethod.Invoke(
+                    currentFilters,
+                    null);
+                if (cloned == null ||
+                    !contract.FiltersType.IsInstanceOfType(cloned))
+                {
+                    return false;
+                }
+
+                contract.LabelsProperty.SetValue(
+                    cloned,
+                    labels == null
+                        ? new List<string>()
+                        : new List<string>(labels),
+                    null);
+                contract.CategoriesProperty.SetValue(
+                    cloned,
+                    categories == null
+                        ? new List<string>()
+                        : new List<string>(categories),
+                    null);
+                contract.PageUpdateFiltersMethod.Invoke(
+                    page,
+                    new[] { cloned });
+                return true;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        internal static MethodInfo GetLegacyPageVisibilityFilterTarget()
+        {
+            return TryGetLegacyPageFilterContract(
+                out LegacyPageFilterContract contract)
+                ? contract.VisibilityFilterTarget
+                : null;
+        }
+
+        internal static MethodInfo GetLegacyFiltersDisplayTarget()
+        {
+            return TryGetLegacyPageFilterContract(
+                out LegacyPageFilterContract contract)
+                ? contract.FiltersDisplayTarget
+                : null;
+        }
+
+        internal static MethodInfo GetLegacyFiltersSizeTarget()
+        {
+            return TryGetLegacyPageFilterContract(
+                out LegacyPageFilterContract contract)
+                ? contract.FiltersSizeTarget
+                : null;
+        }
+
+        private static bool TryGetLegacyPageFilterContract(
+            out LegacyPageFilterContract contract)
+        {
+            contract = legacyPageFilterContract;
+            if (contract != null)
+                return true;
+
+            LegacyPageFilterContract candidate =
+                LegacyPageFilterContract.TryCreate();
+            if (candidate == null)
+                return false;
+
+            lock (LegacyPageFilterContractGate)
+            {
+                if (legacyPageFilterContract == null)
+                    legacyPageFilterContract = candidate;
+                contract = legacyPageFilterContract;
+                return true;
+            }
+        }
+
+        private sealed class LegacyPageFilterContract
+        {
+            private LegacyPageFilterContract(
+                Type extensionPageType,
+                Type packageType,
+                Type filtersWindowType,
+                Type filtersType,
+                MethodInfo visibilityFilterTarget,
+                MethodInfo filtersDisplayTarget,
+                MethodInfo filtersSizeTarget,
+                FieldInfo filtersField,
+                FieldInfo containerField,
+                FieldInfo statusField,
+                PropertyInfo labelsProperty,
+                PropertyInfo categoriesProperty,
+                PropertyInfo pageFiltersProperty,
+                PropertyInfo visualStatesProperty,
+                PropertyInfo orderedGroupNamesProperty,
+                MethodInfo cloneFiltersMethod,
+                MethodInfo pageUpdateFiltersMethod,
+                MethodInfo notifyFiltersChangedMethod,
+                int maximumHeight,
+                int foldoutHeight,
+                int toggleHeight,
+                string foldoutClassName,
+                string toggleClassName)
+            {
+                ExtensionPageType = extensionPageType;
+                PackageType = packageType;
+                FiltersWindowType = filtersWindowType;
+                FiltersType = filtersType;
+                VisibilityFilterTarget = visibilityFilterTarget;
+                FiltersDisplayTarget = filtersDisplayTarget;
+                FiltersSizeTarget = filtersSizeTarget;
+                FiltersField = filtersField;
+                ContainerField = containerField;
+                StatusField = statusField;
+                LabelsProperty = labelsProperty;
+                CategoriesProperty = categoriesProperty;
+                PageFiltersProperty = pageFiltersProperty;
+                VisualStatesProperty = visualStatesProperty;
+                OrderedGroupNamesProperty = orderedGroupNamesProperty;
+                CloneFiltersMethod = cloneFiltersMethod;
+                PageUpdateFiltersMethod = pageUpdateFiltersMethod;
+                NotifyFiltersChangedMethod = notifyFiltersChangedMethod;
+                MaximumHeight = maximumHeight;
+                FoldoutHeight = foldoutHeight;
+                ToggleHeight = toggleHeight;
+                FoldoutClassName = foldoutClassName;
+                ToggleClassName = toggleClassName;
+            }
+
+            internal Type ExtensionPageType { get; }
+            internal Type PackageType { get; }
+            internal Type FiltersWindowType { get; }
+            internal Type FiltersType { get; }
+            internal MethodInfo VisibilityFilterTarget { get; }
+            internal MethodInfo FiltersDisplayTarget { get; }
+            internal MethodInfo FiltersSizeTarget { get; }
+            internal FieldInfo FiltersField { get; }
+            internal FieldInfo ContainerField { get; }
+            internal FieldInfo StatusField { get; }
+            internal PropertyInfo LabelsProperty { get; }
+            internal PropertyInfo CategoriesProperty { get; }
+            internal PropertyInfo PageFiltersProperty { get; }
+            internal PropertyInfo VisualStatesProperty { get; }
+            internal PropertyInfo OrderedGroupNamesProperty { get; }
+            internal MethodInfo CloneFiltersMethod { get; }
+            internal MethodInfo PageUpdateFiltersMethod { get; }
+            internal MethodInfo NotifyFiltersChangedMethod { get; }
+            internal int MaximumHeight { get; }
+            internal int FoldoutHeight { get; }
+            internal int ToggleHeight { get; }
+            internal string FoldoutClassName { get; }
+            internal string ToggleClassName { get; }
+
+            internal static LegacyPageFilterContract TryCreate()
+            {
+                try
+                {
+                    Type extensionPageType = PackageManagerSubmoduleHarmonyPatch
+                        .FindLoadedType(LegacyExtensionPageTypeName);
+                    Type packageType = PackageManagerSubmoduleHarmonyPatch
+                        .FindLoadedType(PackageManagerSubmoduleHarmonyPatch
+                            .PackageInterfaceTypeName);
+                    Type pageType = PackageManagerSubmoduleHarmonyPatch
+                        .FindLoadedType(PageInterfaceTypeName);
+                    Type filtersWindowType = PackageManagerSubmoduleHarmonyPatch
+                        .FindLoadedType(LegacyUpmFiltersWindowTypeName);
+                    Type filtersWindowBaseType =
+                        PackageManagerSubmoduleHarmonyPatch.FindLoadedType(
+                            LegacyFiltersWindowTypeName);
+                    Type basePageType = PackageManagerSubmoduleHarmonyPatch
+                        .FindLoadedType(PackageManagerSubmoduleNativePage
+                            .BasePageTypeName);
+                    if (extensionPageType == null || packageType == null ||
+                        pageType == null || filtersWindowType == null ||
+                        filtersWindowBaseType == null || basePageType == null ||
+                        !filtersWindowBaseType.IsAssignableFrom(filtersWindowType))
+                    {
+                        return null;
+                    }
+
+                    MethodInfo visibilityFilterTarget =
+                        extensionPageType.GetMethod(
+                            "ShouldInclude",
+                            AnyInstance | BindingFlags.DeclaredOnly,
+                            null,
+                            new[] { packageType },
+                            null);
+                    MethodInfo filtersDisplayTarget = filtersWindowType.GetMethod(
+                        "DoDisplay",
+                        AnyInstance | BindingFlags.DeclaredOnly,
+                        null,
+                        new[] { pageType },
+                        null);
+                    MethodInfo filtersSizeTarget = filtersWindowType.GetMethod(
+                        "GetSize",
+                        AnyInstance | BindingFlags.DeclaredOnly,
+                        null,
+                        new[] { pageType },
+                        null);
+                    FieldInfo filtersField = FindDeclaredFieldInHierarchy(
+                        filtersWindowType,
+                        "m_Filters");
+                    FieldInfo containerField = FindDeclaredFieldInHierarchy(
+                        filtersWindowType,
+                        "m_Container");
+                    Type filtersType = filtersField?.FieldType;
+                    PropertyInfo labelsProperty = filtersType?.GetProperty(
+                        "labels",
+                        AnyInstance);
+                    PropertyInfo categoriesProperty = filtersType?.GetProperty(
+                        "categories",
+                        AnyInstance);
+                    FieldInfo statusField = filtersType?.GetField(
+                        "status",
+                        AnyInstance | BindingFlags.DeclaredOnly);
+                    MethodInfo cloneFiltersMethod = filtersType?.GetMethod(
+                        "Clone",
+                        AnyInstance | BindingFlags.DeclaredOnly,
+                        null,
+                        Type.EmptyTypes,
+                        null);
+                    PropertyInfo pageFiltersProperty = basePageType.GetProperty(
+                        "filters",
+                        AnyInstance);
+                    PropertyInfo visualStatesProperty = basePageType.GetProperty(
+                        "visualStates",
+                        AnyInstance);
+                    PropertyInfo orderedGroupNamesProperty =
+                        visualStatesProperty?.PropertyType.GetProperty(
+                            "orderedGroups",
+                            AnyInstance);
+                    MethodInfo updatePageFiltersMethod =
+                        basePageType.GetMethod(
+                            "UpdateFilters",
+                            AnyInstance,
+                            null,
+                            filtersType == null
+                                ? Type.EmptyTypes
+                                : new[] { filtersType },
+                            null);
+                    MethodInfo notifyFiltersChangedMethod =
+                        FindDeclaredMethodInHierarchy(
+                            filtersWindowType,
+                            "UpdatePageFilters",
+                            Type.EmptyTypes,
+                            typeof(void));
+                    bool hasMaximumHeight = TryReadLiteralField(
+                        filtersWindowBaseType,
+                        "k_MaxHeight",
+                        out int maximumHeight);
+                    bool hasFoldoutHeight = TryReadLiteralField(
+                        filtersWindowBaseType,
+                        "k_FoldOutHeight",
+                        out int foldoutHeight);
+                    bool hasToggleHeight = TryReadLiteralField(
+                        filtersWindowBaseType,
+                        "k_ToggleHeight",
+                        out int toggleHeight);
+                    bool hasFoldoutClassName = TryReadStaticReadonlyField(
+                        filtersWindowBaseType,
+                        "k_FoldoutClass",
+                        out string foldoutClassName);
+                    bool hasToggleClassName = TryReadStaticReadonlyField(
+                        filtersWindowBaseType,
+                        "k_ToggleClass",
+                        out string toggleClassName);
+
+                    if (visibilityFilterTarget == null ||
+                        visibilityFilterTarget.IsStatic ||
+                        visibilityFilterTarget.ReturnType != typeof(bool) ||
+                        filtersDisplayTarget == null ||
+                        filtersDisplayTarget.IsStatic ||
+                        filtersDisplayTarget.ReturnType != typeof(void) ||
+                        filtersSizeTarget == null ||
+                        filtersSizeTarget.IsStatic ||
+                        filtersSizeTarget.ReturnType != typeof(Vector2) ||
+                        filtersField == null || filtersField.IsStatic ||
+                        containerField == null || containerField.IsStatic ||
+                        !typeof(VisualElement).IsAssignableFrom(
+                            containerField.FieldType) ||
+                        filtersType == null ||
+                        labelsProperty == null ||
+                        !labelsProperty.CanRead || !labelsProperty.CanWrite ||
+                        labelsProperty.PropertyType != typeof(List<string>) ||
+                        categoriesProperty == null ||
+                        !categoriesProperty.CanRead ||
+                        !categoriesProperty.CanWrite ||
+                        categoriesProperty.PropertyType != typeof(List<string>) ||
+                        statusField == null || statusField.IsStatic ||
+                        !statusField.FieldType.IsEnum ||
+                        !Enum.IsDefined(
+                            statusField.FieldType,
+                            PackageManagerSubmoduleNativePage
+                                .DownloadedFilterStatusName) ||
+                        cloneFiltersMethod == null ||
+                        cloneFiltersMethod.IsStatic ||
+                        cloneFiltersMethod.ReturnType != filtersType ||
+                        pageFiltersProperty == null ||
+                        !pageFiltersProperty.CanRead ||
+                        pageFiltersProperty.PropertyType != filtersType ||
+                        visualStatesProperty == null ||
+                        !visualStatesProperty.CanRead ||
+                        orderedGroupNamesProperty == null ||
+                        !orderedGroupNamesProperty.CanRead ||
+                        !typeof(IEnumerable<string>).IsAssignableFrom(
+                            orderedGroupNamesProperty.PropertyType) ||
+                        updatePageFiltersMethod == null ||
+                        updatePageFiltersMethod.IsStatic ||
+                        updatePageFiltersMethod.ReturnType != typeof(bool) ||
+                        notifyFiltersChangedMethod == null ||
+                        notifyFiltersChangedMethod.IsStatic ||
+                        notifyFiltersChangedMethod.ReturnType != typeof(void) ||
+                        !hasMaximumHeight || maximumHeight <= 0 ||
+                        !hasFoldoutHeight || foldoutHeight <= 0 ||
+                        !hasToggleHeight || toggleHeight <= 0 ||
+                        !hasFoldoutClassName ||
+                        string.IsNullOrWhiteSpace(foldoutClassName) ||
+                        !hasToggleClassName ||
+                        string.IsNullOrWhiteSpace(toggleClassName))
+                    {
+                        return null;
+                    }
+
+                    return new LegacyPageFilterContract(
+                        extensionPageType,
+                        packageType,
+                        filtersWindowType,
+                        filtersType,
+                        visibilityFilterTarget,
+                        filtersDisplayTarget,
+                        filtersSizeTarget,
+                        filtersField,
+                        containerField,
+                        statusField,
+                        labelsProperty,
+                        categoriesProperty,
+                        pageFiltersProperty,
+                        visualStatesProperty,
+                        orderedGroupNamesProperty,
+                        cloneFiltersMethod,
+                        updatePageFiltersMethod,
+                        notifyFiltersChangedMethod,
+                        maximumHeight,
+                        foldoutHeight,
+                        toggleHeight,
+                        foldoutClassName,
+                        toggleClassName);
+                }
+                catch
+                {
+                    return null;
+                }
+            }
+
+            private static FieldInfo FindDeclaredFieldInHierarchy(
+                Type type,
+                string fieldName)
+            {
+                for (Type current = type;
+                     current != null;
+                     current = current.BaseType)
+                {
+                    FieldInfo field = current.GetField(
+                        fieldName,
+                        AnyInstance | BindingFlags.DeclaredOnly);
+                    if (field != null)
+                        return field;
+                }
+
+                return null;
+            }
+
+            private static MethodInfo FindDeclaredMethodInHierarchy(
+                Type type,
+                string methodName,
+                Type[] parameterTypes,
+                Type returnType)
+            {
+                for (Type current = type;
+                     current != null;
+                     current = current.BaseType)
+                {
+                    MethodInfo method = current.GetMethod(
+                        methodName,
+                        AnyInstance | BindingFlags.DeclaredOnly,
+                        null,
+                        parameterTypes,
+                        null);
+                    if (method != null &&
+                        !method.IsStatic &&
+                        method.ReturnType == returnType)
+                    {
+                        return method;
+                    }
+                }
+
+                return null;
+            }
+
+            private static bool TryReadLiteralField<T>(
+                Type declaringType,
+                string fieldName,
+                out T value)
+            {
+                value = default;
+                FieldInfo field = declaringType?.GetField(
+                    fieldName,
+                    AnyStatic | BindingFlags.DeclaredOnly);
+                if (field == null ||
+                    !field.IsStatic ||
+                    !field.IsLiteral ||
+                    field.FieldType != typeof(T))
+                {
+                    return false;
+                }
+
+                object rawValue = field.GetRawConstantValue();
+                if (!(rawValue is T typedValue))
+                    return false;
+
+                value = typedValue;
+                return true;
+            }
+
+            private static bool TryReadStaticReadonlyField<T>(
+                Type declaringType,
+                string fieldName,
+                out T value)
+            {
+                value = default;
+                FieldInfo field = declaringType?.GetField(
+                    fieldName,
+                    AnyStatic | BindingFlags.DeclaredOnly);
+                if (field == null ||
+                    !field.IsStatic ||
+                    !field.IsInitOnly ||
+                    field.FieldType != typeof(T))
+                {
+                    return false;
+                }
+
+                object rawValue = field.GetValue(null);
+                if (!(rawValue is T typedValue))
+                    return false;
+
+                value = typedValue;
+                return true;
+            }
         }
 
         private static bool TryGetPageVisibilityFilterContract(
@@ -1889,6 +2890,8 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             shuttingDown = true;
             lock (PageVisibilityFilterContractGate)
                 pageVisibilityFilterContract = null;
+            lock (LegacyPageFilterContractGate)
+                legacyPageFilterContract = null;
             EditorApplication.delayCall -= RefreshOpenPackageManagerPages;
             PackageManagerGitHubDiscovery.SnapshotChanged -=
                 OnDiscoverySnapshotChanged;

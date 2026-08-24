@@ -1383,6 +1383,33 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
         }
 
         [Test]
+        public void LegacyDetailsRecycle_RemovesOwnedContainerAndMargins()
+        {
+            var detailsTab = new VisualElement();
+            var unrelated = new VisualElement { name = "unrelated" };
+            var ownedContainer = new VisualElement
+            {
+                name = PackageManagerGitHubNativePresentationPatch
+                    .LegacyDetailsInformationCardsContainerName
+            };
+            ownedContainer.style.marginTop = 6f;
+            ownedContainer.style.marginBottom = 4f;
+            detailsTab.Add(unrelated);
+            detailsTab.Add(ownedContainer);
+
+            Assert.That(
+                PackageManagerGitHubNativePresentationPatch
+                    .RemoveOwnedLegacyInformationCardsContainer(detailsTab),
+                Is.True);
+            Assert.That(ownedContainer.parent, Is.Null);
+            Assert.That(unrelated.parent, Is.SameAs(detailsTab));
+            Assert.That(
+                PackageManagerGitHubNativePresentationPatch
+                    .RemoveOwnedLegacyInformationCardsContainer(detailsTab),
+                Is.False);
+        }
+
+        [Test]
         public void NativeDiscoveryHooks_RegisterForAvailableDetailsAndRefreshContracts()
         {
             IReadOnlyList<MethodInfo> technicalTargets =
@@ -1413,16 +1440,44 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
             MethodInfo supportedFiltersRefreshTarget =
                 PackageManagerGitHubNativePresentationPatch
                     .GetPageSupportedFiltersRefreshTarget();
+            MethodInfo legacyVisibilityFilterTarget =
+                PackageManagerGitHubNativePresentationPatch
+                    .GetLegacyPageVisibilityFilterTarget();
+            MethodInfo legacyFiltersDisplayTarget =
+                PackageManagerGitHubNativePresentationPatch
+                    .GetLegacyFiltersDisplayTarget();
+            MethodInfo legacyFiltersSizeTarget =
+                PackageManagerGitHubNativePresentationPatch
+                    .GetLegacyFiltersSizeTarget();
+            Type technicalNameType = PackageManagerSubmoduleHarmonyPatch
+                .FindLoadedType(PackageManagerGitHubNativePresentationPatch
+                    .TechnicalNameCardTypeName);
+            Type authorType = PackageManagerSubmoduleHarmonyPatch.FindLoadedType(
+                PackageManagerGitHubNativePresentationPatch
+                    .PackageAuthorLabelTypeName);
 
-            Assert.That(technicalTargets, Is.Not.Empty);
-            Assert.That(authorTargets, Is.Not.Empty);
+            Assert.That(
+                technicalTargets.Count > 0,
+                Is.EqualTo(technicalNameType != null));
+            Assert.That(
+                authorTargets.Count > 0,
+                Is.EqualTo(authorType != null));
             Assert.That(dependenciesGetter, Is.Not.Null);
             Assert.That(dependenciesTabTargets, Is.Not.Empty);
             Assert.That(detailsInformationCardsTarget, Is.Not.Null);
+            bool usesLegacyContract = string.Equals(
+                detailsInformationCardsTarget.DeclaringType?.FullName,
+                PackageManagerGitHubNativePresentationPatch
+                    .LegacyDetailsTabTypeName,
+                StringComparison.Ordinal);
             Assert.That(
                 detailsInformationCardsTarget.DeclaringType?.FullName,
-                Is.EqualTo(PackageManagerGitHubNativePresentationPatch
-                    .PackageDetailsDetailsTabTypeName));
+                Is.EqualTo(
+                    usesLegacyContract
+                        ? PackageManagerGitHubNativePresentationPatch
+                            .LegacyDetailsTabTypeName
+                        : PackageManagerGitHubNativePresentationPatch
+                            .PackageDetailsDetailsTabTypeName));
             Assert.That(detailsInformationCardsTarget.ReturnType, Is.EqualTo(typeof(void)));
             Assert.That(detailsInformationCardsTarget.GetParameters(), Has.Length.EqualTo(1));
             Assert.That(
@@ -1434,18 +1489,33 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
             Assert.That(refreshTargets, Is.Not.Empty);
             Assert.That(activationTargets, Is.Not.Empty);
             Assert.That(loadingTargets, Is.Not.Empty);
-            Assert.That(visibilityFilterTarget, Is.Not.Null);
-            Assert.That(supportedFiltersRefreshTarget, Is.Not.Null);
-            Assert.That(
-                PackageManagerGitHubNativePresentationPatch
-                    .HasPageVisibilityFilterContract(),
-                Is.True);
-            Assert.That(
-                PackageManagerGitHubNativePresentationPatch
-                    .HasRequiredDiscoveryLifecycleContract(),
-                Is.True,
-                "The native GitHub page must fail over as one unit when its " +
-                "activation, refresh, loading, or completion seam drifts.");
+            if (usesLegacyContract)
+            {
+                Assert.That(visibilityFilterTarget, Is.Null);
+                Assert.That(supportedFiltersRefreshTarget, Is.Null);
+                Assert.That(legacyVisibilityFilterTarget, Is.Not.Null);
+                Assert.That(legacyFiltersDisplayTarget, Is.Not.Null);
+                Assert.That(legacyFiltersSizeTarget, Is.Not.Null);
+                Assert.That(
+                    PackageManagerGitHubNativePresentationPatch
+                        .HasRequiredLegacyDiscoveryLifecycleContract(),
+                    Is.True);
+            }
+            else
+            {
+                Assert.That(visibilityFilterTarget, Is.Not.Null);
+                Assert.That(supportedFiltersRefreshTarget, Is.Not.Null);
+                Assert.That(
+                    PackageManagerGitHubNativePresentationPatch
+                        .HasPageVisibilityFilterContract(),
+                    Is.True);
+                Assert.That(
+                    PackageManagerGitHubNativePresentationPatch
+                        .HasRequiredDiscoveryLifecycleContract(),
+                    Is.True,
+                    "The native GitHub page must fail over as one unit when its " +
+                    "activation, refresh, loading, or completion seam drifts.");
+            }
             Assert.That(
                 PackageManagerGitHubNativePresentationPatch.TryPatch(),
                 Is.True);
@@ -1534,18 +1604,42 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                     Is.True);
             }
 
-            Assert.That(
-                PackageManagerGitHubNativePresentationPatch.IsPatchApplied(
-                    visibilityFilterTarget,
-                    PackageManagerGitHubNativePresentationPatch
-                        .GetPageVisibilityFilterPostfix()),
-                Is.True);
-            Assert.That(
-                PackageManagerGitHubNativePresentationPatch.IsPatchApplied(
-                    supportedFiltersRefreshTarget,
-                    PackageManagerGitHubNativePresentationPatch
-                        .GetPageSupportedFiltersRefreshPostfix()),
-                Is.True);
+            if (usesLegacyContract)
+            {
+                Assert.That(
+                    PackageManagerGitHubNativePresentationPatch.IsPatchApplied(
+                        legacyVisibilityFilterTarget,
+                        PackageManagerGitHubNativePresentationPatch
+                            .GetLegacyPageVisibilityFilterPostfix()),
+                    Is.True);
+                Assert.That(
+                    PackageManagerGitHubNativePresentationPatch.IsPatchApplied(
+                        legacyFiltersDisplayTarget,
+                        PackageManagerGitHubNativePresentationPatch
+                            .GetLegacyFiltersDisplayPostfix()),
+                    Is.True);
+                Assert.That(
+                    PackageManagerGitHubNativePresentationPatch.IsPatchApplied(
+                        legacyFiltersSizeTarget,
+                        PackageManagerGitHubNativePresentationPatch
+                            .GetLegacyFiltersSizePostfix()),
+                    Is.True);
+            }
+            else
+            {
+                Assert.That(
+                    PackageManagerGitHubNativePresentationPatch.IsPatchApplied(
+                        visibilityFilterTarget,
+                        PackageManagerGitHubNativePresentationPatch
+                            .GetPageVisibilityFilterPostfix()),
+                    Is.True);
+                Assert.That(
+                    PackageManagerGitHubNativePresentationPatch.IsPatchApplied(
+                        supportedFiltersRefreshTarget,
+                        PackageManagerGitHubNativePresentationPatch
+                            .GetPageSupportedFiltersRefreshPostfix()),
+                    Is.True);
+            }
         }
 
         private static void AssertInformationCard(
@@ -1588,24 +1682,59 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
         [Test]
         public void NativeVisibilityFilterContract_CachesSuccessfulResolution()
         {
+            bool usesModernContract =
+                PackageManagerGitHubNativePresentationPatch
+                    .HasPageVisibilityFilterContract();
+            string fieldName = usesModernContract
+                ? "pageVisibilityFilterContract"
+                : "legacyPageFilterContract";
             FieldInfo contractField = typeof(
                     PackageManagerGitHubNativePresentationPatch)
                 .GetField(
-                    "pageVisibilityFilterContract",
+                    fieldName,
                     BindingFlags.Static | BindingFlags.NonPublic);
 
             Assert.That(contractField, Is.Not.Null);
-            Assert.That(
-                PackageManagerGitHubNativePresentationPatch
-                    .HasPageVisibilityFilterContract(),
-                Is.True);
+            if (usesModernContract)
+            {
+                Assert.That(
+                    PackageManagerGitHubNativePresentationPatch
+                        .HasPageVisibilityFilterContract(),
+                    Is.True);
+            }
+            else
+            {
+                Assert.That(
+                    PackageManagerGitHubNativePresentationPatch
+                        .GetLegacyPageVisibilityFilterTarget(),
+                    Is.Not.Null);
+                Assert.That(
+                    PackageManagerGitHubNativePresentationPatch
+                        .GetLegacyFiltersDisplayTarget(),
+                    Is.Not.Null);
+                Assert.That(
+                    PackageManagerGitHubNativePresentationPatch
+                        .GetLegacyFiltersSizeTarget(),
+                    Is.Not.Null);
+            }
+
             object first = contractField.GetValue(null);
             Assert.That(first, Is.Not.Null);
 
-            Assert.That(
-                PackageManagerGitHubNativePresentationPatch
-                    .HasPageVisibilityFilterContract(),
-                Is.True);
+            if (usesModernContract)
+            {
+                Assert.That(
+                    PackageManagerGitHubNativePresentationPatch
+                        .HasPageVisibilityFilterContract(),
+                    Is.True);
+            }
+            else
+            {
+                Assert.That(
+                    PackageManagerGitHubNativePresentationPatch
+                        .GetLegacyPageVisibilityFilterTarget(),
+                    Is.Not.Null);
+            }
             Assert.That(contractField.GetValue(null), Is.SameAs(first));
         }
 
@@ -2185,6 +2314,8 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                 .GetPackageStatusBarProperty();
             MethodInfo listRebuild = PackageManagerGitHubNativePresentationPatch
                 .GetListAreaRebuildMethod();
+            MethodInfo legacyListRebuild = PackageManagerSubmoduleHarmonyPatch
+                .GetLegacyPageRebuildMethod();
 
             Assert.That(statusUpdate, Is.Not.Null);
             Assert.That(statusUpdate.ReturnType, Is.EqualTo(typeof(void)));
@@ -2195,14 +2326,29 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                 Is.EqualTo(
                     PackageManagerGitHubNativePresentationPatch
                         .PackageStatusBarTypeName));
-            Assert.That(listRebuild, Is.Not.Null);
-            Assert.That(listRebuild.ReturnType, Is.EqualTo(typeof(void)));
-            Assert.That(listRebuild.GetParameters(), Has.Length.EqualTo(1));
-            Assert.That(
-                listRebuild.GetParameters()[0].ParameterType.FullName,
-                Is.EqualTo(
-                    PackageManagerGitHubNativePresentationPatch
-                        .PageInterfaceTypeName));
+            if (listRebuild != null)
+            {
+                Assert.That(listRebuild.ReturnType, Is.EqualTo(typeof(void)));
+                Assert.That(listRebuild.GetParameters(), Has.Length.EqualTo(1));
+                Assert.That(
+                    listRebuild.GetParameters()[0].ParameterType.FullName,
+                    Is.EqualTo(
+                        PackageManagerGitHubNativePresentationPatch
+                            .PageInterfaceTypeName));
+            }
+            else
+            {
+                Assert.That(legacyListRebuild, Is.Not.Null);
+                Assert.That(
+                    legacyListRebuild.DeclaringType?.FullName,
+                    Is.EqualTo(
+                        PackageManagerSubmoduleHarmonyPatch
+                            .LegacySimplePageTypeName));
+                Assert.That(
+                    legacyListRebuild.ReturnType,
+                    Is.EqualTo(typeof(void)));
+                Assert.That(legacyListRebuild.GetParameters(), Is.Empty);
+            }
         }
 
         [Test]

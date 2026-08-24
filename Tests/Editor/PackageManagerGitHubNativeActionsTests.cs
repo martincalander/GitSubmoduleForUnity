@@ -59,7 +59,132 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
             Assert.That(
                 PackageManagerGitHubNativeActions.HasSupportedLiveContract(),
                 Is.True);
+            Assert.That(
+                PackageManagerGitHubNativeActions.HasSupportedSelectionContract(),
+                Is.True,
+                "The active-page selection seam must resolve independently of " +
+                "the primary-actions mounting contract.");
 #endif
+        }
+
+        [Test]
+        public void RefreshPackage_PrefersAuthoritativeSelectionAndFailsClosedOnInvalidSelection()
+        {
+            var staleToolbarPackage = new object();
+            var authoritativePackage = new object();
+
+            Assert.That(
+                PackageManagerGitHubNativeActions.SelectPackageForRefresh(
+                    staleToolbarPackage,
+                    true,
+                    true,
+                    authoritativePackage),
+                Is.SameAs(authoritativePackage));
+            Assert.That(
+                PackageManagerGitHubNativeActions.SelectPackageForRefresh(
+                    staleToolbarPackage,
+                    true,
+                    false,
+                    null),
+                Is.Null,
+                "An exact but zero/multi/missing selection must not reuse stale " +
+                "toolbar state.");
+            Assert.That(
+                PackageManagerGitHubNativeActions.SelectPackageForRefresh(
+                    staleToolbarPackage,
+                    false,
+                    false,
+                    null),
+                Is.SameAs(staleToolbarPackage),
+                "Harmony's explicit package remains the presentation fallback " +
+                "when the optional selection seam is unavailable.");
+        }
+
+        [Test]
+        public void ExactSingleSelection_ResolvesOnlyMatchingDatabasePackage()
+        {
+            var package = new SelectionPackageFixture(
+                "com.example.package",
+                "com.example.package");
+
+            Assert.That(
+                PackageManagerGitHubNativeActions.TryResolveExactSingleSelection(
+                    1,
+                    new[] { "com.example.package" },
+                    id => string.Equals(
+                            id,
+                            package.UniqueId,
+                            StringComparison.Ordinal)
+                        ? package
+                        : null,
+                    candidate => ((SelectionPackageFixture)candidate).UniqueId,
+                    candidate => ((SelectionPackageFixture)candidate).Name,
+                    out object resolved),
+                Is.True);
+            Assert.That(resolved, Is.SameAs(package));
+        }
+
+        [Test]
+        public void ExactSingleSelection_FailsClosedOnCountLookupAndIdentityDrift()
+        {
+            var package = new SelectionPackageFixture(
+                "com.example.package",
+                "com.example.package");
+            Func<string, object> lookup = _ => package;
+            Func<object, string> uniqueId = candidate =>
+                ((SelectionPackageFixture)candidate).UniqueId;
+            Func<object, string> name = candidate =>
+                ((SelectionPackageFixture)candidate).Name;
+
+            Assert.That(
+                PackageManagerGitHubNativeActions.TryResolveExactSingleSelection(
+                    0,
+                    Array.Empty<string>(),
+                    lookup,
+                    uniqueId,
+                    name,
+                    out _),
+                Is.False);
+            Assert.That(
+                PackageManagerGitHubNativeActions.TryResolveExactSingleSelection(
+                    1,
+                    new[] { "first", "second" },
+                    lookup,
+                    uniqueId,
+                    name,
+                    out _),
+                Is.False,
+                "The reported count and actual enumeration must agree exactly.");
+            Assert.That(
+                PackageManagerGitHubNativeActions.TryResolveExactSingleSelection(
+                    1,
+                    new[] { "com.example.package" },
+                    _ => null,
+                    uniqueId,
+                    name,
+                    out _),
+                Is.False,
+                "A package database miss must not fall back to toolbar state.");
+            Assert.That(
+                PackageManagerGitHubNativeActions.TryResolveExactSingleSelection(
+                    1,
+                    new[] { "com.example.other" },
+                    lookup,
+                    uniqueId,
+                    name,
+                    out _),
+                Is.False,
+                "The resolved package must retain the exact selected identity.");
+            Assert.That(
+                PackageManagerGitHubNativeActions.TryResolveExactSingleSelection(
+                    1,
+                    new[] { "com.example.package" },
+                    _ => throw new InvalidOperationException("database drift"),
+                    uniqueId,
+                    name,
+                    out _),
+                Is.False,
+                "Reflection or database failures must remain contained.");
         }
 
         [Test]
@@ -547,7 +672,17 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                 ExecuteInstallMenuAction(
                     details,
                     PackageManagerGitInstallMode.GitSubmodule);
-                yield return null;
+                // Focus is verified on a later editor update after event
+                // propagation, so allow the bounded retry to settle.
+                for (int frame = 0;
+                     frame < 10 &&
+                     !ReferenceEquals(
+                         host.rootVisualElement.focusController.focusedElement,
+                         details.InstallButton);
+                     frame++)
+                {
+                    yield return null;
+                }
 
                 Assert.That(installedRepository, Is.Null);
                 Assert.That(installedBranch, Is.Empty);
@@ -759,6 +894,65 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                 Assert.That(
                     host.rootVisualElement.focusController.focusedElement,
                     Is.SameAs(details.InstallMenu));
+            }
+            finally
+            {
+                details.Dispose();
+                if (host != null)
+                    host.Close();
+            }
+        }
+
+        [UnityTest]
+        public IEnumerator DeferredFocus_DoesNotStealFromAnotherLiveControl()
+        {
+            PackageManagerGitHubDetails details = CreateDetails(
+                out _,
+                out VisualElement extensionItems,
+                out _,
+                (_, _) => { },
+                _ => { });
+            var host = ScriptableObject.CreateInstance<NativeActionsHostWindow>();
+            try
+            {
+                VisualElement fixtureRoot = extensionItems.parent?.parent;
+                Assert.That(fixtureRoot, Is.Not.Null);
+                host.position = new Rect(100f, 100f, 500f, 200f);
+                host.Show();
+                host.rootVisualElement.Add(fixtureRoot);
+                yield return null;
+
+                details.Refresh(CreateRepository("repository", "main"));
+                details.SetInstallState(true, true, "Ready");
+                ExecuteInstallMenuAction(
+                    details,
+                    PackageManagerGitInstallMode.GitSubmodule);
+
+                for (int frame = 0;
+                     frame < 10 &&
+                     !ReferenceEquals(
+                         host.rootVisualElement.focusController.focusedElement,
+                         details.InstallButton);
+                     frame++)
+                {
+                    yield return null;
+                }
+
+                Assert.That(
+                    host.rootVisualElement.focusController.focusedElement,
+                    Is.SameAs(details.InstallButton));
+                Assert.That(details.HasDeferredFocusRequest, Is.True);
+
+                details.CancelInstallButton.Focus();
+                Assert.That(
+                    host.rootVisualElement.focusController.focusedElement,
+                    Is.SameAs(details.CancelInstallButton));
+                yield return null;
+
+                Assert.That(
+                    host.rootVisualElement.focusController.focusedElement,
+                    Is.SameAs(details.CancelInstallButton));
+                Assert.That(details.HasDeferredFocusRequest, Is.False);
             }
             finally
             {
@@ -1302,12 +1496,19 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                 (_, _) => installCount++,
                 _ => { });
             details.Refresh(CreateRepository("repository", "main"));
+            details.SetInstallState(true, true, "Ready");
+            ExecuteInstallMenuAction(
+                details,
+                PackageManagerGitInstallMode.GitSubmodule);
+
+            Assert.That(details.HasDeferredFocusRequest, Is.True);
 
             details.Dispose();
             details.Dispose();
             details.TriggerInstall();
 
             Assert.That(details.IsDisposed, Is.True);
+            Assert.That(details.HasDeferredFocusRequest, Is.False);
             Assert.That(details.Controls.parent, Is.Null);
             Assert.That(details.RepositoryLinkButton.parent, Is.Null);
             Assert.That(installCount, Is.Zero);
@@ -1826,6 +2027,18 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
         private sealed class UnrelatedPrimaryActionsFieldFixture
         {
             private readonly VisualElement m_BuiltInActionsContainer = new();
+        }
+
+        private sealed class SelectionPackageFixture
+        {
+            internal SelectionPackageFixture(string uniqueId, string name)
+            {
+                UniqueId = uniqueId;
+                Name = name;
+            }
+
+            internal string UniqueId { get; }
+            internal string Name { get; }
         }
 
         private sealed class NativeActionsHostWindow : EditorWindow

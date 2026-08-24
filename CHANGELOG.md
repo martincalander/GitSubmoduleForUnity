@@ -129,9 +129,12 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   across assembly reload, never reissue an attempted mutation, verify Unity's
   registered package state before advancing, and retain one terminal outcome
   until Package Manager presents it.
-- Declared `6000.5.0f1` as the minimum Editor version and limited documented
-  support to Unity `6000.5.*f1` while other Package Manager generations remain
-  unvalidated.
+- Added exact Unity `6000.3.22f1` as a validated Editor target alongside Unity
+  `6000.5.*f1`, and lowered the manifest eligibility minimum accordingly.
+  Unity `6000.4` remains unvalidated and is not a supported target.
+- Added exact Unity 6000.3 Package Manager collection, details, sidebar, list,
+  filter, and multi-select removal contract alternatives while preserving the
+  existing Unity 6000.5 signatures and fail-closed behavior.
 - Installed repositories on **Sources > GitHub** now retain their **Public** or
   **Private** badge instead of the redundant **Submodule** badge; normal Package
   Manager pages continue to identify installed submodules explicitly.
@@ -186,6 +189,9 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- Resolve native actions from Package Manager's exact active-page selection
+  after package resolves or script reloads, preventing a recycled stale toolbar
+  package from disabling an installed submodule's **Manage** actions.
 - Reset retained-catalogue inspection throttling with each discovery lifecycle,
   so an earlier host timestamp cannot postpone expiry after refresh or teardown.
 - Make the native GitHub package **Install** action and the Package Manager **+**

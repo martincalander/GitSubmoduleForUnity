@@ -432,6 +432,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                 collectionTarget != null,
                 "RemoveAction exists, but the exact multi-select " +
                 "TriggerActionImplementation(IReadOnlyCollection<IPackage>) " +
+                "or legacy TriggerActionImplementation(IList<IPackage>) " +
                 "override is unavailable.");
             RequireSelfRemovalPrefixShape(report, singlePrefix, "single");
             RequireSelfRemovalPrefixShape(report, collectionPrefix, "collection");
@@ -464,8 +465,10 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                     collectionTarget.ReturnType == typeof(bool) &&
                     parameters.Length == 1 &&
                     parameterType.IsGenericType &&
-                    parameterType.GetGenericTypeDefinition() ==
-                    typeof(IReadOnlyCollection<>) &&
+                    (parameterType.GetGenericTypeDefinition() ==
+                         typeof(IReadOnlyCollection<>) ||
+                     parameterType.GetGenericTypeDefinition() ==
+                         typeof(IList<>)) &&
                     arguments.Length == 1 &&
                     string.Equals(
                         arguments[0].FullName,
@@ -549,6 +552,11 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                     PackageManagerGitHubNativeActions.HasSupportedLiveContract(),
                     "The native GitHub details/primary Install action reflection " +
                     "contract is incomplete.");
+                report.Require(
+                    PackageManagerGitHubNativeActions
+                        .HasSupportedSelectionContract(),
+                    "The active-page single-selection resolver used by native " +
+                    "package actions is incomplete.");
             }
 
             AddActivePageReflectionInventory(report, expectsNativePage);
@@ -585,6 +593,38 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
             PropertyInfo supportedCategories =
                 PackageManagerGitHubNativePresentationPatch
                     .GetPageFilterSupportedCategoriesProperty();
+            MethodInfo legacyRepositoryFilterTarget =
+                PackageManagerGitHubNativePresentationPatch
+                    .GetLegacyPageVisibilityFilterTarget();
+            MethodInfo legacyFiltersDisplayTarget =
+                PackageManagerGitHubNativePresentationPatch
+                    .GetLegacyFiltersDisplayTarget();
+            MethodInfo legacyFiltersSizeTarget =
+                PackageManagerGitHubNativePresentationPatch
+                    .GetLegacyFiltersSizeTarget();
+            MethodInfo modernListRebuildTarget =
+                PackageManagerGitHubNativePresentationPatch
+                    .GetListAreaRebuildMethod();
+            MethodInfo legacyListRebuildTarget =
+                PackageManagerSubmoduleHarmonyPatch
+                    .GetLegacyPageRebuildMethod();
+            Type sidebarType = PackageManagerSubmoduleHarmonyPatch.FindLoadedType(
+                PackageManagerSubmoduleNativePage.SidebarTypeName);
+            MethodInfo sidebarRefreshTarget =
+                PackageManagerSubmoduleNativePage
+                    .FindSidebarExtensionRowsUpdateMethod(sidebarType);
+            bool modernContract =
+                repositoryFilterTarget != null &&
+                supportedFiltersRefreshTarget != null &&
+                PackageManagerSubmoduleNativePage
+                    .GetUpdateSupportedLabelsMethod() != null &&
+                PackageManagerSubmoduleNativePage
+                    .GetUpdateSupportedCategoriesMethod() != null;
+            bool legacyContract =
+                !modernContract &&
+                legacyRepositoryFilterTarget != null &&
+                legacyFiltersDisplayTarget != null &&
+                legacyFiltersSizeTarget != null;
             Type technicalNameType =
                 PackageManagerSubmoduleHarmonyPatch.FindLoadedType(
                     PackageManagerGitHubNativePresentationPatch
@@ -603,6 +643,15 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
             report.Observe(
                 "GitHub repository filter hook",
                 DescribeMethod(repositoryFilterTarget));
+            report.Observe(
+                "Legacy GitHub repository filter hook",
+                DescribeMethod(legacyRepositoryFilterTarget));
+            report.Observe(
+                "Legacy filter display hook",
+                DescribeMethod(legacyFiltersDisplayTarget));
+            report.Observe(
+                "Legacy filter size hook",
+                DescribeMethod(legacyFiltersSizeTarget));
             report.Observe(
                 "Supported-label updater",
                 DescribeMethod(
@@ -631,13 +680,24 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                     PackageManagerGitHubNativePresentationPatch
                         .GetPackageStatusUpdateMethod()));
             report.Observe(
-                "List rebuild",
-                DescribeMethod(
-                    PackageManagerGitHubNativePresentationPatch
-                        .GetListAreaRebuildMethod()));
+                "Modern list rebuild",
+                DescribeMethod(modernListRebuildTarget));
+            report.Observe(
+                "Legacy list rebuild",
+                DescribeMethod(legacyListRebuildTarget));
+            report.Observe(
+                "Sidebar refresh",
+                DescribeMethod(sidebarRefreshTarget));
+            report.Observe(
+                "Resolved page contract",
+                modernContract ? "modern" : legacyContract ? "legacy" : "none");
 
             if (nativePageSupported || expectsNativePage)
             {
+                report.Require(
+                    modernContract || legacyContract,
+                    "Neither the exact modern nor exact Unity 6000.3 native " +
+                    "page contract resolved.");
                 report.Require(
                     technicalNameType == null || technicalTargets.Count > 0,
                     "TechnicalNameInfoCard exists, but " +
@@ -648,54 +708,14 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                     "Refresh(IPackageVersion) is missing.");
                 report.Require(
                     detailsInformationCardsTarget != null,
-                    "PackageDetailsDetailsTab.RefreshContent(IPackageVersion) " +
-                    "is missing; License and Default Branch cards cannot mount.");
+                    "No exact details RefreshContent(IPackageVersion) hook " +
+                    "resolved; License and Default Branch cards cannot mount.");
                 report.Require(refreshTargets.Count > 0,
                     "PageRefreshHandler.Refresh(IPage) is missing.");
                 report.Require(activationTargets.Count > 0,
                     "PageRefreshHandler.OnActivePageChanged(IPage) is missing.");
                 report.Require(loadingTargets.Count > 0,
                     "PageRefreshHandler.IsRefreshInProgress(IPage) is missing.");
-                report.Require(
-                    PackageManagerGitHubNativePresentationPatch
-                        .HasPageVisibilityFilterContract(),
-                    "The GitHub page repository filter contract is incomplete; " +
-                    "the toolbar must not expose inert filters.");
-                report.Require(
-                    PackageManagerSubmoduleNativePage
-                        .GetUpdateSupportedLabelsMethod() != null,
-                    "BasePage.UpdateSupportedLabels(IReadOnlyList<string>, bool) " +
-                    "is missing.");
-                report.Require(
-                    PackageManagerSubmoduleNativePage
-                        .GetUpdateSupportedCategoriesMethod() != null,
-                    "BasePage.UpdateSupportedCategories(" +
-                    "IReadOnlyList<string>, bool) is missing.");
-                report.Require(
-                    selectedStatus != null &&
-                    Enum.IsDefined(
-                        selectedStatus.PropertyType,
-                        PackageManagerSubmoduleNativePage
-                            .DownloadedFilterStatusName),
-                    "PageFilters.status is missing, is not a readable enum, or " +
-                    "does not define Downloaded.");
-                report.Require(
-                    selectedCategories != null,
-                    "PageFilters.categories is missing or is no longer a " +
-                    "readable IReadOnlyList<string>.");
-                report.Require(
-                    supportedCategories != null,
-                    "PageFilters.supportedCategories is missing or is no " +
-                    "longer a readable IReadOnlyList<string>.");
-                report.Require(
-                    supportedFiltersRefreshTarget != null,
-                    "BasePage.UpdateSupportedFiltersAsync() is missing or no " +
-                    "longer an instance void method declared by BasePage.");
-                report.Require(
-                    PackageManagerGitHubNativePresentationPatch
-                        .HasRequiredDiscoveryLifecycleContract(),
-                    "The discovery activation/refresh/loading/status contract is " +
-                    "not complete and must fail over as one unit.");
 
                 bool presentationPatched =
                     PackageManagerGitHubNativePresentationPatch.TryPatch();
@@ -731,22 +751,101 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                     loadingTargets,
                     PackageManagerGitHubNativePresentationPatch
                         .GetPageLoadingPostfix());
-                RequireOwnedPostfixes(
-                    report,
-                    new[] { repositoryFilterTarget },
-                    PackageManagerGitHubNativePresentationPatch
-                        .GetPageVisibilityFilterPostfix());
-                RequireOwnedPostfixes(
-                    report,
-                    new[] { supportedFiltersRefreshTarget },
-                    PackageManagerGitHubNativePresentationPatch
-                        .GetPageSupportedFiltersRefreshPostfix());
+
+                if (modernContract)
+                {
+                    report.Require(
+                        detailsInformationCardsTarget?.DeclaringType?.FullName ==
+                        PackageManagerGitHubNativePresentationPatch
+                            .PackageDetailsDetailsTabTypeName,
+                        "The modern details hook did not resolve to " +
+                        "PackageDetailsDetailsTab.RefreshContent.");
+                    report.Require(
+                        PackageManagerGitHubNativePresentationPatch
+                            .HasPageVisibilityFilterContract(),
+                        "The modern repository filter contract is incomplete.");
+                    report.Require(
+                        selectedStatus != null &&
+                        Enum.IsDefined(
+                            selectedStatus.PropertyType,
+                            PackageManagerSubmoduleNativePage
+                                .DownloadedFilterStatusName),
+                        "Modern PageFilters.status does not define Downloaded.");
+                    report.Require(selectedCategories != null,
+                        "Modern PageFilters.categories is unavailable.");
+                    report.Require(supportedCategories != null,
+                        "Modern PageFilters.supportedCategories is unavailable.");
+                    report.Require(
+                        PackageManagerGitHubNativePresentationPatch
+                            .HasRequiredDiscoveryLifecycleContract(),
+                        "The modern discovery lifecycle contract is incomplete.");
+                    report.Require(modernListRebuildTarget != null,
+                        "ListArea.OnListRebuild(IPage) is missing.");
+                    report.Require(
+                        sidebarRefreshTarget?.Name ==
+                        PackageManagerSubmoduleNativePage
+                            .SidebarExtensionRowsUpdateMethodName,
+                        "The modern Sidebar.UpdateExtensionPageRelatedRows hook " +
+                        "is missing.");
+                    RequireOwnedPostfixes(
+                        report,
+                        new[] { repositoryFilterTarget },
+                        PackageManagerGitHubNativePresentationPatch
+                            .GetPageVisibilityFilterPostfix());
+                    RequireOwnedPostfixes(
+                        report,
+                        new[] { supportedFiltersRefreshTarget },
+                        PackageManagerGitHubNativePresentationPatch
+                            .GetPageSupportedFiltersRefreshPostfix());
+                }
+                else if (legacyContract)
+                {
+                    report.Require(
+                        detailsInformationCardsTarget?.DeclaringType?.FullName ==
+                        PackageManagerGitHubNativePresentationPatch
+                            .LegacyDetailsTabTypeName,
+                        "The Unity 6000.3 details hook did not resolve to " +
+                        "PackageDetailsDescriptionTab.RefreshContent.");
+                    report.Require(
+                        PackageManagerGitHubNativePresentationPatch
+                            .HasRequiredLegacyDiscoveryLifecycleContract(),
+                        "The exact Unity 6000.3 discovery/filter contract is " +
+                        "incomplete.");
+                    report.Require(legacyListRebuildTarget != null,
+                        "SimplePage.RebuildVisualStatesAndUpdateVisibilityWith" +
+                        "SearchText() is missing.");
+                    report.Require(
+                        sidebarRefreshTarget?.Name ==
+                        PackageManagerSubmoduleNativePage
+                            .LegacySidebarRowsCreateMethodName,
+                        "The Unity 6000.3 Sidebar.CreateRows hook is missing.");
+                    RequireOwnedPostfixes(
+                        report,
+                        new[] { legacyRepositoryFilterTarget },
+                        PackageManagerGitHubNativePresentationPatch
+                            .GetLegacyPageVisibilityFilterPostfix());
+                    RequireOwnedPostfixes(
+                        report,
+                        new[] { legacyFiltersDisplayTarget },
+                        PackageManagerGitHubNativePresentationPatch
+                            .GetLegacyFiltersDisplayPostfix());
+                    RequireOwnedPostfixes(
+                        report,
+                        new[] { legacyFiltersSizeTarget },
+                        PackageManagerGitHubNativePresentationPatch
+                            .GetLegacyFiltersSizePostfix());
+                    report.Require(
+                        PackageManagerGitHubNativePresentationPatch
+                            .AreLegacyPageFilterPatchesApplied(),
+                        "One or more Unity 6000.3 filter postfixes is not owned " +
+                        "by the package Harmony instance.");
+                }
 
                 GitSubmoduleManagerPackageManagerHost.TryPatch(out _);
                 report.Require(
                     GitSubmoduleManagerPackageManagerHost
                         .IsSidebarExtensionRefreshPatchApplied(),
-                    "Sidebar.UpdateExtensionPageRelatedRows lacks the postfix " +
+                    "The resolved Sidebar refresh hook lacks the postfix " +
                     "owned by " + GitSubmoduleManagerPackageManagerHost.HarmonyId + ".");
             }
 
@@ -832,6 +931,26 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                 PackageManagerGitHubNativePresentationPatch
                     .GetPageSupportedFiltersRefreshPostfix(),
                 "__instance");
+            RequireParameterNames(
+                report,
+                PackageManagerGitHubNativePresentationPatch
+                    .GetLegacyPageVisibilityFilterPostfix(),
+                "__instance",
+                "__0",
+                "__result");
+            RequireParameterNames(
+                report,
+                PackageManagerGitHubNativePresentationPatch
+                    .GetLegacyFiltersDisplayPostfix(),
+                "__instance",
+                "__0");
+            RequireParameterNames(
+                report,
+                PackageManagerGitHubNativePresentationPatch
+                    .GetLegacyFiltersSizePostfix(),
+                "__instance",
+                "__0",
+                "__result");
 
             Complete(report);
         }

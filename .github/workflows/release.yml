@@ -122,11 +122,17 @@ jobs:
           retention-days: 14
 
   unity:
-    name: Unity 6000.5 compile and EditMode tests
+    name: Unity ${{ matrix.unity-version }} compile and EditMode tests
     needs: validate
     runs-on: ubuntu-latest
     timeout-minutes: 45
     environment: unity-ci
+    strategy:
+      fail-fast: false
+      matrix:
+        unity-version:
+          - 6000.3.22f1
+          - 6000.5.0f1
 
     steps:
       - name: Download validated release archive
@@ -168,16 +174,16 @@ jobs:
         with:
           packageMode: true
           projectPath: .ci/package
-          unityVersion: 6000.5.0f1
+          unityVersion: ${{ matrix.unity-version }}
           testMode: EditMode
-          artifactsPath: unity-release-test-results
+          artifactsPath: unity-release-test-results-${{ matrix.unity-version }}
 
       - name: Upload Unity test results
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: unity-editmode-${{ needs.validate.outputs.tag }}
-          path: unity-release-test-results/
+          name: unity-editmode-${{ matrix.unity-version }}-${{ needs.validate.outputs.tag }}
+          path: unity-release-test-results-${{ matrix.unity-version }}/
           if-no-files-found: warn
           retention-days: 14
 

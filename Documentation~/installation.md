@@ -4,9 +4,10 @@
 
 ### Unity
 
-Unity `6000.5.*f1` final releases are supported. The package manifest
-declares `6000.5.0f1` as its minimum Editor version. All package assemblies are
-editor-only.
+The validated Editor targets are exact Unity `6000.3.22f1` and Unity
+`6000.5.*f1` final releases. Unity `6000.4` is not currently supported. The
+package manifest declares `6000.3.22f1` as its minimum eligibility version. All
+package assemblies are editor-only.
 
 ### Git CLI
 
@@ -40,8 +41,9 @@ accepts or stores a GitHub token.
 
 ## First Open
 
-On Unity `6000.5.*f1`, open **Window > Package Management > Package Manager** and
-select **GitHub** under **Sources**. The native package list incrementally
+On a validated Editor target—exact Unity `6000.3.22f1` or a Unity
+`6000.5.*f1` final release—open **Window > Package Management > Package Manager**
+and select **GitHub** under **Sources**. The native package list incrementally
 adds valid UPM packages discovered from every repository page owned by the
 authenticated user and their visible organizations, alongside installed GitHub
 submodules. Native search, sorting, selection, and details work across the
@@ -109,11 +111,12 @@ Use the explicit Git command above after cloning a team project.
 
 ## Compatibility
 
-The supported Editor line is Unity `6000.5.*f1`. Unity package manifests express
-minimum versions rather than wildcard or maximum ranges, so `package.json` uses
-`unity: 6000.5` with `unityRelease: 0f1` to declare the minimum
-`6000.5.0f1`; this support statement limits the currently validated line to
-Unity `6000.5.*f1` final releases.
+The validated Editor targets are exact Unity `6000.3.22f1` and Unity
+`6000.5.*f1` final releases. Unity `6000.4` is not currently supported or
+claimed as validated. Unity package manifests express a minimum rather than a
+disjoint support set, so `package.json` uses `unity: 6000.3` with
+`unityRelease: 22f1` to admit the validated 6000.3 target. Those fields do not
+declare Unity 6000.4 support; the validated targets above are authoritative.
 
 | Platform | CLI discovery locations |
 | --- | --- |

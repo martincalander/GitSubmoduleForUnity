@@ -1,9 +1,9 @@
 # User Guide
 
-Git Submodule Manager extends Unity's existing Package Manager. On supported
-Unity `6000.5.*f1` releases, open **Window > Package Management > Package
-Manager**, then select **GitHub** under **Sources**. There is no separate package
-management window.
+Git Submodule Manager extends Unity's existing Package Manager. On a validated
+Editor target—exact Unity `6000.3.22f1` or a Unity `6000.5.*f1` final
+release—open **Window > Package Management > Package Manager**, then select
+**GitHub** under **Sources**. There is no separate package management window.
 
 The GitHub source uses Unity's native package list, search, sorting, filters,
 selection, details tabs, action toolbar, and loading state. It combines

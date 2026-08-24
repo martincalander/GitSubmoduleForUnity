@@ -5,7 +5,8 @@ compatibility, and a native Unity Editor experience over feature count.
 
 ## Current Priorities
 
-- validate the 1.0 editor workflow across Unity `6000.5.*f1` patch releases;
+- maintain the 1.0 editor workflow on exact Unity `6000.3.22f1` and across
+  Unity `6000.5.*f1` final patch releases;
 - expand Windows, macOS, and Linux CI coverage where Unity licensing permits;
 - improve update-state visibility without performing implicit network work;
 - add focused integration tests around temporary Git repositories;

@@ -1700,7 +1700,10 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 Type packageDatabaseType,
                 Type packageInterfaceType)
             {
-                MethodInfo twoParameterShape = null;
+                MethodInfo readOnlyThreeParameterShape = null;
+                MethodInfo readOnlyTwoParameterShape = null;
+                MethodInfo listThreeParameterShape = null;
+                MethodInfo listTwoParameterShape = null;
                 MethodInfo[] methods = packageDatabaseType.GetMethods(AnyInstance);
                 for (int index = 0; index < methods.Length; index++)
                 {
@@ -1714,31 +1717,54 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                     }
 
                     ParameterInfo[] parameters = method.GetParameters();
-                    if ((parameters.Length != 2 && parameters.Length != 3) ||
-                        !IsReadOnlyCollectionOf(
-                            parameters[0].ParameterType,
-                            packageInterfaceType) ||
-                        !IsReadOnlyCollectionOf(
-                            parameters[1].ParameterType,
-                            typeof(string)))
+                    if (parameters.Length != 2 && parameters.Length != 3)
                     {
                         continue;
                     }
+
+                    bool isReadOnlyShape =
+                        IsReadOnlyCollectionOf(
+                            parameters[0].ParameterType,
+                            packageInterfaceType) &&
+                        IsReadOnlyCollectionOf(
+                            parameters[1].ParameterType,
+                            typeof(string));
+                    bool isListShape =
+                        IsListOf(
+                            parameters[0].ParameterType,
+                            packageInterfaceType) &&
+                        IsListOf(
+                            parameters[1].ParameterType,
+                            typeof(string));
+                    if (!isReadOnlyShape && !isListShape)
+                        continue;
 
                     if (parameters.Length == 3)
                     {
                         if (parameters[2].ParameterType.IsEnum &&
                             Enum.IsDefined(parameters[2].ParameterType, "Other"))
                         {
-                            return method;
+                            if (isReadOnlyShape)
+                                readOnlyThreeParameterShape = method;
+                            else
+                                listThreeParameterShape = method;
                         }
                         continue;
                     }
 
-                    twoParameterShape = method;
+                    if (isReadOnlyShape)
+                        readOnlyTwoParameterShape = method;
+                    else
+                        listTwoParameterShape = method;
                 }
 
-                return twoParameterShape;
+                // Unity 6000.5 uses IReadOnlyCollection<T>. Keep that exact
+                // contract preferred when both shapes are present. Unity 6000.3
+                // exposes the otherwise equivalent legacy IList<T> overload.
+                return readOnlyThreeParameterShape ??
+                       readOnlyTwoParameterShape ??
+                       listThreeParameterShape ??
+                       listTwoParameterShape;
             }
 
             private static object GetOtherChangedSource(MethodInfo updateMethod)
@@ -1759,6 +1785,14 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                        candidate.IsGenericType &&
                        candidate.GetGenericTypeDefinition() ==
                            typeof(IReadOnlyCollection<>) &&
+                       candidate.GetGenericArguments()[0] == elementType;
+            }
+
+            private static bool IsListOf(Type candidate, Type elementType)
+            {
+                return candidate != null &&
+                       candidate.IsGenericType &&
+                       candidate.GetGenericTypeDefinition() == typeof(IList<>) &&
                        candidate.GetGenericArguments()[0] == elementType;
             }
 

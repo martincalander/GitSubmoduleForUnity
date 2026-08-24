@@ -22,21 +22,23 @@ dependencies, directly from the Editor.
 <p align="center">
   <a href="https://github.com/martincalander/GitSubmoduleManager/actions/workflows/ci.yml"><img alt="Sanity Checks" src="https://github.com/martincalander/GitSubmoduleManager/actions/workflows/ci.yml/badge.svg"></a>
   <a href="https://github.com/martincalander/GitSubmoduleManager/releases"><img alt="Package version" src="https://img.shields.io/github/package-json/v/martincalander/GitSubmoduleManager?filename=package.json&label=package"></a>
-  <img alt="Unity 6000.5 final patch releases" src="https://img.shields.io/badge/Unity-6000.5.*f1-222C37?logo=unity&logoColor=white">
+  <img alt="Validated Unity targets: 6000.3.22f1 and 6000.5.*f1" src="https://img.shields.io/badge/Unity-6000.3.22f1%20%7C%206000.5.%2Af1-222C37?logo=unity&logoColor=white">
   <img alt="Editor only" src="https://img.shields.io/badge/scope-Editor%20only-555">
   <a href="LICENSE.md"><img alt="MIT License" src="https://img.shields.io/badge/license-MIT-blue"></a>
 </p>
 
 Git Submodule Manager is an editor-only Unity package for installing and
 managing Git-hosted UPM packages as editable submodules under `Packages/` or as
-normal read-only Git dependencies. Unity `6000.5.*f1` releases add a native
-GitHub source and Git workflows directly to Package Manager. Editable checkouts
-remain completely standard and visible to normal Git tooling.
+normal read-only Git dependencies. Validated Unity `6000.3.22f1` and
+`6000.5.*f1` releases add a native GitHub source and Git workflows directly to
+Package Manager. Editable checkouts remain completely standard and visible to
+normal Git tooling.
 
 ## What It Does
 
 - Adds a native **Sources > GitHub** page to **Window > Package Management >
-  Package Manager** on supported Unity `6000.5.*f1` releases. It incrementally
+  Package Manager** on validated Unity `6000.3.22f1` and `6000.5.*f1` releases.
+  It incrementally
   discovers valid UPM packages across
   the authenticated user's repositories and organizations, combines them with
   installed GitHub submodules, and uses Unity's package list, search, sort,
@@ -91,9 +93,13 @@ workflows use Unity's native Package Manager surface.
 
 | Dependency | Requirement | Used for |
 | --- | --- | --- |
-| Unity | `6000.5.*f1` final releases | Native Package Manager integration |
+| Unity | Exact `6000.3.22f1` and `6000.5.*f1` final releases; Unity `6000.4` is not supported | Native Package Manager integration |
 | [Git CLI](https://git-scm.com/downloads) | Required | All submodule operations |
 | [GitHub CLI](https://cli.github.com/) | Optional, recommended | Authenticated repository discovery |
+
+The UPM manifest declares `6000.3.22f1` as its minimum eligibility version.
+Unity manifests cannot encode the non-contiguous support matrix above, so that
+minimum does not make Unity `6000.4` a supported target.
 
 Git must be available to the Unity Editor process. GitHub CLI is needed only
 for authenticated GitHub repository discovery. The standalone Welcome window
@@ -115,8 +121,9 @@ read-only UPM Git dependencies.
 
 ## Usage
 
-1. On Unity `6000.5.*f1`, open **Window > Package Management > Package
-   Manager** and select **GitHub** under **Sources**. Valid packages discovered
+1. On validated Unity `6000.3.22f1` and `6000.5.*f1` releases, open **Window >
+   Package Management > Package Manager** and select **GitHub** under **Sources**.
+   Valid packages discovered
    from your personal repositories and organizations appear incrementally beside
    installed GitHub submodules in Unity's native package list and details UI.
    Organization headers, **Public**/**Private** badges, and Unity's native

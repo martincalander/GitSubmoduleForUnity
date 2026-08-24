@@ -58,6 +58,12 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         internal const string PageManagerPropertyName = "pageManager";
         internal const string ActivePagePropertyName = "activePage";
         internal const string PageIdPropertyName = "id";
+        internal const string LegacyExtensionPageTypeName =
+            "UnityEditor.PackageManager.UI.Internal.ExtensionPage";
+        internal const string LegacySimplePageTypeName =
+            "UnityEditor.PackageManager.UI.Internal.SimplePage";
+        internal const string LegacyPageRebuildMethodName =
+            "RebuildVisualStatesAndUpdateVisibilityWithSearchText";
 
         private const BindingFlags AnyInstance =
             BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
@@ -282,9 +288,21 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         internal static MethodInfo GetRemoveActionCollectionTargetMethod()
         {
             Type actionType = FindLoadedType(RemoveActionTypeName);
-            if (actionType == null)
+            Type packageInterfaceType = FindLoadedType(PackageInterfaceTypeName);
+            return FindRemoveActionCollectionTargetMethod(
+                actionType,
+                packageInterfaceType);
+        }
+
+        internal static MethodInfo FindRemoveActionCollectionTargetMethod(
+            Type actionType,
+            Type packageInterfaceType)
+        {
+            if (actionType == null || packageInterfaceType == null)
                 return null;
 
+            MethodInfo readOnlyCollectionTarget = null;
+            MethodInfo listTarget = null;
             foreach (MethodInfo method in actionType.GetMethods(
                          AnyInstance | BindingFlags.DeclaredOnly))
             {
@@ -293,13 +311,21 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                     !method.IsStatic &&
                     method.ReturnType == typeof(bool) &&
                     parameters.Length == 1 &&
-                    IsPackageCollectionParameter(parameters[0]))
+                    TryGetExactPackageCollectionShape(
+                        parameters[0],
+                        packageInterfaceType,
+                        out Type genericTypeDefinition))
                 {
-                    return method;
+                    if (genericTypeDefinition == typeof(IReadOnlyCollection<>))
+                        readOnlyCollectionTarget = method;
+                    else if (genericTypeDefinition == typeof(IList<>))
+                        listTarget = method;
                 }
             }
 
-            return null;
+            // Preserve the validated 6000.5 hook when both exact contracts are
+            // present; IList<IPackage> is the exact 6000.3 alternative only.
+            return readOnlyCollectionTarget ?? listTarget;
         }
 
         internal static MethodInfo
@@ -564,6 +590,8 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                     return false;
 
                 bool rebuilt = InvokePageMethod(activePage, "Rebuild", true);
+                if (!rebuilt)
+                    rebuilt = TryInvokeLegacyPageRebuild(activePage);
                 // Selection notifications refresh the details body and its Source
                 // card without starting a UPM network request.
                 InvokePageMethod(activePage, "TriggerOnSelectionChanged", false);
@@ -573,6 +601,48 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             {
                 return false;
             }
+        }
+
+        internal static MethodInfo GetLegacyPageRebuildMethod()
+        {
+            Type extensionPageType = FindLoadedType(
+                LegacyExtensionPageTypeName);
+            Type simplePageType = FindLoadedType(LegacySimplePageTypeName);
+            if (extensionPageType == null ||
+                simplePageType == null ||
+                !simplePageType.IsAssignableFrom(extensionPageType))
+            {
+                return null;
+            }
+
+            MethodInfo method = simplePageType.GetMethod(
+                LegacyPageRebuildMethodName,
+                AnyInstance | BindingFlags.DeclaredOnly,
+                null,
+                Type.EmptyTypes,
+                null);
+            return method != null &&
+                   !method.IsStatic &&
+                   method.ReturnType == typeof(void)
+                ? method
+                : null;
+        }
+
+        private static bool TryInvokeLegacyPageRebuild(object page)
+        {
+            MethodInfo method = GetLegacyPageRebuildMethod();
+            Type extensionPageType = FindLoadedType(
+                LegacyExtensionPageTypeName);
+            if (method == null ||
+                page == null ||
+                extensionPageType == null ||
+                !extensionPageType.IsInstanceOfType(page))
+            {
+                return false;
+            }
+
+            method.Invoke(page, null);
+            return true;
         }
 
         private static void AddMatchingInstanceRefresh(
@@ -610,15 +680,37 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                    parameter.ParameterType.FullName == PackageVersionInterfaceTypeName;
         }
 
-        private static bool IsPackageCollectionParameter(ParameterInfo parameter)
+        private static bool TryGetExactPackageCollectionShape(
+            ParameterInfo parameter,
+            Type packageInterfaceType,
+            out Type genericTypeDefinition)
         {
-            if (parameter == null || !parameter.ParameterType.IsGenericType)
+            genericTypeDefinition = null;
+            Type parameterType = parameter?.ParameterType;
+            if (parameterType == null ||
+                packageInterfaceType == null ||
+                !parameterType.IsGenericType)
+            {
+                return false;
+            }
+
+            Type[] arguments = parameterType.GetGenericArguments();
+            genericTypeDefinition = parameterType.GetGenericTypeDefinition();
+            return (genericTypeDefinition == typeof(IReadOnlyCollection<>) ||
+                    genericTypeDefinition == typeof(IList<>)) &&
+                   arguments.Length == 1 &&
+                   arguments[0] == packageInterfaceType;
+        }
+
+        internal static bool IsSupportedPackageCollectionType(Type parameterType)
+        {
+            if (parameterType == null || !parameterType.IsGenericType)
                 return false;
 
-            Type parameterType = parameter.ParameterType;
             Type[] arguments = parameterType.GetGenericArguments();
-            return parameterType.GetGenericTypeDefinition() ==
-                   typeof(IReadOnlyCollection<>) &&
+            Type genericTypeDefinition = parameterType.GetGenericTypeDefinition();
+            return (genericTypeDefinition == typeof(IReadOnlyCollection<>) ||
+                    genericTypeDefinition == typeof(IList<>)) &&
                    arguments.Length == 1 &&
                    arguments[0].FullName == PackageInterfaceTypeName;
         }

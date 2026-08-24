@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Reflection;
 using HarmonyLib;
 using UnityEditor;
+using UnityEditor.Callbacks;
 using UnityEngine;
 using UnityEngine.UIElements;
 
@@ -55,6 +56,8 @@ namespace MartinCalander.GitSubmoduleManager.Editor
 
         static GitSubmoduleManagerPackageManagerHost()
         {
+            RegisterEditorLifecycleCallbacks();
+
             if (!TryPatch(out _))
             {
                 BeginPatchRetryWindow();
@@ -62,8 +65,26 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             }
 
             EditorApplication.delayCall += AttachExistingWindows;
-            AssemblyReloadEvents.beforeAssemblyReload += BeforeAssemblyReload;
-            EditorApplication.quitting += BeforeEditorQuits;
+        }
+
+        [DidReloadScripts]
+        private static void AfterScriptsReloaded()
+        {
+            // A normal domain reload resets this static state before this
+            // callback runs. Unity's in-place script reload path can preserve
+            // the old domain after BeforeAssemblyReload retired the sessions,
+            // however, so explicitly re-arm the host and rescan already-open
+            // Package Manager windows. Every installation path is idempotent.
+            isShuttingDown = false;
+            RegisterEditorLifecycleCallbacks();
+
+            if (!TryPatch(out _))
+                BeginPatchRetryWindow();
+
+            nextWindowScanTime = 0d;
+            SubscribeUpdate();
+            EditorApplication.delayCall -= AttachExistingWindows;
+            EditorApplication.delayCall += AttachExistingWindows;
         }
 
         internal static void Open()
@@ -627,6 +648,16 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             {
                 isPatched = false;
             }
+        }
+
+        private static void RegisterEditorLifecycleCallbacks()
+        {
+            // The remove/add sequence keeps this safe when DidReloadScripts is
+            // delivered without a fresh AppDomain.
+            AssemblyReloadEvents.beforeAssemblyReload -= BeforeAssemblyReload;
+            AssemblyReloadEvents.beforeAssemblyReload += BeforeAssemblyReload;
+            EditorApplication.quitting -= BeforeEditorQuits;
+            EditorApplication.quitting += BeforeEditorQuits;
         }
 
         private static void DisposeAllSessions()

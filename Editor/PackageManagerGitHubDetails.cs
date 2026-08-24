@@ -49,6 +49,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         internal const string InstallAsReadOnlyPackageText =
             "Install as Read-Only Package";
         internal const string PreferredBranch = "main";
+        private const int DeferredFocusAttemptLimit = 10;
 
         private const string UpmLinksContainerName = "upmLinksContainer";
         private const string AssetStoreLinksContainerName = "assetStoreLinksContainer";
@@ -98,6 +99,10 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         private bool branchUpdateSubscribed;
         private bool isDisposed;
         private InstallUiState installUiState;
+        private VisualElement deferredFocusTarget;
+        private InstallUiState deferredFocusExpectedState;
+        private int deferredFocusAttemptCount;
+        private bool deferredFocusQueued;
 
         private PackageManagerGitHubDetails(
             VisualElement primaryActionsContainer,
@@ -229,6 +234,8 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         internal bool IsInstallCompleted =>
             installUiState == InstallUiState.Completed;
         internal bool IsDisposed => isDisposed;
+        internal bool HasDeferredFocusRequest =>
+            deferredFocusTarget != null || deferredFocusQueued;
         internal event Action InstallSelectionChanged;
 
         internal static bool TryCreate(
@@ -628,6 +635,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 return;
 
             isDisposed = true;
+            CancelDeferredFocus();
             UnsubscribeBranchPolling();
             branchField.UnregisterValueChangedCallback(OnBranchChanged);
             installMenu.UnregisterCallback<NavigationSubmitEvent>(
@@ -1159,16 +1167,9 @@ namespace MartinCalander.GitSubmoduleManager.Editor
 
         private void FocusInstallButtonSoon()
         {
-            installButton.schedule.Execute(() =>
-            {
-                if (!isDisposed &&
-                    installControlsVisible &&
-                    installButton.enabledSelf &&
-                    installButton.style.display.value == DisplayStyle.Flex)
-                {
-                    installButton.Focus();
-                }
-            });
+            BeginDeferredFocus(
+                installButton,
+                InstallUiState.Confirming);
         }
 
         private void FocusIdleInstallActionSoon()
@@ -1176,16 +1177,106 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             VisualElement target = installModeSelectionEnabled
                 ? installMenu
                 : installButton;
-            target.schedule.Execute(() =>
+            BeginDeferredFocus(target, InstallUiState.Idle);
+        }
+
+        private void BeginDeferredFocus(
+            VisualElement target,
+            InstallUiState expectedState)
+        {
+            CancelDeferredFocus();
+            if (target == null)
+                return;
+
+            deferredFocusTarget = target;
+            deferredFocusExpectedState = expectedState;
+            deferredFocusAttemptCount = 0;
+            QueueDeferredFocusAttempt();
+        }
+
+        private void QueueDeferredFocusAttempt()
+        {
+            if (isDisposed || deferredFocusQueued ||
+                deferredFocusTarget == null)
             {
-                if (!isDisposed &&
-                    installControlsVisible &&
-                    target.enabledSelf &&
-                    target.style.display.value == DisplayStyle.Flex)
-                {
-                    target.Focus();
-                }
-            });
+                return;
+            }
+
+            deferredFocusQueued = true;
+            // Editor update is driven by both graphical Editors and
+            // UnityTests. Its invocation snapshot defers a newly queued
+            // handler until a later update.
+            EditorApplication.update += OnDeferredFocusAttempt;
+        }
+
+        private void OnDeferredFocusAttempt()
+        {
+            EditorApplication.update -= OnDeferredFocusAttempt;
+            deferredFocusQueued = false;
+
+            VisualElement target = deferredFocusTarget;
+            if (isDisposed ||
+                !installControlsVisible ||
+                installUiState != deferredFocusExpectedState ||
+                target == null ||
+                !target.enabledSelf ||
+                target.style.display.value != DisplayStyle.Flex)
+            {
+                CancelDeferredFocus();
+                return;
+            }
+
+            Focusable focusedElement =
+                target.focusController?.focusedElement;
+            // A focus change is complete only after it survives a separate
+            // editor update. Event default processing can leave null or a
+            // hidden/detached stale element, but a different live element is
+            // an explicit focus choice and must not be overridden.
+            if (ReferenceEquals(focusedElement, target) ||
+                ShouldRespectFocusedElement(focusedElement))
+            {
+                CancelDeferredFocus();
+                return;
+            }
+
+            if (deferredFocusAttemptCount >= DeferredFocusAttemptLimit)
+            {
+                CancelDeferredFocus();
+                return;
+            }
+
+            deferredFocusAttemptCount++;
+            if (target.canGrabFocus)
+                target.Focus();
+
+            // Always verify on the next editor update, even when Focus()
+            // reports immediate success.
+            QueueDeferredFocusAttempt();
+        }
+
+        private static bool ShouldRespectFocusedElement(
+            Focusable focusedElement)
+        {
+            if (focusedElement == null)
+                return false;
+
+            if (!(focusedElement is VisualElement visualElement))
+                return true;
+
+            return visualElement.panel != null &&
+                   visualElement.enabledInHierarchy &&
+                   visualElement.resolvedStyle.display != DisplayStyle.None &&
+                   visualElement.resolvedStyle.visibility == Visibility.Visible;
+        }
+
+        private void CancelDeferredFocus()
+        {
+            if (deferredFocusQueued)
+                EditorApplication.update -= OnDeferredFocusAttempt;
+
+            deferredFocusQueued = false;
+            deferredFocusTarget = null;
+            deferredFocusAttemptCount = 0;
         }
 
         private void ShowInstallFeedback(string message, HelpBoxMessageType type)

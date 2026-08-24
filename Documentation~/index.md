@@ -8,7 +8,8 @@ normal read-only Git dependencies.
 
 1. Follow [Installation](installation.md) to install Git, optionally configure
    GitHub CLI, and add the package.
-2. On Unity `6000.5.*f1`, open **Window > Package Management > Package Manager**,
+2. On a validated Editor target—exact Unity `6000.3.22f1` or a Unity
+   `6000.5.*f1` final release—open **Window > Package Management > Package Manager**,
    then select **Sources > GitHub**. Unity's native list, search,
    sorting, and details show installed GitHub submodules plus valid UPM packages
    discovered incrementally from authenticated personal and organization

@@ -94,8 +94,12 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                     },
                     ref actionResult);
 
-            Assert.That(runOriginal, Is.True);
-            Assert.That(fallbackCount, Is.Zero);
+            Assert.That(
+                runOriginal,
+                Is.EqualTo(!UnityEngine.Application.isBatchMode));
+            Assert.That(
+                fallbackCount,
+                Is.EqualTo(UnityEngine.Application.isBatchMode ? 1 : 0));
         }
 
         [Test]
@@ -193,8 +197,12 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                     },
                     ref actionResult);
 
-            Assert.That(runOriginal, Is.True);
-            Assert.That(fallbackCount, Is.Zero);
+            Assert.That(
+                runOriginal,
+                Is.EqualTo(!UnityEngine.Application.isBatchMode));
+            Assert.That(
+                fallbackCount,
+                Is.EqualTo(UnityEngine.Application.isBatchMode ? 1 : 0));
         }
 
         [Test]
@@ -278,8 +286,12 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                     },
                     ref actionResult);
 
-            Assert.That(runOriginal, Is.True);
-            Assert.That(fallbackCount, Is.Zero);
+            Assert.That(
+                runOriginal,
+                Is.EqualTo(!UnityEngine.Application.isBatchMode));
+            Assert.That(
+                fallbackCount,
+                Is.EqualTo(UnityEngine.Application.isBatchMode ? 1 : 0));
         }
 
         [Test]

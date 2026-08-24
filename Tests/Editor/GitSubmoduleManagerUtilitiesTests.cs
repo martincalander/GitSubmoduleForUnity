@@ -1042,6 +1042,26 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
         }
 
         [Test]
+        public void PackageManagerHostLifecycle_RearmsAfterScriptsReload()
+        {
+            MethodInfo callback = typeof(GitSubmoduleManagerPackageManagerHost)
+                .GetMethod(
+                    "AfterScriptsReloaded",
+                    BindingFlags.Static | BindingFlags.NonPublic);
+
+            Assert.That(callback, Is.Not.Null);
+            Assert.That(callback.ReturnType, Is.EqualTo(typeof(void)));
+            Assert.That(callback.GetParameters(), Is.Empty);
+            Assert.That(
+                callback.IsDefined(
+                    typeof(UnityEditor.Callbacks.DidReloadScripts),
+                    inherit: false),
+                Is.True,
+                "An already-open Package Manager must be remounted after both " +
+                "normal domain reload and Unity's in-place script reload path.");
+        }
+
+        [Test]
         public void PackageManagerHostLifecycle_LivePanelDetachRequestsRepairInsteadOfRelease()
         {
             Assert.That(
@@ -1152,7 +1172,33 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
             MethodInfo updateSupportedLabels =
                 PackageManagerSubmoduleNativePage
                     .GetUpdateSupportedLabelsMethod();
-            Assert.That(updateSupportedLabels, Is.Not.Null);
+            MethodInfo updateSupportedCategories =
+                PackageManagerSubmoduleNativePage
+                    .GetUpdateSupportedCategoriesMethod();
+            if (updateSupportedLabels == null ||
+                updateSupportedCategories == null)
+            {
+                Assert.That(updateSupportedLabels, Is.Null);
+                Assert.That(updateSupportedCategories, Is.Null);
+                Assert.That(
+                    PackageManagerGitHubNativePresentationPatch
+                        .HasRequiredLegacyDiscoveryLifecycleContract(),
+                    Is.True);
+                Assert.That(
+                    PackageManagerGitHubNativePresentationPatch
+                        .GetLegacyPageVisibilityFilterTarget(),
+                    Is.Not.Null);
+                Assert.That(
+                    PackageManagerGitHubNativePresentationPatch
+                        .GetLegacyFiltersDisplayTarget(),
+                    Is.Not.Null);
+                Assert.That(
+                    PackageManagerGitHubNativePresentationPatch
+                        .GetLegacyFiltersSizeTarget(),
+                    Is.Not.Null);
+                return;
+            }
+
             Assert.That(updateSupportedLabels.ReturnType, Is.EqualTo(typeof(bool)));
             Assert.That(
                 updateSupportedLabels.GetParameters()
@@ -1162,10 +1208,6 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                     typeof(IReadOnlyList<string>),
                     typeof(bool)
                 }));
-            MethodInfo updateSupportedCategories =
-                PackageManagerSubmoduleNativePage
-                    .GetUpdateSupportedCategoriesMethod();
-            Assert.That(updateSupportedCategories, Is.Not.Null);
             Assert.That(
                 updateSupportedCategories.ReturnType,
                 Is.EqualTo(typeof(bool)));
@@ -1177,6 +1219,23 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                     typeof(IReadOnlyList<string>),
                     typeof(bool)
                 }));
+        }
+
+        [Test]
+        public void PackageManagerNativePage_LegacyDefaultsRemainBestEffort()
+        {
+            var incompletePage = new object();
+
+            Assert.That(
+                PackageManagerSubmoduleNativePage.TryApplyDefaultFilters(
+                    incompletePage),
+                Is.False);
+            Assert.That(
+                PackageManagerSubmoduleNativePage
+                    .ApplyLegacyDefaultFiltersBestEffort(incompletePage),
+                Is.True,
+                "A verified legacy filter contract must remain usable while " +
+                "default organization discovery is incomplete.");
         }
 
         [Test]

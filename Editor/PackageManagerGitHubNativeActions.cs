@@ -29,6 +29,20 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         internal const string BuiltInActionsFieldName =
             "m_BuiltInActionsContainer";
         internal const string DetailsLinksPropertyName = "detailsLinks";
+        internal const string PageManagerFieldName = "m_PageManager";
+        internal const string PackageDatabaseFieldName = "m_PackageDatabase";
+        internal const string PageManagerTypeName =
+            "UnityEditor.PackageManager.UI.Internal.IPageManager";
+        internal const string PageInterfaceTypeName =
+            "UnityEditor.PackageManager.UI.Internal.IPage";
+        internal const string PageSelectionTypeName =
+            "UnityEditor.PackageManager.UI.Internal.PageSelection";
+        internal const string PackageDatabaseTypeName =
+            "UnityEditor.PackageManager.UI.Internal.IPackageDatabase";
+        internal const string PackageInterfaceTypeName =
+            "UnityEditor.PackageManager.UI.Internal.IPackage";
+        internal const string PublicPackageInterfaceTypeName =
+            "UnityEditor.PackageManager.UI.IPackage";
         private const BindingFlags AnyInstance =
             BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
 
@@ -38,6 +52,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             new(ReferenceComparer.Instance);
         private static readonly Dictionary<string, string> ActiveInstallMessages =
             new(StringComparer.Ordinal);
+        private static SelectionContract supportedSelectionContract;
         private static bool recoveredCompletionPresentationScheduled;
 
         static PackageManagerGitHubNativeActions()
@@ -246,6 +261,8 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                     InstallForRoot(root);
                     return;
                 }
+
+                package = ResolvePackageForRefresh(toolbar, package);
 
                 PackageManagerGitHubRepository repository = null;
                 bool isProjectedRepository =
@@ -548,7 +565,13 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                     if (entry?.Toolbar == null || entry.RemoveDetails == null)
                         continue;
 
-                    object selectedVersion = GetFieldValue(entry.Toolbar, "m_Version");
+                    object selectedVersion =
+                        TryGetAuthoritativeSelectedPackage(
+                            entry.Toolbar,
+                            out object selectedPackage)
+                            ? PackageManagerSubmoduleNativePage.GetPrimaryVersion(
+                                selectedPackage)
+                            : null;
                     if (!ReferenceEquals(selectedVersion, packageVersion) &&
                         !SameSubmodule(entry.RemoveDetails.CurrentInfo, info))
                     {
@@ -689,6 +712,13 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             }
         }
 
+        internal static bool HasSupportedSelectionContract()
+        {
+            Type toolbarType = PackageManagerSubmoduleHarmonyPatch.FindLoadedType(
+                PackageToolbarTypeName);
+            return TryGetSelectionContract(toolbarType, out _);
+        }
+
         private static bool SupportsNativePageEditorVersion
         {
             get
@@ -808,13 +838,14 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             PackageManagerSubmoduleRemoveDetails preferredDetails,
             PackageManagerSubmoduleInfo requestedInfo)
         {
-            object livePackage = toolbar == null
-                ? null
-                : GetFieldValue(toolbar, "m_Package");
+            bool hasLivePackage = TryGetAuthoritativeSelectedPackage(
+                toolbar,
+                out object livePackage);
             object liveVersion =
                 PackageManagerSubmoduleNativePage.GetPrimaryVersion(livePackage);
             if (toolbar == null ||
                 requestedInfo == null ||
+                !hasLivePackage ||
                 !PackageManagerSubmodulePresentation.TryGetPresentation(
                     liveVersion,
                     out PackageManagerSubmoduleInfo liveInfo) ||
@@ -909,7 +940,18 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                     return;
                 }
 
-                object selectedPackage = GetFieldValue(toolbar, "m_Package");
+                if (!TryGetAuthoritativeSelectedPackage(
+                        toolbar,
+                        out object selectedPackage))
+                {
+                    ReportRemoveErrorForSubmodule(
+                        preferredDetails,
+                        info,
+                        "The selected package could not be verified after its " +
+                        "Git state was inspected. Select it again and retry.");
+                    return;
+                }
+
                 object selectedVersion =
                     PackageManagerSubmoduleNativePage.GetPrimaryVersion(
                         selectedPackage);
@@ -993,7 +1035,18 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 }
 
                 feedbackTarget = entry.RemoveDetails;
-                object selectedPackage = GetFieldValue(toolbar, "m_Package");
+                if (!TryGetAuthoritativeSelectedPackage(
+                        toolbar,
+                        out object selectedPackage))
+                {
+                    ReportRemoveError(
+                        feedbackTarget,
+                        "The selected package could not be verified before " +
+                        "removal. Select the installed submodule and retry.");
+                    RefreshAllEntries();
+                    return;
+                }
+
                 object selectedVersion =
                     PackageManagerSubmoduleNativePage.GetPrimaryVersion(
                         selectedPackage);
@@ -1192,14 +1245,15 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             PackageManagerPackageConversionTarget requestedTarget,
             PackageManagerSubmoduleInfo requestedInfo)
         {
-            object livePackage = toolbar == null
-                ? null
-                : GetFieldValue(toolbar, "m_Package");
+            bool hasLivePackage = TryGetAuthoritativeSelectedPackage(
+                toolbar,
+                out object livePackage);
             object liveVersion =
                 PackageManagerSubmoduleNativePage.GetPrimaryVersion(livePackage);
             if (toolbar == null ||
                 requestedTarget == null ||
                 requestedInfo == null ||
+                !hasLivePackage ||
                 requestedTarget.Direction !=
                 GitPackageConversionDirection.SubmoduleToReadOnly ||
                 !PackageManagerSubmodulePresentation.TryGetPresentation(
@@ -1305,7 +1359,18 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                     return;
                 }
 
-                object selectedPackage = GetFieldValue(toolbar, "m_Package");
+                if (!TryGetAuthoritativeSelectedPackage(
+                        toolbar,
+                        out object selectedPackage))
+                {
+                    ReportConversionError(
+                        preferredDetails,
+                        target,
+                        "The selected package could not be verified after its " +
+                        "Git state was inspected. Select it again and retry.");
+                    return;
+                }
+
                 object selectedVersion =
                     PackageManagerSubmoduleNativePage.GetPrimaryVersion(
                         selectedPackage);
@@ -1406,7 +1471,19 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                     return;
                 }
 
-                object selectedPackage = GetFieldValue(toolbar, "m_Package");
+                if (!TryGetAuthoritativeSelectedPackage(
+                        toolbar,
+                        out object selectedPackage))
+                {
+                    ReportConversionError(
+                        feedbackTarget,
+                        requestedTarget,
+                        "The selected package could not be verified before " +
+                        "conversion. Select it again and retry.");
+                    RefreshAllEntries();
+                    return;
+                }
+
                 bool started;
                 string startError;
                 if (requestedTarget.Direction ==
@@ -1667,7 +1744,19 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                     return;
                 }
 
-                object selectedPackage = GetFieldValue(toolbar, "m_Package");
+                if (!TryGetAuthoritativeSelectedPackage(
+                        toolbar,
+                        out object selectedPackage))
+                {
+                    ReportInstallError(
+                        feedbackTarget,
+                        "Cannot Install Git Package",
+                        "The selected repository could not be verified. " +
+                        "Select it again in Sources > GitHub and retry.");
+                    RefreshAllEntries();
+                    return;
+                }
+
                 bool resolvedProjectedRepository =
                     PackageManagerGitHubPackageProjection.TryGetRepository(
                         selectedPackage,
@@ -2220,6 +2309,141 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                    !AsyncCommandDrainRegistry.RequiresEditorRestart;
         }
 
+        /// <summary>
+        /// Unity can restore the Package Manager's active page selection before
+        /// its recycled toolbar fields catch up after a package resolve or script
+        /// reload. Prefer the exact active-page selection when that independent
+        /// contract resolves. A present but inconsistent selection fails closed;
+        /// only an unavailable optional contract preserves Harmony's explicit
+        /// package argument for presentation.
+        /// </summary>
+        internal static object ResolvePackageForRefresh(
+            object toolbar,
+            object explicitPackage)
+        {
+            bool resolved = TryGetAuthoritativeSelectedPackage(
+                toolbar,
+                out object selectedPackage,
+                out bool contractAvailable);
+            return SelectPackageForRefresh(
+                explicitPackage,
+                contractAvailable,
+                resolved,
+                selectedPackage);
+        }
+
+        internal static object SelectPackageForRefresh(
+            object explicitPackage,
+            bool selectionContractAvailable,
+            bool selectionResolved,
+            object selectedPackage)
+        {
+            if (selectionResolved && selectedPackage != null)
+                return selectedPackage;
+
+            return selectionContractAvailable ? null : explicitPackage;
+        }
+
+        internal static bool TryGetAuthoritativeSelectedPackage(
+            object toolbar,
+            out object package)
+        {
+            return TryGetAuthoritativeSelectedPackage(
+                toolbar,
+                out package,
+                out _);
+        }
+
+        private static bool TryGetAuthoritativeSelectedPackage(
+            object toolbar,
+            out object package,
+            out bool contractAvailable)
+        {
+            package = null;
+            contractAvailable = false;
+            if (toolbar == null ||
+                !TryGetSelectionContract(toolbar.GetType(), out SelectionContract contract))
+            {
+                return false;
+            }
+
+            contractAvailable = true;
+            return contract.TryResolve(toolbar, out package);
+        }
+
+        internal static bool TryResolveExactSingleSelection(
+            int reportedCount,
+            IEnumerable<string> selectedIds,
+            Func<string, object> packageLookup,
+            Func<object, string> packageUniqueId,
+            Func<object, string> packageName,
+            out object package)
+        {
+            package = null;
+            if (reportedCount != 1 ||
+                selectedIds == null ||
+                packageLookup == null ||
+                packageUniqueId == null ||
+                packageName == null)
+            {
+                return false;
+            }
+
+            try
+            {
+                using IEnumerator<string> enumerator = selectedIds.GetEnumerator();
+                if (!enumerator.MoveNext() ||
+                    string.IsNullOrEmpty(enumerator.Current))
+                {
+                    return false;
+                }
+
+                string selectedId = enumerator.Current;
+                if (enumerator.MoveNext())
+                    return false;
+
+                object candidate = packageLookup(selectedId);
+                if (candidate == null)
+                    return false;
+
+                string uniqueId = packageUniqueId(candidate);
+                string name = packageName(candidate);
+                if (!string.Equals(selectedId, uniqueId, StringComparison.Ordinal) &&
+                    !string.Equals(selectedId, name, StringComparison.Ordinal))
+                {
+                    return false;
+                }
+
+                package = candidate;
+                return true;
+            }
+            catch
+            {
+                package = null;
+                return false;
+            }
+        }
+
+        private static bool TryGetSelectionContract(
+            Type toolbarType,
+            out SelectionContract contract)
+        {
+            contract = supportedSelectionContract;
+            if (contract != null && contract.ToolbarType == toolbarType)
+                return true;
+
+            SelectionContract candidate = SelectionContract.TryCreate(toolbarType);
+            if (candidate == null)
+            {
+                contract = null;
+                return false;
+            }
+
+            supportedSelectionContract = candidate;
+            contract = candidate;
+            return true;
+        }
+
         private static bool IsGitHubPage(object toolbar)
         {
             object pageManager = GetFieldValue(toolbar, "m_PageManager");
@@ -2375,6 +2599,217 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             }
 
             Debug.LogWarning("[Git Submodule Manager] " + diagnostic);
+        }
+
+        private sealed class SelectionContract
+        {
+            private SelectionContract(
+                Type toolbarType,
+                Type packageType,
+                FieldInfo pageManagerField,
+                FieldInfo packageDatabaseField,
+                PropertyInfo activePageProperty,
+                MethodInfo getSelectionMethod,
+                PropertyInfo selectionCountProperty,
+                MethodInfo getPackageMethod,
+                PropertyInfo packageUniqueIdProperty,
+                PropertyInfo packageNameProperty)
+            {
+                ToolbarType = toolbarType;
+                PackageType = packageType;
+                PageManagerField = pageManagerField;
+                PackageDatabaseField = packageDatabaseField;
+                ActivePageProperty = activePageProperty;
+                GetSelectionMethod = getSelectionMethod;
+                SelectionCountProperty = selectionCountProperty;
+                GetPackageMethod = getPackageMethod;
+                PackageUniqueIdProperty = packageUniqueIdProperty;
+                PackageNameProperty = packageNameProperty;
+            }
+
+            internal Type ToolbarType { get; }
+            private Type PackageType { get; }
+            private FieldInfo PageManagerField { get; }
+            private FieldInfo PackageDatabaseField { get; }
+            private PropertyInfo ActivePageProperty { get; }
+            private MethodInfo GetSelectionMethod { get; }
+            private PropertyInfo SelectionCountProperty { get; }
+            private MethodInfo GetPackageMethod { get; }
+            private PropertyInfo PackageUniqueIdProperty { get; }
+            private PropertyInfo PackageNameProperty { get; }
+
+            internal static SelectionContract TryCreate(Type toolbarType)
+            {
+                try
+                {
+                    if (toolbarType == null ||
+                        !string.Equals(
+                            toolbarType.FullName,
+                            PackageToolbarTypeName,
+                            StringComparison.Ordinal))
+                    {
+                        return null;
+                    }
+
+                    Type pageManagerType =
+                        PackageManagerSubmoduleHarmonyPatch.FindLoadedType(
+                            PageManagerTypeName);
+                    Type pageType =
+                        PackageManagerSubmoduleHarmonyPatch.FindLoadedType(
+                            PageInterfaceTypeName);
+                    Type selectionType =
+                        PackageManagerSubmoduleHarmonyPatch.FindLoadedType(
+                            PageSelectionTypeName);
+                    Type packageDatabaseType =
+                        PackageManagerSubmoduleHarmonyPatch.FindLoadedType(
+                            PackageDatabaseTypeName);
+                    Type packageType =
+                        PackageManagerSubmoduleHarmonyPatch.FindLoadedType(
+                            PackageInterfaceTypeName);
+                    Type publicPackageType =
+                        PackageManagerSubmoduleHarmonyPatch.FindLoadedType(
+                            PublicPackageInterfaceTypeName);
+                    if (pageManagerType == null ||
+                        pageType == null ||
+                        selectionType == null ||
+                        packageDatabaseType == null ||
+                        packageType == null ||
+                        publicPackageType == null ||
+                        !typeof(IEnumerable<string>).IsAssignableFrom(selectionType) ||
+                        !publicPackageType.IsAssignableFrom(packageType))
+                    {
+                        return null;
+                    }
+
+                    FieldInfo pageManagerField = toolbarType.GetField(
+                        PageManagerFieldName,
+                        AnyInstance);
+                    FieldInfo packageDatabaseField = toolbarType.GetField(
+                        PackageDatabaseFieldName,
+                        AnyInstance);
+                    PropertyInfo activePageProperty = pageManagerType.GetProperty(
+                        "activePage",
+                        AnyInstance);
+                    MethodInfo getSelectionMethod = pageType.GetMethod(
+                        "GetSelection",
+                        AnyInstance,
+                        null,
+                        Type.EmptyTypes,
+                        null);
+                    PropertyInfo selectionCountProperty = selectionType.GetProperty(
+                        "Count",
+                        AnyInstance);
+                    MethodInfo getPackageMethod = packageDatabaseType.GetMethod(
+                        "GetPackage",
+                        AnyInstance,
+                        null,
+                        new[] { typeof(string) },
+                        null);
+                    PropertyInfo packageUniqueIdProperty =
+                        publicPackageType.GetProperty("uniqueId", AnyInstance);
+                    PropertyInfo packageNameProperty =
+                        publicPackageType.GetProperty("name", AnyInstance);
+
+                    if (pageManagerField == null ||
+                        pageManagerField.IsStatic ||
+                        pageManagerField.FieldType != pageManagerType ||
+                        packageDatabaseField == null ||
+                        packageDatabaseField.IsStatic ||
+                        packageDatabaseField.FieldType != packageDatabaseType ||
+                        activePageProperty == null ||
+                        activePageProperty.GetIndexParameters().Length != 0 ||
+                        activePageProperty.PropertyType != pageType ||
+                        activePageProperty.GetGetMethod(true)?.IsStatic != false ||
+                        getSelectionMethod == null ||
+                        getSelectionMethod.IsStatic ||
+                        getSelectionMethod.ReturnType != selectionType ||
+                        selectionCountProperty == null ||
+                        selectionCountProperty.GetIndexParameters().Length != 0 ||
+                        selectionCountProperty.PropertyType != typeof(int) ||
+                        selectionCountProperty.GetGetMethod(true)?.IsStatic != false ||
+                        getPackageMethod == null ||
+                        getPackageMethod.IsStatic ||
+                        getPackageMethod.ReturnType != packageType ||
+                        packageUniqueIdProperty == null ||
+                        packageUniqueIdProperty.GetIndexParameters().Length != 0 ||
+                        packageUniqueIdProperty.PropertyType != typeof(string) ||
+                        packageUniqueIdProperty.GetGetMethod(true)?.IsStatic != false ||
+                        packageNameProperty == null ||
+                        packageNameProperty.GetIndexParameters().Length != 0 ||
+                        packageNameProperty.PropertyType != typeof(string) ||
+                        packageNameProperty.GetGetMethod(true)?.IsStatic != false)
+                    {
+                        return null;
+                    }
+
+                    return new SelectionContract(
+                        toolbarType,
+                        packageType,
+                        pageManagerField,
+                        packageDatabaseField,
+                        activePageProperty,
+                        getSelectionMethod,
+                        selectionCountProperty,
+                        getPackageMethod,
+                        packageUniqueIdProperty,
+                        packageNameProperty);
+                }
+                catch
+                {
+                    return null;
+                }
+            }
+
+            internal bool TryResolve(object toolbar, out object package)
+            {
+                package = null;
+                if (toolbar == null || !ToolbarType.IsInstanceOfType(toolbar))
+                    return false;
+
+                try
+                {
+                    object pageManager = PageManagerField.GetValue(toolbar);
+                    object packageDatabase = PackageDatabaseField.GetValue(toolbar);
+                    object activePage = pageManager == null
+                        ? null
+                        : ActivePageProperty.GetValue(pageManager, null);
+                    object selection = activePage == null
+                        ? null
+                        : GetSelectionMethod.Invoke(activePage, null);
+                    if (packageDatabase == null ||
+                        !(selection is IEnumerable<string> selectedIds) ||
+                        !(SelectionCountProperty.GetValue(selection, null) is int count))
+                    {
+                        return false;
+                    }
+
+                    bool resolved = TryResolveExactSingleSelection(
+                        count,
+                        selectedIds,
+                        id => GetPackageMethod.Invoke(
+                            packageDatabase,
+                            new object[] { id }),
+                        candidate => PackageUniqueIdProperty.GetValue(
+                            candidate,
+                            null) as string,
+                        candidate => PackageNameProperty.GetValue(
+                            candidate,
+                            null) as string,
+                        out package);
+                    if (!resolved || !PackageType.IsInstanceOfType(package))
+                    {
+                        package = null;
+                        return false;
+                    }
+
+                    return true;
+                }
+                catch
+                {
+                    package = null;
+                    return false;
+                }
+            }
         }
 
         private sealed class NativeActionEntry

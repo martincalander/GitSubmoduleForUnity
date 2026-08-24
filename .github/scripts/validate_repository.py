@@ -103,10 +103,10 @@ def check_package_json() -> None:
         fail("package.json displayName must be Git Submodule Manager")
     if not parse_semver(str(package.get("version", ""))):
         fail("package.json version is not valid SemVer 2.0.0")
-    if package.get("unity") != "6000.5":
-        fail("package.json unity must declare the supported 6000.5 Editor line")
-    if package.get("unityRelease") != "0f1":
-        fail("package.json unityRelease must declare the 6000.5.0f1 minimum")
+    if package.get("unity") != "6000.3":
+        fail("package.json unity must declare the exact validated 6000.3.22f1 minimum")
+    if package.get("unityRelease") != "22f1":
+        fail("package.json unityRelease must declare the 6000.3.22f1 minimum")
     if package.get("license") != "MIT":
         fail("package.json license must be MIT")
     author = package.get("author") or {}

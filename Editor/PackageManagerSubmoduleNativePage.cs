@@ -12,7 +12,8 @@ namespace MartinCalander.GitSubmoduleManager.Editor
     /// <summary>
     /// Bridges discovered GitHub packages and installed Git packages into
     /// Unity's internal extension-page contract. The package deliberately
-    /// targets the declared Unity 6000.5 Package Manager contract.
+    /// targets the validated Unity 6000.3.22f1 and Unity 6000.5 Package Manager
+    /// contracts.
     /// </summary>
     internal static class PackageManagerSubmoduleNativePage
     {
@@ -34,6 +35,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             "UnityEditor.PackageManager.UI.Internal.Sidebar";
         internal const string SidebarExtensionRowsUpdateMethodName =
             "UpdateExtensionPageRelatedRows";
+        internal const string LegacySidebarRowsCreateMethodName = "CreateRows";
         private const string OrganizationFilterFormat =
             "Organization - {0}";
 
@@ -80,17 +82,28 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 sidebarType == null || sidebarRowType == null)
                 return false;
 
-            return FindAddExtensionPageMethod(pageManagerType, argsType) != null &&
-                   FindGetPageMethod(pageManagerType) != null &&
-                   pageManagerType.GetProperty("activePage", AnyInstance) != null &&
-                   FindSidebarGetRowMethod(sidebarType) != null &&
-                   FindSidebarExtensionRowsUpdateMethod(sidebarType) != null &&
-                   typeof(VisualElement).IsAssignableFrom(sidebarRowType) &&
-                   HasRequiredArgsFields(argsType) &&
-                   GetUpdateSupportedLabelsMethod() != null &&
-                   GetUpdateSupportedCategoriesMethod() != null &&
-                   PackageManagerGitHubNativePresentationPatch
-                       .HasRequiredDiscoveryLifecycleContract();
+            bool commonContract =
+                FindAddExtensionPageMethod(pageManagerType, argsType) != null &&
+                FindGetPageMethod(pageManagerType) != null &&
+                pageManagerType.GetProperty("activePage", AnyInstance) != null &&
+                FindSidebarGetRowMethod(sidebarType) != null &&
+                FindSidebarExtensionRowsUpdateMethod(sidebarType) != null &&
+                typeof(VisualElement).IsAssignableFrom(sidebarRowType) &&
+                HasRequiredArgsFields(argsType);
+            if (!commonContract)
+                return false;
+
+            bool modernContract =
+                GetUpdateSupportedLabelsMethod() != null &&
+                GetUpdateSupportedCategoriesMethod() != null &&
+                PackageManagerGitHubNativePresentationPatch
+                    .HasRequiredDiscoveryLifecycleContract();
+            bool legacyContract =
+                PackageManagerGitHubNativePresentationPatch
+                    .HasRequiredLegacyDiscoveryLifecycleContract() &&
+                PackageManagerSubmoduleHarmonyPatch
+                    .GetLegacyPageRebuildMethod() != null;
+            return modernContract || legacyContract;
         }
 
         internal static bool TryRegisterFromServices(
@@ -453,6 +466,23 @@ namespace MartinCalander.GitSubmoduleManager.Editor
 
             try
             {
+                if (PackageManagerGitHubNativePresentationPatch
+                        .HasRequiredLegacyDiscoveryLifecycleContract() &&
+                    GetUpdateSupportedLabelsMethod() == null &&
+                    GetUpdateSupportedCategoriesMethod() == null)
+                {
+                    if (!PackageManagerGitHubNativePresentationPatch
+                            .AreLegacyPageFilterPatchesApplied() &&
+                        (!PackageManagerGitHubNativePresentationPatch.TryPatch() ||
+                         !PackageManagerGitHubNativePresentationPatch
+                             .AreLegacyPageFilterPatchesApplied()))
+                    {
+                        return false;
+                    }
+
+                    return ApplyLegacyDefaultFiltersBestEffort(page);
+                }
+
                 MethodInfo filterTarget =
                     PackageManagerGitHubNativePresentationPatch
                         .GetPageVisibilityFilterTarget();
@@ -610,6 +640,22 @@ namespace MartinCalander.GitSubmoduleManager.Editor
 
                 object nextFilters = copyConstructor?.Invoke(
                     new[] { currentFilters });
+                if (nextFilters == null &&
+                    PackageManagerGitHubNativePresentationPatch
+                        .TryUpdateLegacyPageFilters(
+                            page,
+                            currentFilters,
+                            string.IsNullOrEmpty(visibilityLabel)
+                                ? Array.Empty<string>()
+                                : new[] { visibilityLabel },
+                            string.IsNullOrEmpty(organizationLabel)
+                                ? Array.Empty<string>()
+                                : new[] { organizationLabel }))
+                {
+                    MarkDefaultFiltersApplied(page, preferenceSignature);
+                    return true;
+                }
+
                 if (nextFilters == null)
                     return false;
 
@@ -679,6 +725,15 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             {
                 return false;
             }
+        }
+
+        internal static bool ApplyLegacyDefaultFiltersBestEffort(object page)
+        {
+            // The exact legacy filter patches are the compatibility boundary.
+            // Defaults are preferences, and can be temporarily unresolved while
+            // the first discovery snapshot is still populating organizations.
+            TryApplyDefaultFilters(page);
+            return true;
         }
 
         internal static string GetDefaultVisibilityLabel(
@@ -1148,12 +1203,30 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         internal static MethodInfo FindSidebarExtensionRowsUpdateMethod(
             Type sidebarType)
         {
-            return sidebarType?.GetMethod(
+            MethodInfo modernMethod = sidebarType?.GetMethod(
                 SidebarExtensionRowsUpdateMethodName,
                 AnyInstance,
                 null,
                 Type.EmptyTypes,
                 null);
+            if (modernMethod != null &&
+                !modernMethod.IsStatic &&
+                modernMethod.ReturnType == typeof(void))
+            {
+                return modernMethod;
+            }
+
+            MethodInfo legacyMethod = sidebarType?.GetMethod(
+                LegacySidebarRowsCreateMethodName,
+                AnyInstance | BindingFlags.DeclaredOnly,
+                null,
+                Type.EmptyTypes,
+                null);
+            return legacyMethod != null &&
+                   !legacyMethod.IsStatic &&
+                   legacyMethod.ReturnType == typeof(void)
+                ? legacyMethod
+                : null;
         }
 
         internal static VisualElement ChooseCanonicalSidebarRow(

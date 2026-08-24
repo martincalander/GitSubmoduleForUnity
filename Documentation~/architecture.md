@@ -58,8 +58,9 @@ small independent setup/status surface and does not manage packages itself.
 
 ## Package Manager Integration
 
-On supported Unity `6000.5.*f1` releases, the host registers a native **GitHub**
-page through Unity's internal `ExtensionPage` contract and places its row under
+On a validated Editor target—exact Unity `6000.3.22f1` or a Unity
+`6000.5.*f1` final release—the host registers a native **GitHub** page through
+Unity's internal `ExtensionPage` contract and places its row under
 **Sources**. Users reach it through **Window > Package Management > Package
 Manager > Sources > GitHub**, or through the explicit buttons in Welcome and
 Preferences.
@@ -89,6 +90,14 @@ as Git Submodule...**. Its Git-only probe reads the repository's default branch,
 remote branches, and root package identity before enabling the corresponding
 fields.
 
+After a package resolve or script reload, Package Manager can restore its active
+page selection before recycled details-toolbar fields catch up. Native actions
+therefore resolve the exact single selection through the active page and package
+database before presenting or executing an action. Zero, multiple, missing, or
+identity-mismatched selections fail closed; the toolbar refresh argument remains
+only a presentation fallback when that independently validated selection seam is
+unavailable.
+
 For an installed verified submodule, Unity's native **Manage** menu receives
 **Convert to Read-Only Package** and **Uninstall Submodule**. An eligible direct
 read-only Git dependency receives **Convert to Submodule**. Read-only packages
@@ -114,8 +123,11 @@ validated independently. Installed package submodules are labelled
 page, repository visibility is shown as **Public** or **Private**. The Source
 card reports **GitHub** with the themed Git icon, or **Git** for another host.
 
-The supported contract line is Unity `6000.5.*f1`, with `6000.5.0f1` declared as
-the minimum. If a required internal contract cannot be verified, that extension
+The validated Package Manager contract targets are exact Unity `6000.3.22f1`
+and Unity `6000.5.*f1` final releases; Unity `6000.4` is not a supported
+contract target. `package.json` declares `6000.3.22f1` only as UPM's minimum
+eligibility version because the manifest cannot encode this non-contiguous
+matrix. If a required internal contract cannot be verified, that extension
 feature is not installed. The package does not replace, hide, or broadly clear
 Unity's package database or standard Package Manager UI, and no legacy manager
 fallback is injected.
@@ -294,10 +306,11 @@ completion, conversion eligibility, confirmation policy, and mutation rollback
 outcomes.
 
 The `PackageManagerCompatibility` category inventories the reflected Package
-Manager types and exact signatures used by supported Unity 6000.5 patches, then
-verifies Harmony ownership for resolved hooks. It reports contract drift with
-the Unity version and platform. Runs on other Editor generations are migration
-diagnostics and do not constitute a support claim.
+Manager types and exact signatures used by the validated Unity `6000.3.22f1`
+and Unity `6000.5.*f1` contracts, then verifies Harmony ownership for resolved
+hooks. It reports contract drift with the Unity version and platform. Runs on
+any other Editor version, including Unity `6000.4`, are migration diagnostics
+and do not constitute a support claim.
 
 Repository CI also performs package metadata, documentation-link, Unity-meta,
 workflow, and package-archive checks that do not require a Unity license.
