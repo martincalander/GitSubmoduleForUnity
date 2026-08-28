@@ -334,6 +334,133 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
         }
 
         [Test]
+        public void FastProcessOutput_RepeatedGitCommandsDrainWithoutFalseTruncation()
+        {
+            if (!ProcessCommandRunner.TryResolveCommand(
+                    "git",
+                    out ExecutableResolution git))
+            {
+                Assert.Ignore("Git is not installed or could not be resolved on this machine.");
+            }
+
+            var runner = new ProcessCommandRunner();
+            for (int index = 0; index < 128; index++)
+            {
+                CommandResult result = runner.Run(new CommandSpec
+                {
+                    FileName = git.ResolvedPath,
+                    ArgumentList = new[] { "--version" },
+                    WorkingDirectory = Environment.CurrentDirectory,
+                    TimeoutMs = 5000,
+                    RequireStrictUtf8StdOut = index % 2 == 0
+                });
+
+                Assert.That(result.IsSuccess, Is.True, $"Iteration {index}: {result.StdErr}");
+                Assert.That(result.StdOutTruncated, Is.False, $"Iteration {index}");
+                Assert.That(result.StdErrTruncated, Is.False, $"Iteration {index}");
+                Assert.That(result.StdOut, Does.StartWith("git version"), $"Iteration {index}");
+            }
+        }
+
+        [Test]
+        public void ConcurrentProcessStarts_DoNotCrossInheritRedirectedPipes()
+        {
+            if (!ProcessCommandRunner.TryResolveCommand(
+                    "git",
+                    out ExecutableResolution git))
+            {
+                Assert.Ignore("Git is not installed or could not be resolved on this machine.");
+            }
+
+            const int commandCount = 24;
+            using var ready = new CountdownEvent(commandCount);
+            using var start = new ManualResetEventSlim(false);
+            var results = new CommandResult[commandCount];
+            var workers = new Thread[commandCount];
+            for (int index = 0; index < commandCount; index++)
+            {
+                int workerIndex = index;
+                workers[index] = new Thread(() =>
+                {
+                    bool sleeper = workerIndex % 4 == 0;
+                    var spec = sleeper
+                        ? CreateSleeperCommandSpec()
+                        : new CommandSpec
+                        {
+                            FileName = git.ResolvedPath,
+                            ArgumentList = new[] { "--version" },
+                            WorkingDirectory = Environment.CurrentDirectory,
+                            TimeoutMs = 15000
+                        };
+                    ready.Signal();
+                    start.Wait();
+                    results[workerIndex] = new ProcessCommandRunner().Run(spec);
+                })
+                {
+                    IsBackground = true,
+                    Name = "Git Submodule Manager concurrent start test"
+                };
+                workers[index].Start();
+            }
+
+            bool allWorkersReady = ready.Wait(5000);
+            start.Set();
+            var workerStopped = new bool[commandCount];
+            for (int index = 0; index < commandCount; index++)
+                workerStopped[index] = workers[index].Join(20000);
+
+            Assert.That(allWorkersReady, Is.True, "Workers did not reach the start barrier.");
+            for (int index = 0; index < commandCount; index++)
+                Assert.That(workerStopped[index], Is.True, $"Worker {index} did not stop.");
+
+            for (int index = 0; index < commandCount; index++)
+            {
+                CommandResult result = results[index];
+                Assert.That(result, Is.Not.Null, $"Worker {index}");
+                Assert.That(result.IsSuccess, Is.True, $"Worker {index}: {result.StdErr}");
+                Assert.That(result.StdOutTruncated, Is.False, $"Worker {index}");
+                Assert.That(result.StdErrTruncated, Is.False, $"Worker {index}");
+                if (index % 4 != 0)
+                {
+                    Assert.That(
+                        result.StdOut,
+                        Does.StartWith("git version"),
+                        $"Worker {index}");
+                }
+            }
+        }
+
+        private static CommandSpec CreateSleeperCommandSpec()
+        {
+            if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+            {
+                string commandPrompt = Environment.GetEnvironmentVariable("ComSpec") ??
+                                       Path.Combine(
+                                           Environment.GetFolderPath(
+                                               Environment.SpecialFolder.System),
+                                           "cmd.exe");
+                return new CommandSpec
+                {
+                    FileName = commandPrompt,
+                    ArgumentList = new[]
+                    {
+                        "/d", "/c", "ping 127.0.0.1 -n 7 > nul"
+                    },
+                    WorkingDirectory = Environment.CurrentDirectory,
+                    TimeoutMs = 15000
+                };
+            }
+
+            return new CommandSpec
+            {
+                FileName = "/bin/sh",
+                ArgumentList = new[] { "-c", "sleep 6" },
+                WorkingDirectory = Environment.CurrentDirectory,
+                TimeoutMs = 15000
+            };
+        }
+
+        [Test]
         public void StrictUtf8Output_ReportsInvalidGitBlobBytesWithoutReplacement()
         {
             byte[] prefix = Encoding.UTF8.GetBytes(

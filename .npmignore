@@ -1,4 +1,7 @@
 .github/
+.ci/
 .markdownlint-cli2.jsonc
+artifacts/
 CITATION.cff
 CITATION.cff.meta
+dist/

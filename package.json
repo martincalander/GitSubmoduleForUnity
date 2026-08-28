@@ -2,7 +2,7 @@
   "name": "com.martincalander.gitsubmodulemanager",
   "version": "2.0.0",
   "displayName": "Git Submodule Manager",
-  "description": "Reliable, cross-platform Unity Editor tooling for discovering and managing Git submodule packages under Packages/.",
+  "description": "Manage Git-hosted UPM packages in Unity as editable submodules or read-only dependencies.",
   "unity": "6000.3",
   "unityRelease": "22f1",
   "documentationUrl": "https://github.com/martincalander/GitSubmoduleManager/blob/main/Documentation~/index.md",

@@ -15,9 +15,9 @@ The project especially values:
 - accessibility and native-editor UI improvements;
 - concise documentation and diagnostics.
 
-Discuss large features or architecture changes in an issue before investing in
-an implementation. The project intentionally keeps a narrow submodule-only
-scope.
+Discuss large features or architecture changes in an issue before starting
+work. The project stays focused on Git-hosted UPM packages managed through
+Unity's native Package Manager; it is not a general-purpose Git client.
 
 ## Development Prerequisites
 
@@ -72,22 +72,25 @@ behavior.
 - Keep runtime code out of the package; this is an editor-only tool.
 - Preserve Windows, macOS, and Linux behavior.
 - Never evaluate user input through a shell.
-- Keep mutations restricted to direct `Packages/com.author.package` paths.
+- Restrict submodule filesystem changes to validated direct
+  `Packages/<reverse-domain-name>` children, and guard UPM manifest changes
+  independently.
 - Do not store credentials or run installers without the user's explicit
   confirmation.
 - Avoid implicit network or repository mutations during editor startup.
-- Prefer explicit state, actionable errors, and rollback over optimistic UI.
+- When a mutation fails, roll back only state the package owns, preserve
+  recovery evidence otherwise, and explain the next safe action.
 - Keep public APIs minimal; most implementation types should remain `internal`.
 - Add tests for parsing, state transitions, validation, and regressions.
 
 ## Test Before Opening a Pull Request
 
-Run the license-free repository checks:
+Run the checks that do not require a Unity license:
 
 ```bash
 python3 .github/scripts/validate_repository.py
 npx --yes markdownlint-cli2@0.23.0 "**/*.md" "#Library" "#Temp"
-npm pack --dry-run
+npm pack --ignore-scripts --dry-run
 ```
 
 In Unity:
@@ -130,17 +133,16 @@ the `PackageManagerCompatibility` category. After it passes, run the complete
 `MartinCalander.GitSubmoduleManager.Editor.Tests` assembly because behavior and
 state-transition coverage intentionally lives outside the compatibility subset.
 
-Maintainers can also dispatch **Sanity Checks** with a reviewed full commit SHA
-and an exact `unity_version` of `6000.3.22f1` or a `6000.5.*f1` final release.
-Manual dispatch stages the same package revision and runs the full EditMode
-assembly in that Editor; normal protected push runs remain pinned to the minimum
-`6000.3.22f1` eligibility baseline. Unity 6000.4 is not a validated target.
-
 CI runs license-free structure, Markdown, archive, and portability checks on
-every pull request. Unity credentials are never exposed to pull-request code.
-After reviewing a contribution, a maintainer can manually dispatch the
-**Sanity Checks** workflow with the reviewed commit as its `ref` to run the
-protected Unity compile and EditMode-test gate.
+every pull request without exposing Unity credentials to pull-request code.
+After reviewing a contribution, a maintainer can dispatch **Sanity Checks**
+from protected `main` with the full commit SHA and an exact `unity_version` of
+`6000.3.22f1` or `6000.5.0f1`. Those CI choices use reviewed, digest-pinned
+GameCI images; additional `6000.5.*f1` final patches can be checked locally
+before their image digest is added. The job stages that exact package revision
+and runs the full EditMode assembly. Protected push runs remain pinned to the
+minimum `6000.3.22f1` eligibility baseline. Unity 6000.4 is not a validated
+target.
 
 Branch protection requires the workflow's stable **Required sanity gate**,
 which aggregates package validation and the complete Linux, macOS, and Windows

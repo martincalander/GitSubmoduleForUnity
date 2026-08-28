@@ -740,8 +740,10 @@ namespace MartinCalander.GitSubmoduleManager.Editor
     {
         private const int WaitPollIntervalMs = 50;
         private const int ProcessTreeTerminationTimeoutMs = 5000;
-        private const int OutputDrainTimeoutMs = 1000;
+        private const int OutputDrainTimeoutMs = 5000;
+        private const int ForcedStopOutputDrainTimeoutMs = 1000;
         private const int MaximumEnumeratedProcesses = 100000;
+        private static readonly object ProcessStartGate = new object();
         private static readonly Encoding StrictUtf8Encoding =
             new UTF8Encoding(false, true);
 
@@ -789,8 +791,20 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 var stdOutCompleted = new ManualResetEventSlim(false);
                 var stdErrCompleted = new ManualResetEventSlim(false);
 
-                if (!process.Start())
-                    return Failure($"Failed to start process: {spec.FileName}", resolution.ResolvedPath);
+                lock (ProcessStartGate)
+                {
+                    // Unity's Mono creates redirected pipe handles inside
+                    // Process.Start and closes the parent's child-side handles
+                    // only after native process creation returns. Serializing
+                    // that narrow window prevents concurrent children from
+                    // inheriting one another's stdout or stderr handles.
+                    if (!process.Start())
+                    {
+                        return Failure(
+                            $"Failed to start process: {spec.FileName}",
+                            resolution.ResolvedPath);
+                    }
+                }
                 processStarted = true;
                 Thread stdOutReader = spec.RequireStrictUtf8StdOut
                     ? StartBoundedStrictUtf8Reader(
@@ -819,9 +833,10 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                         stdOutReader,
                         stdErrReader,
                         stdOutCompleted,
-                        stdErrCompleted);
-                    DisposeCompletedEvent(stdOutCompleted);
-                    DisposeCompletedEvent(stdErrCompleted);
+                        stdErrCompleted,
+                        OutputDrainTimeoutMs);
+                    DisposeCompletedEvent(stdOutCompleted, stdOutReader);
+                    DisposeCompletedEvent(stdErrCompleted, stdErrReader);
 
                     return CreateResult(
                         process.ExitCode,
@@ -842,9 +857,10 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                     stdOutReader,
                     stdErrReader,
                     stdOutCompleted,
-                    stdErrCompleted);
-                DisposeCompletedEvent(stdOutCompleted);
-                DisposeCompletedEvent(stdErrCompleted);
+                    stdErrCompleted,
+                    ForcedStopOutputDrainTimeoutMs);
+                DisposeCompletedEvent(stdOutCompleted, stdOutReader);
+                DisposeCompletedEvent(stdErrCompleted, stdErrReader);
 
                 // Repository commands require proof for the complete process tree,
                 // which the current cross-platform runner cannot provide after a
@@ -1398,58 +1414,74 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                     UseShellExecute = false,
                     CreateNoWindow = true
                 };
-                using var psProcess = Process.Start(startInfo);
-                if (psProcess == null)
-                    return false;
-
-                string output = psProcess.StandardOutput.ReadToEnd();
-                if (!psProcess.WaitForExit(2000) || psProcess.ExitCode != 0)
-                    return false;
-
-                var childrenByParent = new Dictionary<int, List<int>>();
-                string[] lines = output.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries);
-                if (lines.Length > MaximumEnumeratedProcesses)
-                    return false;
-
-                foreach (string line in lines)
+                Process psProcess;
+                lock (ProcessStartGate)
+                    psProcess = Process.Start(startInfo);
+                using (psProcess)
                 {
-                    string[] fields = line.Split((char[])null, StringSplitOptions.RemoveEmptyEntries);
-                    if (fields.Length < 2 ||
-                        !int.TryParse(fields[0], out int processId) ||
-                        !int.TryParse(fields[1], out int parentProcessId) ||
-                        processId <= 1 || processId == Process.GetCurrentProcess().Id)
-                    {
-                        continue;
-                    }
+                    if (psProcess == null)
+                        return false;
 
-                    if (!childrenByParent.TryGetValue(parentProcessId, out List<int> children))
-                    {
-                        children = new List<int>();
-                        childrenByParent[parentProcessId] = children;
-                    }
-                    children.Add(processId);
-                }
+                    string output = psProcess.StandardOutput.ReadToEnd();
+                    if (!psProcess.WaitForExit(2000) || psProcess.ExitCode != 0)
+                        return false;
 
-                var pending = new Stack<int>();
-                pending.Push(rootProcessId);
-                var seen = new HashSet<int> { rootProcessId };
-                while (pending.Count > 0)
-                {
-                    int parentProcessId = pending.Pop();
-                    if (!childrenByParent.TryGetValue(parentProcessId, out List<int> children))
-                        continue;
+                    var childrenByParent = new Dictionary<int, List<int>>();
+                    string[] lines = output.Split(
+                        new[] { '\r', '\n' },
+                        StringSplitOptions.RemoveEmptyEntries);
+                    if (lines.Length > MaximumEnumeratedProcesses)
+                        return false;
 
-                    foreach (int childProcessId in children)
+                    foreach (string line in lines)
                     {
-                        if (!seen.Add(childProcessId))
+                        string[] fields = line.Split(
+                            (char[])null,
+                            StringSplitOptions.RemoveEmptyEntries);
+                        if (fields.Length < 2 ||
+                            !int.TryParse(fields[0], out int processId) ||
+                            !int.TryParse(fields[1], out int parentProcessId) ||
+                            processId <= 1 ||
+                            processId == Process.GetCurrentProcess().Id)
+                        {
                             continue;
+                        }
 
-                        descendants.Add(childProcessId);
-                        pending.Push(childProcessId);
+                        if (!childrenByParent.TryGetValue(
+                                parentProcessId,
+                                out List<int> children))
+                        {
+                            children = new List<int>();
+                            childrenByParent[parentProcessId] = children;
+                        }
+                        children.Add(processId);
                     }
-                }
 
-                return true;
+                    var pending = new Stack<int>();
+                    pending.Push(rootProcessId);
+                    var seen = new HashSet<int> { rootProcessId };
+                    while (pending.Count > 0)
+                    {
+                        int parentProcessId = pending.Pop();
+                        if (!childrenByParent.TryGetValue(
+                                parentProcessId,
+                                out List<int> children))
+                        {
+                            continue;
+                        }
+
+                        foreach (int childProcessId in children)
+                        {
+                            if (!seen.Add(childProcessId))
+                                continue;
+
+                            descendants.Add(childProcessId);
+                            pending.Push(childProcessId);
+                        }
+                    }
+
+                    return true;
+                }
             }
             catch
             {
@@ -1503,17 +1535,22 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                     UseShellExecute = false,
                     CreateNoWindow = true
                 };
-                using var taskKill = Process.Start(startInfo);
-                if (taskKill == null)
-                    return false;
-
-                if (!taskKill.WaitForExit(ProcessTreeTerminationTimeoutMs))
+                Process taskKill;
+                lock (ProcessStartGate)
+                    taskKill = Process.Start(startInfo);
+                using (taskKill)
                 {
-                    TryKillRootProcess(taskKill);
-                    return false;
-                }
+                    if (taskKill == null)
+                        return false;
 
-                return taskKill.ExitCode == 0;
+                    if (!taskKill.WaitForExit(ProcessTreeTerminationTimeoutMs))
+                    {
+                        TryKillRootProcess(taskKill);
+                        return false;
+                    }
+
+                    return taskKill.ExitCode == 0;
+                }
             }
             catch
             {
@@ -1742,44 +1779,67 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             Thread stdOutReader,
             Thread stdErrReader,
             ManualResetEventSlim stdOutCompleted,
-            ManualResetEventSlim stdErrCompleted)
+            ManualResetEventSlim stdErrCompleted,
+            int outputDrainTimeoutMs)
         {
-            if (!stdOutCompleted.Wait(OutputDrainTimeoutMs))
-            {
-                // A successful root-process exit is not proof that every byte
-                // reached the reader. Structural callers must fail closed when
-                // the pipe could not be drained completely.
-                stdOut.MarkTruncated();
-                try
-                {
-                    process.StandardOutput.Close();
-                }
-                catch
-                {
-                    // The process may have closed the stream concurrently.
-                }
-                stdOutReader.Join(250);
-            }
-
-            if (!stdErrCompleted.Wait(OutputDrainTimeoutMs))
-            {
-                stdErr.MarkTruncated();
-                try
-                {
-                    process.StandardError.Close();
-                }
-                catch
-                {
-                    // The process may have closed the stream concurrently.
-                }
-                stdErrReader.Join(250);
-            }
+            // Both readers have already been draining concurrently while the
+            // process ran. Give them one shared post-exit budget so a busy
+            // Editor cannot misclassify a small, complete Git response as
+            // truncated, without letting inherited pipe handles block forever.
+            var drainStopwatch = Stopwatch.StartNew();
+            DrainRedirectedStream(
+                process.StandardOutput,
+                stdOut,
+                stdOutReader,
+                stdOutCompleted,
+                drainStopwatch,
+                outputDrainTimeoutMs);
+            DrainRedirectedStream(
+                process.StandardError,
+                stdErr,
+                stdErrReader,
+                stdErrCompleted,
+                drainStopwatch,
+                outputDrainTimeoutMs);
         }
 
-        private static void DisposeCompletedEvent(ManualResetEventSlim completedEvent)
+        private static void DrainRedirectedStream(
+            TextReader reader,
+            BoundedTextBuffer destination,
+            Thread readerThread,
+            ManualResetEventSlim completed,
+            Stopwatch drainStopwatch,
+            int outputDrainTimeoutMs)
         {
-            // Do not dispose an event that an asynchronous stream callback may still signal.
-            if (completedEvent.IsSet)
+            int remainingMs = Math.Max(
+                0,
+                Math.Max(0, outputDrainTimeoutMs) -
+                (int)Math.Min(int.MaxValue, drainStopwatch.ElapsedMilliseconds));
+            if (completed.Wait(remainingMs))
+                return;
+
+            // A successful root-process exit is not proof that every byte
+            // reached the reader. Structural callers must fail closed when the
+            // pipe could not be drained completely.
+            destination.MarkTruncated();
+            try
+            {
+                reader.Close();
+            }
+            catch
+            {
+                // The process may have closed the stream concurrently.
+            }
+            readerThread.Join(250);
+        }
+
+        private static void DisposeCompletedEvent(
+            ManualResetEventSlim completedEvent,
+            Thread readerThread)
+        {
+            // Do not dispose an event until its reader has returned from the
+            // finally block that signals it.
+            if (completedEvent.IsSet && readerThread.Join(250))
                 completedEvent.Dispose();
         }
 

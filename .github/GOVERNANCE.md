@@ -11,8 +11,8 @@ Decisions are evaluated in this order:
 1. protect users and their repositories from data loss or unsafe mutations;
 2. preserve compatibility across supported Unity versions, Windows, macOS,
    and Linux;
-3. keep the package editor-only and focused on Git submodules directly below
-   `Packages/`;
+3. keep the package editor-only and focused on Git-backed UPM packages, with
+   editable submodules limited to direct children of `Packages/`;
 4. maintain clear, testable, and reviewable code;
 5. improve performance where it does not compromise correctness or clarity.
 
@@ -56,15 +56,19 @@ before opening the normal public discussion.
 
 - Changes normally enter `main` through a pull request.
 - Required CI checks must pass before merge.
-- At least one maintainer approval is expected for code changes.
-- Authors do not approve their own changes when another active maintainer is
+- Code changes should receive an independent maintainer review when one is
   available.
+- When the project has only one active maintainer, the project lead may merge
+  after required CI passes and must record the verification performed in the
+  pull request.
+- Authors do not approve their own changes.
 - Force pushes to protected branches and rewriting published release tags are
   not part of the normal workflow.
 
-Repository administrators may bypass the normal process only to respond to a
-security incident, restore a broken release or automation path, or recover the
-repository. The reason should be documented afterward when disclosure is safe.
+Repository administrators may otherwise bypass the normal process only to
+respond to a security incident, restore a broken release or automation path, or
+recover the repository. The reason should be documented afterward when
+disclosure is safe.
 
 ## Releases
 

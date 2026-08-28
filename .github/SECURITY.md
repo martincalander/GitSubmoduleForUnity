@@ -2,14 +2,14 @@
 
 ## Supported Versions
 
-Security fixes are applied to the latest released major version and the current
-`main` branch.
+Security fixes are applied to the latest 2.x release and the current `main`
+branch.
 
-| Version | Supported |
+| Version or ref | Supported |
 | --- | --- |
 | 2.x | Yes |
-| 1.x | No |
-| 0.x | No |
+| `main` | Yes |
+| 1.x and earlier | No |
 
 ## Report a Vulnerability
 
@@ -23,12 +23,12 @@ Email [martin.calander@gmail.com](mailto:martin.calander@gmail.com) with:
 - relevant operating system, Unity, Git, and GitHub CLI versions;
 - suggested remediation, if available.
 
-Do not include real credentials or third-party private repository data. Encrypt
-sensitive attachments before sending and request a secure exchange method when
-needed.
+Do not include real credentials or third-party private repository data. Do not
+email sensitive attachments; ask for a secure exchange method first.
 
-You can expect acknowledgment within 72 hours and an initial assessment within
-seven days. Disclosure timing will be coordinated around a fix and release.
+I aim to acknowledge reports within 72 hours and provide an initial assessment
+within seven days. Disclosure timing will be coordinated around a fix and
+release.
 
 ## Security Model
 
@@ -40,7 +40,8 @@ The package launches `git` and optional `gh` processes with
 - repository URLs, branch names, package names, and managed paths are validated;
 - network repositories are limited to HTTPS and SSH; plaintext `http://`,
   `git://`, embedded credentials, and executable remote helpers are rejected;
-- mutations are restricted to direct `Packages/com.author.package` paths;
+- submodule filesystem changes are restricted to validated direct
+  `Packages/<reverse-domain-name>` children;
 - stdout and stderr are redirected, drained concurrently, bounded, and treated
   as unusable for structural parsing when incomplete;
 - commands have bounded timeouts;
@@ -58,17 +59,20 @@ credential manager, SSH agent, and GitHub CLI.
 ### Network access
 
 - Git performs clone, fetch, remote branch, and submodule operations.
-- GitHub CLI performs authenticated repository discovery and root
-  `package.json` checks.
+- GitHub CLI performs authenticated repository discovery and retrieves root
+  package metadata. Catalogue entries require a valid root `package.json` and
+  matching `package.json.meta` from the same commit.
 - The package does not contain its own HTTP client or telemetry.
 
 ### Filesystem access
 
-The package reads project `.gitmodules` and package metadata. Mutating package
-operations are constrained to validated direct children of `Packages/`.
+The package reads project `.gitmodules` and package metadata. Submodule
+filesystem changes are constrained to validated direct children of `Packages/`.
 Persisted submodule URLs, local Git configuration, worktree origins, and
-postconditions are revalidated around mutations. Root manifests must be bounded
-regular UTF-8 files rather than symbolic links or reparse points.
+postconditions are revalidated around mutations. Catalogue entries and
+read-only installs require bounded, strict-UTF-8 root `package.json` and
+`package.json.meta` blobs from the same commit. Local package metadata must be
+regular files rather than symbolic links or reparse points.
 
 ## User Responsibilities
 
