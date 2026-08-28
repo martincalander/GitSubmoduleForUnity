@@ -66,11 +66,20 @@ Manager > Sources > GitHub**, or through the explicit buttons in Welcome and
 Preferences.
 
 The page combines installed GitHub packages from the asynchronous submodule
-snapshot and Package Manager's installed Git-package state with valid root UPM
-packages from the authenticated discovery catalogue. All records participate in
-Package Manager's own list, search, sorting, filtering, selection, details tabs,
-action toolbar, and loading state. **Refresh** restarts installed-state discovery
-and the remote scan.
+snapshot and Package Manager's installed Git-package state with catalogue-
+eligible root UPM packages from authenticated discovery. Eligibility requires
+a valid root `package.json` and Unity `package.json.meta`; the latter is a
+classification signal rather than a provenance or trust boundary. All records
+participate in Package Manager's own list, search, sorting, filtering, selection,
+details tabs, action toolbar, and loading state. **Refresh** restarts
+installed-state discovery and the remote scan.
+
+One bounded GitHub GraphQL response reads both files as regular tree entries
+from the same default-branch commit. Discovery rejects missing entries,
+symlinks, non-blobs, binary or truncated content, oversized data, malformed
+manifests, and meta files without exactly one root `fileFormatVersion: 2` and
+one nonzero 32-hexadecimal root GUID. Manifest validation cache entries are
+keyed by both blob object IDs so a changed marker cannot reuse stale eligibility.
 
 For a valid repository that is not installed, the projection creates a
 transient placeholder in Package Manager's in-memory database. It exists only
@@ -81,14 +90,23 @@ as installed.
 Selecting a discovery result mounts a **Repository** link, a branch selector,
 and one primary **Install** dropdown in Unity's native details regions. The
 branch selector prefers `main`, falls back to the remote default when `main` is
-unavailable, and uses `git ls-remote --heads` for additional choices. The
-install dropdown offers an editable Git submodule or a normal read-only UPM Git
-dependency.
+unavailable, and obtains both facts plus the complete bounded branch choices
+from one Git `ls-remote --symref` query. Catalogue metadata is not treated as
+authoritative branch state. A failed or structurally incomplete query keeps
+installation disabled until the user invokes Package Manager's native refresh;
+if Git cannot identify a valid default, the user must explicitly choose one of
+the completely verified branches. The install dropdown offers an editable Git
+submodule or a normal read-only UPM Git dependency.
 
 The package extends Package Manager's native **+** menu with **Install package
 as Git Submodule...**. Its Git-only probe reads the repository's default branch,
-remote branches, and root package identity before enabling the corresponding
-fields.
+remote branches, root package identity, and sibling meta marker before enabling
+the corresponding fields. Both files come from the same temporary clone commit.
+The probe first parses exact NUL-delimited Git tree records, accepts only
+`100644` or `100755` blob entries, and reads each file by its validated object
+ID. A valid regular manifest with missing, invalid, or symbolic-link meta remains
+eligible only in this explicit URL workflow and adds an unavoidable warning to
+the repository trust confirmation; a symbolic-link manifest is invalid.
 
 After a package resolve or script reload, Package Manager can restore its active
 page selection before recycled details-toolbar fields catch up. Native actions
@@ -168,6 +186,11 @@ coverage warning, unavailable manifest, incomplete owner scan, duplicate GitHub
 match, or mismatched GitHub version or install identity is blocking; registry
 fallback is deliberately skipped in those cases.
 
+Each custom-package registry fallback is bound to the exact successful terminal
+catalogue revision that proved absence. If discovery revision or coverage
+changes while registry search is pending, its result is discarded and the
+requirement is resolved again against the current catalogue.
+
 A plan is installable only when every missing dependency has exactly one safe,
 version-compatible source. Unresolved, mismatched, or ambiguous requirements
 block the root install. The confirmation lists every missing requirement and
@@ -188,6 +211,8 @@ Commands run through `System.Diagnostics.Process` with:
 - redirected standard output and error;
 - concurrent stream draining;
 - bounded output and timeouts;
+- raw-byte, BOM-independent strict UTF-8 decoding for structural output, with
+  decoder flush at EOF and only a genuine UTF-8 BOM removed;
 - `GIT_TERMINAL_PROMPT=0` and `GCM_INTERACTIVE=Never`;
 - explicit executable resolution for Windows, macOS, and Linux Editors.
 
@@ -213,24 +238,89 @@ syntax, symlinked or oversized manifests, duplicate registrations, and malformed
 or truncated structural Git output fail closed.
 
 Submodule installation validates the cloned root manifest, Git registration,
-origin, destination, revision, and branch postconditions. Read-only installation
-uses Unity Package Manager and verifies an exact direct Git manifest entry. For
+origin, destination, revision, and branch postconditions, and requires the
+worker-side checkout `HEAD` to equal the exact commit whose root metadata was
+inspected before success can trigger refresh or reload. Final add verification
+reads the staged `.gitmodules` blob and package gitlink together, validates the
+immutable registration, and binds them to the initialized child's approved
+origin and exact `HEAD`. The regular, non-linked, bounded strict-UTF-8
+worktree `.gitmodules` file must match that staged blob. A terminal
+index/`HEAD`, origin, index/`HEAD` sequence rejects stage-only redirects and
+late origin or commit swaps; the closing proof also repeats clean-state and
+interrupted-operation checks so late package files cannot be imported as a
+successful install. Reload reconciliation
+retains that required commit evidence but deliberately avoids synchronous Git
+processes on Unity's main thread. Read-only installation pins Unity Package
+Manager to the same exact inspected commit, then verifies both the exact direct
+Git manifest entry and Unity's reported `PackageInfo.git.hash`. For
 both modes, the installed root manifest must match the exact package name,
 version, and dependency-map fingerprint captured from the selected branch before
-mutation. A mismatch rolls back the newly added submodule or removes the newly
-added read-only dependency only when cleanup ownership can be proven. Failed or
-ambiguous cleanup retains state with an explicit warning to inspect the package
-path or `Packages/manifest.json` before retrying.
+mutation. Catalogue roots and catalogue-resolved GitHub dependencies also carry
+the validated meta GUID through the reload-safe install plan and require the
+installed root `package.json.meta` to match it. A mismatch rolls back the newly
+added submodule or removes the newly added read-only dependency only when cleanup
+ownership can be proven. Failed or ambiguous cleanup retains state with an
+explicit warning to inspect the package path or `Packages/manifest.json` before
+retrying.
+
+Verified submodule meta evidence also requires the checked-out commit to retain
+`package.json.meta` as a regular `100644` or `100755` Git blob. This tree-mode
+postcondition is independent of its worktree representation, so settings such
+as `core.symlinks=false` cannot turn a Git symbolic-link entry into trusted
+package intent.
 
 Read-only-to-submodule conversion creates and verifies the destination checkout
-before removing the manifest dependency. Submodule-to-read-only conversion
-records the dependency before removing the verified worktree and pins the
-current committed revision. Package Manager removal is intercepted so Unity
-cannot recursively delete a verified submodule as a raw embedded directory.
+before removing the manifest dependency. Its root manifest is read through the
+regular Git blob recorded by Unity's exact resolved commit, then validated as a
+matching UPM package independently of the worktree representation. Consequently
+`core.symlinks=false` cannot make a symbolic-link manifest eligible, and mutable
+`HEAD` is not a tree-mode authority. Submodule-to-read-only conversion first
+reads the current committed revision's root `package.json` and
+`package.json.meta` from their exact regular Git blobs. The manifest must be a
+valid UPM manifest declaring the selected package name, and the bounded strict
+UTF-8 meta marker must contain the canonical Unity header and a nonzero GUID.
+Only then does conversion record the pinned dependency before removing the
+verified worktree. Package Manager removal is intercepted so Unity cannot
+recursively delete a verified submodule as a raw embedded directory.
+
+Read-only dependency edits use byte-exact atomic replacement of
+`Packages/manifest.json`. Randomized replacement, displaced, and recovery
+siblings are never unlinked after a mutable read. Once cleanup ownership is
+confirmed, the sibling is atomically renamed to another unique same-directory
+recovery path and retained there, so an in-place or replacement late writer's
+bytes remain recoverable at the cleanup boundary.
 
 The confirmation preference can suppress only clean routine removal or
 conversion prompts. Dirty, unpushed, changed, or unverified-state decisions are
 never silently approved.
+
+Cached local tracking refs are not publication evidence for destructive
+removal. For a clean initialized worktree, removal uses bounded Git protocol
+queries to require the exact commit on the registered remote and a complete
+branch-or-tag advertisement whose tip contains it. Local replacement objects
+and grafted ancestry are never trusted. The complete removal assessment is
+captured again after the network round trip, and conversion carries the same
+path-, URL-, and commit-bound proof into its target-first removal step instead
+of issuing that proof twice.
+
+The destructive path never runs a broad `git rm -f`. It first moves the exact
+package worktree and `.gitmodules` inode into project-owned Recovery, then uses
+one Git-generated full-object binary patch to remove the exact 160000 gitlink
+and update the exact staged `.gitmodules` blob under one Git index lock. A
+different staged blob or gitlink rejects the whole patch, and a late writer at
+either worktree path is preserved. The desired `.gitmodules` bytes are created
+only at an absent path and verified against the final staged blob. The closing
+proof rechecks the exact desired index, regular worktree identity, quiet diff,
+and package-path absence after test or integration hooks can run. Exact CRLF to
+LF normalization is accepted only when the normalized bytes hash to the staged
+blob; arbitrary filters and working-tree encodings remain blocked. Failed-add
+rollback separately captures the exact add-produced gitlink and staged
+`.gitmodules` identity, and proceeds only when removing exactly the target
+section reproduces the pre-add baseline. Once Recovery mutation begins, its
+postconditions run non-cancellably and every unsafe outcome reports the exact
+preserved paths. All authoritative `.gitmodules` reads are regular-file checked
+and bounded to 128 KiB so binary patch evidence always fits the process-output
+safety envelope.
 
 ## Discovery State
 
@@ -242,6 +332,14 @@ inside each owner. Repository node IDs are sent to GitHub GraphQL in bounded
 batches, and each confirmed root manifest is published into an immutable
 snapshot as soon as its validation batch completes. Aggregation and immutable
 snapshot publication remain on Unity's main thread.
+
+Automatic catalogue eligibility reads the root `package.json` and
+`package.json.meta` tree entries from one captured default-branch commit in the
+same bounded GraphQL batch. Both paths must be regular, complete text blobs;
+the meta file must contain Unity's format marker and one nonzero 32-character
+hexadecimal GUID. Validation results are cached only by the collision-safe pair
+of manifest and meta blob object IDs, and the validated GUID is retained in the
+immutable catalogue record for install-time revalidation.
 
 Records are deduplicated by GitHub node ID, falling back to case-insensitive
 owner/name identity. Unavailable, malformed, non-root, or unchecked manifests
@@ -275,10 +373,42 @@ or failure is retained across reload until a matching Package Manager details
 surface or recovery dialog presents it successfully, then consumed so it is not
 shown twice.
 
+A registered submodule never advances a dependency step from the Package Manager
+presentation snapshot's cached commit alone. The coordinator requests a fresh
+proof bound to its runtime scope, persisted operation, exact step index,
+`Packages/<package-name>` path, repository URL, and inspected commit. A worker
+reads the current origin, requires one matching path/URL/branch section in both
+the worktree `.gitmodules` and its immutable stage-0 blob, and repeats the parent
+gitlink and initialized submodule `HEAD` checks. The final parent-index read
+binds that same `.gitmodules` blob identity and exact gitlink. Each worktree
+registration read is one regular, non-linked, strict-UTF-8 file of at most 128
+KiB whose raw Git blob identity equals the staged blob; the terminal proof
+repeats this identity check. The terminal stability sequence is index/`HEAD`,
+origin, then index/`HEAD` again, preventing an origin-only change from hiding
+behind stable commit evidence without reopening the commit-read seam. Pending
+proof keeps the step waiting; unstable, mismatched, truncated, invalid-UTF-8,
+failed, or unconfirmed process evidence fails closed. Reload, step advancement,
+and intervening manager mutation activity retire the proof so another operation
+or step cannot reuse it.
+
+If a persisted primitive or coordinator record is damaged, or a native
+completion retains the operation identity but loses its exact package identity,
+the raw record remains recovery evidence and the session stays mutation-blocked.
+The failure is presented at most once; no step is accepted or reissued. The user
+must inspect the manifest, registered packages, submodule metadata, and parent
+Git state before restarting the Editor to clear that session-only recovery
+block.
+
 Every operation has a worker-owned completion outcome: succeeded, failed with a
 verified rollback, or failed with repository state requiring inspection. That
 safety result finalizes the recovery journal independently of a Package Manager
 selection change or notification exception.
+
+Journal evidence is one bounded regular, non-linked strict-UTF-8 snapshot. On
+POSIX hosts it is opened nonblocking and without following links, so a FIFO or
+late link cannot stall or redirect reload recovery. Replacement and removal
+recheck exact file identity; displaced journal bytes are retained under the
+project recovery directory rather than deleted, and late writers fail closed.
 
 ## Failure Handling
 
@@ -288,8 +418,10 @@ selection change or notification exception.
 - Incomplete bounded output is marked truncated; structural parsers reject it.
 - Failed additions remove only proven untracked artifacts; ambiguous
   `.gitmodules` or manifest state is preserved.
-- Canonical `git rm` postconditions verify the gitlink, registration, index, and
-  filesystem path while retaining Git object metadata where possible.
+- Exact binary index compare-and-swap postconditions verify the gitlink,
+  registration, staged blob, and filesystem path. Removed worktrees and the
+  pre-mutation `.gitmodules` inode remain under
+  `Library/GitSubmoduleManager/Recovery` for explicit recovery or cleanup.
 - Host teardown releases owned projections and callbacks. Reflection or cleanup
   failure is contained and never bulk-mutates Unity's package database.
 - Domain reload and Editor shutdown dispose discovery and dependency-preflight

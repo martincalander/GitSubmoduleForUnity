@@ -7,7 +7,8 @@ Security fixes are applied to the latest released major version and the current
 
 | Version | Supported |
 | --- | --- |
-| 1.x | Yes |
+| 2.x | Yes |
+| 1.x | No |
 | 0.x | No |
 
 ## Report a Vulnerability

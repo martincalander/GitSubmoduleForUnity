@@ -348,6 +348,8 @@ namespace MartinCalander.GitSubmoduleManager.Editor
 
         private IPackageDependencyRegistrySearch activeSearch;
         private MutableRequirement activeSearchRequirement;
+        private bool activeSearchRequiresGitHubAbsenceProof;
+        private long activeSearchGitHubAbsenceRevision;
         private string rootPackageName = string.Empty;
         private string terminalError = string.Empty;
         private bool gitHubDiscoveryRequested;
@@ -466,11 +468,18 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 if (!activeSearch.IsCompleted)
                     return false;
 
-                CompleteRegistrySearch(
-                    activeSearchRequirement,
-                    activeSearch);
-                activeSearch = null;
-                activeSearchRequirement = null;
+                IPackageDependencyRegistrySearch completedSearch = activeSearch;
+                MutableRequirement completedRequirement =
+                    activeSearchRequirement;
+                bool mayUseCompletedSearch =
+                    HasCurrentGitHubAbsenceProofForActiveSearch();
+                ClearActiveRegistrySearch();
+                if (mayUseCompletedSearch)
+                {
+                    CompleteRegistrySearch(
+                        completedRequirement,
+                        completedSearch);
+                }
                 changed = true;
             }
 
@@ -506,7 +515,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
 
                     if (IsUnityPackage(requirement.Name))
                     {
-                        if (!StartRegistrySearch(requirement))
+                        if (!StartRegistrySearch(requirement, null))
                         {
                             changed = true;
                             madeSynchronousProgress = true;
@@ -549,7 +558,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                         continue;
                     }
 
-                    if (!StartRegistrySearch(requirement))
+                    if (!StartRegistrySearch(requirement, snapshot))
                     {
                         changed = true;
                         madeSynchronousProgress = true;
@@ -589,8 +598,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
 
             disposed = true;
             isRunning = false;
-            activeSearch = null;
-            activeSearchRequirement = null;
+            ClearActiveRegistrySearch();
         }
 
         internal static bool IsSuccessfulTerminalDiscovery(
@@ -625,8 +633,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         {
             requirements.Clear();
             registeredPackages.Clear();
-            activeSearch = null;
-            activeSearchRequirement = null;
+            ClearActiveRegistrySearch();
             rootPackageName = string.Empty;
             terminalError = string.Empty;
             gitHubDiscoveryRequested = false;
@@ -822,10 +829,28 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             }
         }
 
-        private bool StartRegistrySearch(MutableRequirement requirement)
+        private bool StartRegistrySearch(
+            MutableRequirement requirement,
+            PackageManagerGitHubDiscoverySnapshot gitHubAbsenceProof)
         {
             if (requirement == null)
                 return false;
+
+            bool requiresGitHubAbsenceProof =
+                !IsUnityPackage(requirement.Name);
+            if (requiresGitHubAbsenceProof &&
+                (!IsSuccessfulTerminalDiscovery(gitHubAbsenceProof) ||
+                 FindGitHubMatches(
+                     requirement.Name,
+                     gitHubAbsenceProof).Count != 0))
+            {
+                requirement.SetTerminal(
+                    PackageDependencyResolutionStatus.Unresolved,
+                    Array.Empty<PackageDependencyCandidate>(),
+                    "Registry fallback was skipped because GitHub package " +
+                    "absence was not bound to one complete catalogue revision.");
+                return false;
+            }
 
             if (facade.TryStartRegistrySearch(
                     requirement.Name,
@@ -835,6 +860,12 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             {
                 activeSearch = search;
                 activeSearchRequirement = requirement;
+                activeSearchRequiresGitHubAbsenceProof =
+                    requiresGitHubAbsenceProof;
+                activeSearchGitHubAbsenceRevision =
+                    requiresGitHubAbsenceProof
+                        ? gitHubAbsenceProof.Revision
+                        : 0L;
                 return true;
             }
 
@@ -846,6 +877,32 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                         ? $"Registry search for {requirement.Name} could not be started."
                         : error));
             return false;
+        }
+
+        private bool HasCurrentGitHubAbsenceProofForActiveSearch()
+        {
+            if (!activeSearchRequiresGitHubAbsenceProof)
+                return true;
+            if (activeSearchRequirement == null)
+                return false;
+
+            PackageManagerGitHubDiscoverySnapshot currentSnapshot =
+                facade?.GitHubSnapshot;
+            return currentSnapshot != null &&
+                   currentSnapshot.Revision ==
+                       activeSearchGitHubAbsenceRevision &&
+                   IsSuccessfulTerminalDiscovery(currentSnapshot) &&
+                   FindGitHubMatches(
+                       activeSearchRequirement.Name,
+                       currentSnapshot).Count == 0;
+        }
+
+        private void ClearActiveRegistrySearch()
+        {
+            activeSearch = null;
+            activeSearchRequirement = null;
+            activeSearchRequiresGitHubAbsenceProof = false;
+            activeSearchGitHubAbsenceRevision = 0L;
         }
 
         private void CompleteRegistrySearch(
@@ -989,7 +1046,8 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                     PackageDependencyResolutionStatus.Unresolved,
                     candidates,
                     $"GitHub metadata for {requirement.Name} does not contain " +
-                    "an exact repository URL and explicit valid default branch. " +
+                    "an exact repository URL, explicit valid default branch, " +
+                    "exact inspected commit, and verified root package.json.meta GUID. " +
                     "Registry search was skipped because a GitHub package exists.");
                 return;
             }
@@ -1237,7 +1295,11 @@ namespace MartinCalander.GitSubmoduleManager.Editor
 
             return !string.IsNullOrEmpty(branch) &&
                    !string.Equals(branch, ".", StringComparison.Ordinal) &&
-                   GitUtility.IsValidBranchName(branch);
+                   GitUtility.IsValidBranchName(branch) &&
+                   GitUtility.IsValidGitObjectId(
+                       repository.PackageManifestCommitOid) &&
+                   GitSubmoduleInstallProbeSnapshot.IsValidMetaGuid(
+                       repository.PackageManifestMetaGuid);
         }
 
         private static PackageDependencyCandidate CreateGitHubCandidate(
@@ -1258,7 +1320,10 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 repository?.DefaultBranch,
                 repository?.Url,
                 GitUtility.ComputePackageDependencyFingerprint(
-                    repository?.Dependencies));
+                    repository?.Dependencies),
+                PackageManifestMetaVerification.Verified,
+                repository?.PackageManifestMetaGuid,
+                repository?.PackageManifestCommitOid);
         }
 
         private static PackageDependencyCandidate CreateRegistryCandidate(

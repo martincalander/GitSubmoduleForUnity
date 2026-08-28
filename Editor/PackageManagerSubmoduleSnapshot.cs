@@ -36,6 +36,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         private static double nextExternalChangeCheck;
         private static double retryNotBefore;
         private static int consecutiveFailures;
+        private static int hostObserverCount;
         private static bool isReady;
         private static bool isListening;
         private static volatile bool isShuttingDown;
@@ -71,6 +72,63 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 lock (Gate)
                     return refreshThread != null;
             }
+        }
+
+        internal static void RetainHostObserver()
+        {
+            lock (Gate)
+            {
+                if (isShuttingDown)
+                    return;
+                hostObserverCount = TransitionHostObserverCount(
+                    hostObserverCount,
+                    retain: true,
+                    shuttingDown: false);
+            }
+
+            EnsureListening();
+        }
+
+        internal static void ReleaseHostObserver()
+        {
+            lock (Gate)
+            {
+                hostObserverCount = TransitionHostObserverCount(
+                    hostObserverCount,
+                    retain: false,
+                    isShuttingDown);
+            }
+
+            StopListeningIfIdle();
+        }
+
+        internal static bool ShouldKeepListening(
+            bool shuttingDown,
+            int observerCount,
+            bool readerActive,
+            bool hasPendingResult,
+            bool hasPendingRequest)
+        {
+            return !shuttingDown &&
+                   (observerCount > 0 || readerActive || hasPendingResult ||
+                    hasPendingRequest);
+        }
+
+        internal static int TransitionHostObserverCount(
+            int observerCount,
+            bool retain,
+            bool shuttingDown)
+        {
+            if (shuttingDown)
+                return 0;
+
+            int normalizedCount = Math.Max(0, observerCount);
+            if (!retain)
+                return Math.Max(0, normalizedCount - 1);
+
+            return normalizedCount == int.MaxValue
+                ? int.MaxValue
+                : normalizedCount + 1;
         }
 
         /// <summary>
@@ -109,7 +167,14 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             }
 
             info = null;
-            return ready && snapshot.TryGet(packageName, localPath, isInstalled, out info);
+            bool found = ready &&
+                         snapshot.TryGet(
+                             packageName,
+                             localPath,
+                             isInstalled,
+                             out info);
+            StopListeningIfIdle();
+            return found;
         }
 
         private static void EnsureListening()
@@ -143,7 +208,11 @@ namespace MartinCalander.GitSubmoduleManager.Editor
 
             PublishPendingResult();
 
-            if (EditorApplication.timeSinceStartup >= nextExternalChangeCheck)
+            bool hasHostObservers;
+            lock (Gate)
+                hasHostObservers = hostObserverCount > 0;
+            if (hasHostObservers &&
+                EditorApplication.timeSinceStartup >= nextExternalChangeCheck)
             {
                 nextExternalChangeCheck = EditorApplication.timeSinceStartup + 1d;
                 long repositoryGeneration = GitOperationService.RepositoryGeneration;
@@ -158,6 +227,33 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             }
 
             TryStartRefresh();
+            StopListeningIfIdle();
+        }
+
+        private static void StopListeningIfIdle()
+        {
+            if (!isListening)
+                return;
+
+            bool keepListening;
+            lock (Gate)
+            {
+                keepListening = ShouldKeepListening(
+                    isShuttingDown,
+                    hostObserverCount,
+                    refreshThread != null,
+                    pendingResult != null,
+                    runningGeneration != requestedGeneration);
+                if (!keepListening)
+                    isListening = false;
+            }
+
+            if (keepListening)
+                return;
+
+            EditorApplication.update -= Update;
+            EditorApplication.projectChanged -= Refresh;
+            AssemblyReloadEvents.beforeAssemblyReload -= OnBeforeAssemblyReload;
         }
 
         private static void TryStartRefresh()
@@ -334,6 +430,10 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             CancellationTokenSource cancellationToDispose;
             lock (Gate)
             {
+                hostObserverCount = TransitionHostObserverCount(
+                    hostObserverCount,
+                    retain: false,
+                    shuttingDown: true);
                 threadToDrain = refreshThread;
                 cancellationToDispose = refreshCancellationSource;
                 try

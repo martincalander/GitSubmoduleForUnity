@@ -197,17 +197,59 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                 "GitSubmodulePresentationProject");
             PackageManagerSubmoduleSnapshotData first = CreateSnapshot(
                 projectRoot,
-                "https://github.com/owner/repository.git");
+                "https://github.com/owner/repository.git",
+                new string('a', 40));
             PackageManagerSubmoduleSnapshotData identical = CreateSnapshot(
                 projectRoot,
-                "https://github.com/owner/repository.git");
+                "https://github.com/owner/repository.git",
+                new string('a', 40));
             PackageManagerSubmoduleSnapshotData changed = CreateSnapshot(
                 projectRoot,
                 "ssh://git@git.example.com/team/repository.git");
+            PackageManagerSubmoduleSnapshotData changedCommit = CreateSnapshot(
+                projectRoot,
+                "https://github.com/owner/repository.git",
+                new string('b', 40));
 
             Assert.That(first.HasSameContent(identical), Is.True);
             Assert.That(first.HasSameContent(changed), Is.False);
+            Assert.That(first.HasSameContent(changedCommit), Is.False);
             Assert.That(first.HasSameContent(null), Is.False);
+        }
+
+        [Test]
+        public void Snapshot_CarriesOnlyValidResolvedSubmoduleCommitEvidence()
+        {
+            string projectRoot = Path.Combine(
+                Path.GetTempPath(),
+                "GitSubmodulePresentationProject");
+            string commit = new string('a', 40);
+            PackageManagerSubmoduleSnapshotData snapshot = CreateSnapshot(
+                projectRoot,
+                "https://github.com/owner/repository.git",
+                commit.ToUpperInvariant());
+
+            Assert.That(
+                snapshot.TryGet(
+                    "com.example.repository",
+                    string.Empty,
+                    true,
+                    out PackageManagerSubmoduleInfo info),
+                Is.True);
+            Assert.That(info.ResolvedCommit, Is.EqualTo(commit));
+
+            PackageManagerSubmoduleSnapshotData invalidSnapshot = CreateSnapshot(
+                projectRoot,
+                "https://github.com/owner/repository.git",
+                new string('0', 40));
+            Assert.That(
+                invalidSnapshot.TryGet(
+                    "com.example.repository",
+                    string.Empty,
+                    true,
+                    out PackageManagerSubmoduleInfo invalidInfo),
+                Is.True);
+            Assert.That(invalidInfo.ResolvedCommit, Is.Empty);
         }
 
         [Test]
@@ -2421,7 +2463,8 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
 
         private static PackageManagerSubmoduleSnapshotData CreateSnapshot(
             string projectRoot,
-            string repositoryUrl)
+            string repositoryUrl,
+            string resolvedCommit = "")
         {
             return PackageManagerSubmoduleSnapshotData.Create(
                 new[]
@@ -2430,7 +2473,8 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                     {
                         Path = "Packages/com.example.repository",
                         PackageName = "com.example.repository",
-                        Url = repositoryUrl
+                        Url = repositoryUrl,
+                        ResolvedCommit = resolvedCommit
                     }
                 },
                 projectRoot);

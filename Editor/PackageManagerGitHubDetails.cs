@@ -97,6 +97,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         private bool readOnlyPackageInstallEnabled;
         private bool installControlsVisible;
         private bool branchUpdateSubscribed;
+        private bool branchSelectionAuthoritative;
         private bool isDisposed;
         private InstallUiState installUiState;
         private VisualElement deferredFocusTarget;
@@ -226,6 +227,10 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         internal Button RepositoryLinkButton => repositoryLinkButton;
         internal PackageManagerGitHubRepository CurrentRepository => currentRepository;
         internal string SelectedBranch => selectedBranch;
+        internal bool HasAuthoritativeBranchSelection =>
+            branchSelectionAuthoritative &&
+            !string.IsNullOrEmpty(selectedBranch) &&
+            branchField.choices?.Contains(selectedBranch) == true;
         internal PackageManagerGitInstallMode SelectedInstallMode =>
             selectedInstallMode;
         internal bool IsInstallConfirmationPending =>
@@ -335,6 +340,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 currentRepository = null;
                 currentRepositoryIdentity = string.Empty;
                 selectedBranch = string.Empty;
+                branchSelectionAuthoritative = false;
                 observedDefaultBranch = string.Empty;
                 userSelectedBranch = false;
                 ResetInstallModeSelection();
@@ -342,7 +348,10 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 ResetInstallUi();
                 branchField.choices = new List<string>();
                 branchField.SetValueWithoutNotify(string.Empty);
-                repositoryCoordinator?.ClearAllBranchCaches();
+                // Keep successful and failed branch identities while this live
+                // Package Manager host changes selection. A transient failure
+                // may only be cleared by the explicit native Refresh path; the
+                // coordinator is fully cleared when the host is disposed.
                 RemoveRepositoryLink();
                 SetVisible(false);
                 return;
@@ -363,7 +372,10 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             currentRepositoryIdentity = identity;
             if (changedRepository)
             {
-                selectedBranch = PreferredBranch;
+                selectedBranch = branchDiscoveryEnabled
+                    ? string.Empty
+                    : PreferredBranch;
+                branchSelectionAuthoritative = false;
                 userSelectedBranch = false;
                 ResetInstallModeSelection();
                 ClearInstallAvailability();
@@ -371,7 +383,10 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             }
             else if (changedDefaultBranch && !userSelectedBranch)
             {
-                selectedBranch = PreferredBranch;
+                selectedBranch = branchDiscoveryEnabled
+                    ? string.Empty
+                    : PreferredBranch;
+                branchSelectionAuthoritative = false;
             }
 
             observedDefaultBranch = nextDefaultBranch;
@@ -412,11 +427,23 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             if (isDisposed)
                 return;
 
-            gitSubmoduleInstallEnabled = visible && gitSubmoduleEnabled;
-            readOnlyPackageInstallEnabled = visible && readOnlyPackageEnabled;
-            gitSubmoduleInstallTooltip = gitSubmoduleTooltip ?? string.Empty;
-            readOnlyPackageInstallTooltip =
-                readOnlyPackageTooltip ?? string.Empty;
+            bool hasResolvedBranch = HasAuthoritativeBranchSelection;
+            gitSubmoduleInstallEnabled =
+                visible && gitSubmoduleEnabled && hasResolvedBranch;
+            readOnlyPackageInstallEnabled =
+                visible && readOnlyPackageEnabled && hasResolvedBranch;
+            string unresolvedBranchTooltip = string.IsNullOrWhiteSpace(
+                    branchField.tooltip)
+                ? L10n.Tr("Wait for Git to verify the remote branch list.")
+                : branchField.tooltip;
+            gitSubmoduleInstallTooltip = gitSubmoduleEnabled &&
+                                         !hasResolvedBranch
+                ? unresolvedBranchTooltip
+                : gitSubmoduleTooltip ?? string.Empty;
+            readOnlyPackageInstallTooltip = readOnlyPackageEnabled &&
+                                            !hasResolvedBranch
+                ? unresolvedBranchTooltip
+                : readOnlyPackageTooltip ?? string.Empty;
             UpdateSelectedInstallAvailability();
             if (!visible)
                 ResetInstallUi();
@@ -484,7 +511,61 @@ namespace MartinCalander.GitSubmoduleManager.Editor
 
         internal void ApplyAvailableBranchesForTests(IEnumerable<string> branches)
         {
-            ApplyAvailableBranches(branches);
+            ApplyAvailableBranches(
+                branches,
+                currentRepository?.DefaultBranch,
+                defaultBranchIsAuthoritative: branches != null);
+        }
+
+        internal void ApplyAvailableBranchesForTests(
+            IEnumerable<string> branches,
+            string gitDefaultBranch,
+            bool defaultBranchIsAuthoritative)
+        {
+            ApplyAvailableBranches(
+                branches,
+                gitDefaultBranch,
+                defaultBranchIsAuthoritative);
+        }
+
+        /// <summary>
+        /// Retries a failed branch query only when the user explicitly invokes
+        /// Package Manager's native refresh action. Successful and in-flight
+        /// entries are left untouched, and only the currently selected
+        /// repository's cache identity is cleared.
+        /// </summary>
+        internal bool RetryFailedBranchDiscoveryFromUserRefresh()
+        {
+            if (isDisposed ||
+                !branchDiscoveryEnabled ||
+                currentRepository == null ||
+                repositoryCoordinator == null ||
+                repositoryCoordinator.IsFetchingBranches(currentRepository.Url) ||
+                !repositoryCoordinator.TryGetBranchError(
+                    currentRepository.Url,
+                    out _))
+            {
+                return false;
+            }
+
+            string repositoryUrl = currentRepository.Url;
+            repositoryCoordinator.ClearBranchCache(repositoryUrl);
+            selectedBranch = string.Empty;
+            branchSelectionAuthoritative = false;
+            userSelectedBranch = false;
+            ApplyCurrentBranchChoices(repositoryUrl);
+            ClearInstallAvailability();
+            ResetInstallUi();
+            repositoryCoordinator.RequestBranches(repositoryUrl);
+            UpdateBranchPolling();
+            UpdateBranchTooltip();
+            InstallSelectionChanged?.Invoke();
+            return true;
+        }
+
+        internal bool TickBranchDiscoveryForTests()
+        {
+            return TickBranchDiscovery();
         }
 
         internal void SelectInstallModeForTests(
@@ -542,32 +623,29 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             List<string> discovered = discoveredBranches == null
                 ? null
                 : new List<string>(discoveredBranches);
-            bool mainIsAvailable = discovered == null;
-            if (discovered != null)
+            var choices = new List<string>();
+            if (discovered == null)
+                return choices;
+
+            var seen = new HashSet<string>(StringComparer.Ordinal);
+            var available = new HashSet<string>(StringComparer.Ordinal);
+            foreach (string branch in discovered)
             {
-                foreach (string branch in discovered)
+                string normalized = NormalizeBranch(branch);
+                if (!string.IsNullOrEmpty(normalized) &&
+                    GitUtility.IsValidBranchName(normalized))
                 {
-                    if (string.Equals(
-                            NormalizeBranch(branch),
-                            PreferredBranch,
-                            StringComparison.Ordinal))
-                    {
-                        mainIsAvailable = true;
-                        break;
-                    }
+                    available.Add(normalized);
                 }
             }
 
-            var choices = new List<string>();
-            var seen = new HashSet<string>(StringComparer.Ordinal);
-            if (mainIsAvailable)
+            if (available.Contains(PreferredBranch))
                 AddValidBranchChoice(PreferredBranch, choices, seen);
-            AddValidBranchChoice(defaultBranch, choices, seen);
-            if (discovered != null)
-            {
-                foreach (string branch in discovered)
-                    AddValidBranchChoice(branch, choices, seen);
-            }
+            string normalizedDefault = NormalizeBranch(defaultBranch);
+            if (available.Contains(normalizedDefault))
+                AddValidBranchChoice(normalizedDefault, choices, seen);
+            foreach (string branch in discovered)
+                AddValidBranchChoice(branch, choices, seen);
 
             return choices;
         }
@@ -652,17 +730,24 @@ namespace MartinCalander.GitSubmoduleManager.Editor
 
         private void OnEditorUpdate()
         {
+            TickBranchDiscovery();
+        }
+
+        private bool TickBranchDiscovery()
+        {
             if (isDisposed || repositoryCoordinator == null)
-                return;
+                return false;
 
             bool branchStateChanged = repositoryCoordinator.TickBranchFetch();
             if (currentRepository != null && branchStateChanged)
             {
                 ApplyCurrentBranchChoices(currentRepository.Url);
                 UpdateBranchTooltip();
+                InstallSelectionChanged?.Invoke();
             }
 
             UpdateBranchPolling();
+            return branchStateChanged;
         }
 
         private void UpdateBranchPolling()
@@ -690,46 +775,61 @@ namespace MartinCalander.GitSubmoduleManager.Editor
 
         private void ApplyCurrentBranchChoices(string repositoryUrl)
         {
-            IEnumerable<string> branches = GetCachedBranches(repositoryUrl);
-            if (branches != null)
+            if (!branchDiscoveryEnabled)
             {
-                ApplyAvailableBranches(branches);
+                ApplyAvailableBranches(new[]
+                    {
+                        PreferredBranch,
+                        currentRepository?.DefaultBranch
+                    },
+                    currentRepository?.DefaultBranch,
+                    defaultBranchIsAuthoritative: true);
                 return;
             }
 
+            if (repositoryCoordinator != null &&
+                repositoryCoordinator.TryGetCachedBranches(
+                    repositoryUrl,
+                    out List<string> branches,
+                    out string gitDefaultBranch))
+            {
+                ApplyAvailableBranches(
+                    branches,
+                    gitDefaultBranch,
+                    defaultBranchIsAuthoritative:
+                        !string.IsNullOrWhiteSpace(gitDefaultBranch));
+                return;
+            }
+
+            // A transient failure or an in-flight query is not evidence that
+            // main is absent. Keep the selection unresolved and installation
+            // disabled until Git returns a complete branch list.
             ApplyAvailableBranches(
-                repositoryCoordinator != null &&
-                repositoryCoordinator.TryGetBranchError(repositoryUrl, out _)
-                    ? Array.Empty<string>()
-                    : null);
+                null,
+                string.Empty,
+                defaultBranchIsAuthoritative: false);
         }
 
-        private IEnumerable<string> GetCachedBranches(string repositoryUrl)
+        private void ApplyAvailableBranches(
+            IEnumerable<string> discoveredBranches,
+            string gitDefaultBranch,
+            bool defaultBranchIsAuthoritative)
         {
-            return repositoryCoordinator != null &&
-                   repositoryCoordinator.TryGetCachedBranches(
-                       repositoryUrl,
-                       out List<string> branches)
-                ? branches
-                : null;
-        }
-
-        private void ApplyAvailableBranches(IEnumerable<string> discoveredBranches)
-        {
+            branchSelectionAuthoritative = discoveredBranches != null;
             List<string> choices = BuildBranchChoices(
-                currentRepository?.DefaultBranch,
+                gitDefaultBranch,
                 discoveredBranches);
             string nextSelection = NormalizeBranch(selectedBranch);
             if (!choices.Contains(nextSelection))
             {
-                string normalizedDefault = NormalizeBranch(
-                    currentRepository?.DefaultBranch);
+                string normalizedDefault = NormalizeBranch(gitDefaultBranch);
                 if (choices.Contains(PreferredBranch))
                     nextSelection = PreferredBranch;
-                else if (choices.Contains(normalizedDefault))
+                else if (defaultBranchIsAuthoritative &&
+                         choices.Contains(normalizedDefault))
                     nextSelection = normalizedDefault;
                 else
-                    nextSelection = choices.Count > 0 ? choices[0] : string.Empty;
+                    nextSelection = string.Empty;
                 userSelectedBranch = false;
             }
 

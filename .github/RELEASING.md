@@ -8,12 +8,18 @@ follow [Semantic Versioning](https://semver.org/) and are produced by the
 
 Only maintainers identified in [MAINTAINERS.md](MAINTAINERS.md) with repository
 release access may publish a release. Release tags and GitHub release assets
-must originate from the canonical repository.
+must originate from the canonical repository. Audit direct collaborators before
+release: GitHub `write` access includes release creation and editing, so people
+without release authority should use `triage` or `read` access. Enable immutable
+releases before publishing the first version so published tags and assets cannot
+be replaced.
 
 Before enabling credentialed CI, configure two protected GitHub environments:
 
 - `unity-ci`, with required maintainer reviewers and environment-scoped
-  `UNITY_EMAIL`, `UNITY_PASSWORD`, plus either `UNITY_LICENSE` or `UNITY_SERIAL`;
+  `UNITY_EMAIL`, `UNITY_PASSWORD`, plus either `UNITY_LICENSE` or `UNITY_SERIAL`,
+  and deployment branches restricted to protected `main` and protected `v*`
+  tags;
 - `release`, with required maintainer reviewers and deployment restricted to
   protected `v*` tags.
 
@@ -62,7 +68,14 @@ Fork pull requests never receive Unity credentials. A maintainer must inspect
 the contribution and manually dispatch **Sanity Checks** with its reviewed,
 full 40-character commit SHA as the `ref` input to run the credentialed Unity
 gate before merge. Branch names and abbreviated revisions are intentionally
-rejected so the reviewed input cannot move before the job starts.
+rejected so the reviewed input cannot move before the job starts. Dispatch the
+workflow definition from protected `main`, never from a contribution branch:
+
+```bash
+gh workflow run ci.yml --ref main \
+  -f ref=<reviewed-40-character-commit-sha> \
+  -f unity_version=6000.3.22f1
+```
 
 ## Tag and Publish
 
@@ -71,8 +84,8 @@ Create an annotated tag on the reviewed release commit:
 ```bash
 git switch main
 git pull --ff-only
-git tag -a v1.0.1 -m "Git Submodule Manager 1.0.1"
-git push origin v1.0.1
+git tag -a v2.0.0 -m "Git Submodule Manager 2.0.0"
+git push origin v2.0.0
 ```
 
 Pushing the tag starts the Publish Release workflow. The workflow:
@@ -88,7 +101,13 @@ Pushing the tag starts the Publish Release workflow. The workflow:
 Pre-release SemVer tags are published as GitHub pre-releases.
 
 The workflow can also be started manually for an existing tag. Manual dispatch
-does not create or move a tag.
+does not create or move a tag. Run the workflow itself from the same exact
+protected tag that is supplied as its input so the protected `release`
+environment evaluates the reviewed release ref:
+
+```bash
+gh workflow run release.yml --ref v2.0.0 -f tag=v2.0.0
+```
 
 ## Verify the Published Release
 
@@ -99,7 +118,7 @@ does not create or move a tag.
 - Install the tag from a clean Unity project:
 
   ```text
-  https://github.com/martincalander/GitSubmoduleManager.git#v1.0.1
+  https://github.com/martincalander/GitSubmoduleManager.git#v2.0.0
   ```
 
 - Confirm the package imports, **Package Manager > Sources > GitHub** opens, and

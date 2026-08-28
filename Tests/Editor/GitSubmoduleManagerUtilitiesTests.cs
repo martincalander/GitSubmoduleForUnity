@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Reflection;
+using System.Runtime.InteropServices;
 using System.Text;
 using System.Threading;
 using NUnit.Framework;
@@ -67,6 +68,54 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
             Assert.That(notificationException.Message, Is.EqualTo("simulated UI notification failure"));
         }
 
+        [TestCase("0123456789abcdef0123456789abcdef01234567", true)]
+        [TestCase(
+            "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            true)]
+        [TestCase("0000000000000000000000000000000000000000", false)]
+        [TestCase(
+            "0000000000000000000000000000000000000000000000000000000000000000",
+            false)]
+        [TestCase("0123456789abcdef0123456789abcdef0123456", false)]
+        [TestCase("0123456789abcdef0123456789abcdef012345678", false)]
+        [TestCase("g123456789abcdef0123456789abcdef01234567", false)]
+        public void IsValidGitObjectId_RequiresCanonicalNonzeroShaLength(
+            string objectId,
+            bool expected)
+        {
+            Assert.That(GitUtility.IsValidGitObjectId(objectId), Is.EqualTo(expected));
+        }
+
+        [Test]
+        public void ExactSubmoduleCommit_RequiresMatchingHeadAndIndexGitlink()
+        {
+            const string path = "Packages/com.example.repository";
+            const string commit =
+                "0123456789abcdef0123456789abcdef01234567";
+
+            Assert.That(
+                GitUtility.TryResolveExactSubmoduleCommit(
+                    Success($"160000 {commit} 0\t{path}\n"),
+                    Success(commit + "\n"),
+                    path,
+                    out string resolvedCommit,
+                    out string successError),
+                Is.True,
+                successError);
+            Assert.That(resolvedCommit, Is.EqualTo(commit));
+
+            Assert.That(
+                GitUtility.TryResolveExactSubmoduleCommit(
+                    Success($"160000 {commit} 0\t{path}\n"),
+                    Success("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n"),
+                    path,
+                    out resolvedCommit,
+                    out string mismatchError),
+                Is.False);
+            Assert.That(resolvedCommit, Is.Empty);
+            Assert.That(mismatchError, Does.Contain("does not match"));
+        }
+
         [Test]
         public void TryReadPackageNameFromJson_ReadsStructuredName()
         {
@@ -126,6 +175,276 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
             Assert.That(description, Is.EqualTo("Native details description."));
             Assert.That(minimumUnityVersion, Is.EqualTo("2021.3.0f1"));
             Assert.That(error, Is.Empty);
+        }
+
+        [Test]
+        public void TryReadPackageManifestMetadata_RequiresStrictUtf8Bytes()
+        {
+            string path = Path.Combine(
+                Path.GetTempPath(),
+                "GitPackageManifest-" + Guid.NewGuid().ToString("N") +
+                ".json");
+            const string json =
+                "{\"name\":\"com.example.encoding\",\"version\":\"1.0.0\"}";
+            try
+            {
+                File.WriteAllText(path, json, new UTF8Encoding(true, true));
+                Assert.That(
+                    GitUtility.TryReadPackageManifestMetadata(
+                        path,
+                        out PackageManifestMetadata utf8Metadata,
+                        out string utf8Error),
+                    Is.True,
+                    utf8Error);
+                Assert.That(
+                    utf8Metadata.PackageName,
+                    Is.EqualTo("com.example.encoding"));
+
+                File.WriteAllText(path, json, Encoding.Unicode);
+                Assert.That(
+                    GitUtility.TryReadPackageManifestMetadata(
+                        path,
+                        out PackageManifestMetadata utf16Metadata,
+                        out string utf16Error),
+                    Is.False);
+                Assert.That(utf16Metadata, Is.Null);
+                Assert.That(utf16Error, Does.Contain("valid UTF-8"));
+
+                File.WriteAllBytes(
+                    path,
+                    new byte[] { 0x7b, 0x22, 0x6e, 0x61, 0x6d, 0x65, 0x22, 0xc3, 0x28 });
+                Assert.That(
+                    GitUtility.TryReadPackageManifestMetadata(
+                        path,
+                        out PackageManifestMetadata malformedMetadata,
+                        out string malformedError),
+                    Is.False);
+                Assert.That(malformedMetadata, Is.Null);
+                Assert.That(malformedError, Does.Contain("valid UTF-8"));
+            }
+            finally
+            {
+                if (File.Exists(path))
+                    File.Delete(path);
+            }
+        }
+
+        [TestCase("")]
+        [TestCase("PackageManifestImporter:\n  externalObjects: {}\n  userData:")]
+        [TestCase("TextScriptImporter:\n  externalObjects: {}\n  userData:")]
+        public void TryReadValidPackageManifestMetaFromText_AcceptsUnityMetaImporterVariants(
+            string importerSection)
+        {
+            const string expectedGuid = "ABCDEF0123456789abcdef0123456789";
+            string content =
+                "fileFormatVersion: 2\n" +
+                "guid: " + expectedGuid +
+                (string.IsNullOrEmpty(importerSection)
+                    ? string.Empty
+                    : "\n" + importerSection);
+
+            bool success = GitUtility.TryReadValidPackageManifestMetaFromText(
+                content,
+                out string guid,
+                out string error);
+
+            Assert.That(success, Is.True, error);
+            Assert.That(guid, Is.EqualTo(expectedGuid));
+            Assert.That(error, Is.Empty);
+        }
+
+        [Test]
+        public void TryReadValidPackageManifestMetaFromText_IgnoresNestedImporterMarkers()
+        {
+            const string expectedGuid = "abcdef0123456789abcdef0123456789";
+            const string content =
+                "fileFormatVersion: 2\n" +
+                "guid: " + expectedGuid + "\n" +
+                "PackageManifestImporter:\n" +
+                "  externalObjects:\n" +
+                "  - first:\n" +
+                "      guid: 123456789abcdef0123456789abcdef0\n" +
+                "      fileFormatVersion: 1\n" +
+                "  userData:";
+
+            bool success = GitUtility.TryReadValidPackageManifestMetaFromText(
+                content,
+                out string guid,
+                out string error);
+
+            Assert.That(success, Is.True, error);
+            Assert.That(guid, Is.EqualTo(expectedGuid));
+        }
+
+        [TestCase(null, "empty")]
+        [TestCase("", "empty")]
+        [TestCase(
+            "guid: abcdef0123456789abcdef0123456789",
+            "fileFormatVersion: 2")]
+        [TestCase(
+            "fileFormatVersion: 1\nguid: abcdef0123456789abcdef0123456789",
+            "fileFormatVersion: 2")]
+        [TestCase(
+            "fileFormatVersion: 2\nfileFormatVersion: 2\nguid: abcdef0123456789abcdef0123456789",
+            "exactly one fileFormatVersion")]
+        [TestCase(
+            "fileFormatVersion: 2",
+            "exactly one nonzero")]
+        [TestCase(
+            "fileFormatVersion: 2\nguid: 00000000000000000000000000000000",
+            "nonzero 32-character hexadecimal")]
+        [TestCase(
+            "fileFormatVersion: 2\nguid: abcdef",
+            "nonzero 32-character hexadecimal")]
+        [TestCase(
+            "fileFormatVersion: 2\nguid: abcdef0123456789abcdef0123456789\nguid: 123456789abcdef0123456789abcdef0",
+            "exactly one guid")]
+        [TestCase(
+            "fileFormatVersion: 2\nguid: abcdef0123456789abcdef0123456789\nnot a property",
+            "malformed top-level property")]
+        public void TryReadValidPackageManifestMetaFromText_RejectsMalformedMarkers(
+            string content,
+            string expectedError)
+        {
+            bool success = GitUtility.TryReadValidPackageManifestMetaFromText(
+                content,
+                out string guid,
+                out string error);
+
+            Assert.That(success, Is.False);
+            Assert.That(guid, Is.Empty);
+            Assert.That(error, Does.Contain(expectedError));
+        }
+
+        [Test]
+        public void TryReadValidPackageManifestMetaFromText_RejectsBinaryLikeAndOversizedContent()
+        {
+            const string validPrefix =
+                "fileFormatVersion: 2\nguid: abcdef0123456789abcdef0123456789\n";
+            Assert.That(
+                GitUtility.TryReadValidPackageManifestMetaFromText(
+                    validPrefix + "userData: value\0suffix",
+                    out _,
+                    out string controlError),
+                Is.False);
+            Assert.That(controlError, Does.Contain("control or binary-like"));
+
+            Assert.That(
+                GitUtility.TryReadValidPackageManifestMetaFromText(
+                    validPrefix + "userData: " + new string('x', 16 * 1024),
+                    out _,
+                    out string oversizedError),
+                Is.False);
+            Assert.That(oversizedError, Does.Contain("16 KiB"));
+
+            Assert.That(
+                GitUtility.TryReadValidPackageManifestMetaFromText(
+                    validPrefix + "userData: \ud800",
+                    out _,
+                    out string encodingError),
+                Is.False);
+            Assert.That(encodingError, Does.Contain("valid UTF-8"));
+        }
+
+        [Test]
+        public void TryReadValidPackageManifestMeta_UsesBoundedStrictUtf8FileReader()
+        {
+            string path = Path.Combine(
+                Path.GetTempPath(),
+                "GitPackageManifestMeta-" + Guid.NewGuid().ToString("N") + ".meta");
+            try
+            {
+                File.WriteAllText(
+                    path,
+                    "fileFormatVersion: 2\n" +
+                    "guid: abcdef0123456789abcdef0123456789\n",
+                    new UTF8Encoding(false, true));
+                Assert.That(
+                    GitUtility.TryReadValidPackageManifestMeta(
+                        path,
+                        out string guid,
+                        out string validError),
+                    Is.True,
+                    validError);
+                Assert.That(guid, Is.EqualTo("abcdef0123456789abcdef0123456789"));
+
+                File.WriteAllBytes(
+                    path,
+                    new byte[] { 0x66, 0x69, 0x6c, 0x65, 0xc3, 0x28 });
+                Assert.That(
+                    GitUtility.TryReadValidPackageManifestMeta(
+                        path,
+                        out _,
+                        out string malformedEncodingError),
+                    Is.False);
+                Assert.That(malformedEncodingError, Does.Contain("valid UTF-8"));
+
+                File.WriteAllBytes(path, new byte[(16 * 1024) + 1]);
+                Assert.That(
+                    GitUtility.TryReadValidPackageManifestMeta(
+                        path,
+                        out _,
+                        out string oversizedError),
+                    Is.False);
+                Assert.That(oversizedError, Does.Contain("16 KiB"));
+            }
+            finally
+            {
+                if (File.Exists(path))
+                    File.Delete(path);
+            }
+        }
+
+        [Test]
+        public void TryReadValidPackageManifestMeta_RejectsSymbolicLink()
+        {
+            if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+            {
+                Assert.Ignore(
+                    "Creating an unprivileged symbolic link is not portable on Windows test hosts.");
+            }
+
+            string directory = Path.Combine(
+                Path.GetTempPath(),
+                "GitPackageManifestMetaLink-" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(directory);
+            string target = Path.Combine(directory, "outside.meta");
+            string link = Path.Combine(directory, "package.json.meta");
+            try
+            {
+                File.WriteAllText(
+                    target,
+                    "fileFormatVersion: 2\n" +
+                    "guid: abcdef0123456789abcdef0123456789\n");
+                CommandResult linkResult = CliCommandRunner.Run(
+                    "/bin/ln",
+                    "-s -- " + GitUtility.Quote(target) + " " + GitUtility.Quote(link),
+                    directory,
+                    5000);
+                if (!linkResult.IsSuccess)
+                {
+                    Assert.Ignore(
+                        "The test host could not create a symbolic link: " +
+                        linkResult.StdErr);
+                }
+
+                Assert.That(
+                    GitUtility.TryReadValidPackageManifestMeta(
+                        link,
+                        out _,
+                        out string error),
+                    Is.False);
+                Assert.That(error, Does.Contain("regular file"));
+            }
+            finally
+            {
+                if (File.Exists(link))
+                    File.Delete(link);
+                if (File.Exists(target))
+                    File.Delete(target);
+                if (Directory.Exists(directory))
+                    Directory.Delete(directory);
+            }
         }
 
         [Test]
@@ -464,6 +783,41 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
             Assert.That(success, Is.False);
             Assert.That(packageName, Is.Empty);
             Assert.That(error, Does.Contain("1 MiB"));
+        }
+
+        [Test]
+        public void TryReadPackageManifestMetadataFromJson_BoundsUtf8BytesNotUtf16Characters()
+        {
+            string json =
+                "{\"name\":\"com.example.package\",\"version\":\"1.0.0\"," +
+                "\"padding\":\"" + new string('\u00e9', 512 * 1024) + "\"}";
+            Assert.That(json.Length, Is.LessThan(1024 * 1024));
+
+            bool success = GitUtility.TryReadPackageManifestMetadataFromJson(
+                json,
+                out PackageManifestMetadata metadata,
+                out string error);
+
+            Assert.That(success, Is.False);
+            Assert.That(metadata, Is.Null);
+            Assert.That(error, Does.Contain("1 MiB"));
+        }
+
+        [Test]
+        public void TryReadPackageManifestMetadataFromJson_RejectsLoneSurrogate()
+        {
+            string json =
+                "{\"name\":\"com.example.package\",\"version\":\"1.0.0\"," +
+                "\"padding\":\"" + new string('\ud800', 1) + "\"}";
+
+            bool success = GitUtility.TryReadPackageManifestMetadataFromJson(
+                json,
+                out PackageManifestMetadata metadata,
+                out string error);
+
+            Assert.That(success, Is.False);
+            Assert.That(metadata, Is.Null);
+            Assert.That(error, Does.Contain("valid UTF-8"));
         }
 
         [TestCase("{ \"version\": \"1.0.0\" }", "UPM package name")]
@@ -907,6 +1261,199 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
             WaitForBranchFetch(coordinator);
 
             Assert.That(runner.Calls.Count, Is.EqualTo(2));
+        }
+
+        [Test]
+        public void RepositoryCoordinator_QueriesBranchesAndGitDefaultTogether()
+        {
+            const string url = "https://github.com/owner/repo.git";
+            const string hash = "0123456789abcdef0123456789abcdef01234567";
+            var runner = new FakeCommandRunner(_ => Success(
+                "ref: refs/heads/git-default\tHEAD\r\n" +
+                hash + "\tHEAD\r\n" +
+                hash + "\trefs/heads/git-default\r\n" +
+                hash + "\trefs/heads/release\r\n" +
+                hash + "\trefs/pull/1/HEAD\r\n" +
+                "ref: refs/remotes/origin/git-default\t" +
+                "refs/remotes/origin/HEAD\r\n" +
+                hash + "\trefs/remotes/origin/HEAD\r\n"));
+            CliCommandRunner.CurrentRunner = runner;
+            using var coordinator = new RepositoryCoordinator();
+
+            coordinator.RequestBranches(url);
+            WaitForBranchFetch(coordinator);
+
+            Assert.That(runner.Calls, Has.Count.EqualTo(1));
+            Assert.That(
+                runner.Calls[0].ArgumentList,
+                Is.EqualTo(new[]
+                {
+                    "-c", "credential.interactive=false",
+                    "ls-remote", "--symref", "--",
+                    url,
+                    "HEAD", "refs/heads/*"
+                }));
+            Assert.That(
+                coordinator.TryGetCachedBranches(
+                    url,
+                    out List<string> branches,
+                    out string defaultBranch),
+                Is.True);
+            Assert.That(branches, Is.EqualTo(new[] { "git-default", "release" }));
+            Assert.That(defaultBranch, Is.EqualTo("git-default"));
+        }
+
+        [Test]
+        public void RepositoryCoordinator_MissingOrMalformedHeadKeepsBranchesButNoDefault()
+        {
+            const string hash = "0123456789abcdef0123456789abcdef01234567";
+            string[] outputs =
+            {
+                hash + "\trefs/heads/main\n" +
+                hash + "\trefs/heads/release\n",
+                "ref: refs/tags/v1\tHEAD\n" +
+                hash + "\tHEAD\n" +
+                hash + "\trefs/heads/main\n" +
+                hash + "\trefs/heads/release\n",
+                "ref: refs/heads/missing\tHEAD\n" +
+                hash + "\tHEAD\n" +
+                hash + "\trefs/heads/main\n" +
+                hash + "\trefs/heads/release\n"
+            };
+
+            foreach (string output in outputs)
+            {
+                Assert.That(
+                    RepositoryCoordinator.TryParseRemoteBranchesAndDefault(
+                        output,
+                        out List<string> branches,
+                        out string defaultBranch,
+                        out string diagnostic),
+                    Is.True,
+                    diagnostic);
+                Assert.That(branches, Is.EqualTo(new[] { "main", "release" }));
+                Assert.That(defaultBranch, Is.Empty);
+                Assert.That(diagnostic, Does.Contain("Select a branch explicitly"));
+            }
+        }
+
+        [Test]
+        public void RepositoryCoordinator_StructurallyAmbiguousRefsDiscardTheList()
+        {
+            const string first = "0123456789abcdef0123456789abcdef01234567";
+            const string second = "89abcdef0123456789abcdef0123456789abcdef";
+            string[] outputs =
+            {
+                "ref: refs/heads/main\tHEAD\n" +
+                first + "\trefs/heads/main\n" +
+                "not-an-object-id\trefs/heads/release\n",
+                "ref: refs/heads/main\tHEAD\n" +
+                first + "\trefs/heads/main\n" +
+                second + "\trefs/heads/main\n",
+                "ref: refs/heads/main\tHEAD\n" +
+                first + "\tHEAD\n" +
+                second + "\tHEAD\n" +
+                first + "\trefs/heads/main\n",
+                "ref: refs/heads/main\tHEAD\textra\n" +
+                first + "\trefs/heads/main\n",
+                "ref: refs/heads/main\tHEAD\n" +
+                first + "\trefs/heads/main\r" +
+                second + "\trefs/heads/release\n",
+                "ref: refs/heads/ main\tHEAD\n" +
+                first + "\tHEAD\n" +
+                first + "\trefs/heads/ main\n",
+                "ref: refs/heads/main\tHEAD\n" +
+                first + "\tHEAD\n" +
+                first + "\trefs/heads/main\n" +
+                second + "\trefs/heads/release \n"
+            };
+
+            foreach (string output in outputs)
+            {
+                Assert.That(
+                    RepositoryCoordinator.TryParseRemoteBranchesAndDefault(
+                        output,
+                        out List<string> branches,
+                        out string defaultBranch,
+                        out string diagnostic),
+                    Is.False);
+                Assert.That(branches, Is.Empty);
+                Assert.That(defaultBranch, Is.Empty);
+                Assert.That(diagnostic, Is.Not.Empty);
+            }
+        }
+
+        [Test]
+        public void RepositoryCoordinator_HeadObjectMismatchKeepsHeadsButNoDefault()
+        {
+            const string head = "0123456789abcdef0123456789abcdef01234567";
+            const string branch = "89abcdef0123456789abcdef0123456789abcdef";
+            Assert.That(
+                RepositoryCoordinator.TryParseRemoteBranchesAndDefault(
+                    "ref: refs/heads/release\tHEAD\n" +
+                    head + "\tHEAD\n" +
+                    branch + "\trefs/heads/release\n",
+                    out List<string> branches,
+                    out string defaultBranch,
+                    out string diagnostic),
+                Is.True);
+            Assert.That(branches, Is.EqualTo(new[] { "release" }));
+            Assert.That(defaultBranch, Is.Empty);
+            Assert.That(diagnostic, Does.Contain("did not match"));
+        }
+
+        [Test]
+        public void RepositoryCoordinator_TruncatedRemoteRefsDiscardAllChoices()
+        {
+            const string url = "https://github.com/owner/truncated.git";
+            const string hash = "0123456789abcdef0123456789abcdef01234567";
+            var runner = new FakeCommandRunner(_ =>
+            {
+                CommandResult result = Success(
+                    "ref: refs/heads/main\tHEAD\n" +
+                    hash + "\trefs/heads/main\n");
+                result.StdOutTruncated = true;
+                return result;
+            });
+            CliCommandRunner.CurrentRunner = runner;
+            using var coordinator = new RepositoryCoordinator();
+
+            coordinator.RequestBranches(url);
+            WaitForBranchFetch(coordinator);
+
+            Assert.That(coordinator.TryGetCachedBranches(url, out _), Is.False);
+            Assert.That(
+                coordinator.TryGetBranchError(url, out string error),
+                Is.True);
+            Assert.That(error, Does.Contain("partial branch list was discarded"));
+        }
+
+        [TestCase(false, false)]
+        [TestCase(true, true)]
+        public void RepositoryCoordinator_RequiresConfirmedCompleteCommandOutput(
+            bool terminationConfirmed,
+            bool stdErrTruncated)
+        {
+            const string url = "https://github.com/owner/unconfirmed.git";
+            const string hash = "0123456789abcdef0123456789abcdef01234567";
+            var runner = new FakeCommandRunner(_ => new CommandResult
+            {
+                ExitCode = 0,
+                StdOut = "ref: refs/heads/main\tHEAD\n" +
+                         hash + "\tHEAD\n" +
+                         hash + "\trefs/heads/main\n",
+                StdErr = string.Empty,
+                StdErrTruncated = stdErrTruncated,
+                TerminationConfirmed = terminationConfirmed
+            });
+            CliCommandRunner.CurrentRunner = runner;
+            using var coordinator = new RepositoryCoordinator();
+
+            coordinator.RequestBranches(url);
+            WaitForBranchFetch(coordinator);
+
+            Assert.That(coordinator.TryGetCachedBranches(url, out _), Is.False);
+            Assert.That(coordinator.TryGetBranchError(url, out _), Is.True);
         }
 
         // ── Discovery Coordinator Tests ──
@@ -1482,11 +2029,14 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
 
         private static CommandResult Fail(CommandSpec spec, string error)
         {
+            string arguments = spec.ArgumentList == null
+                ? spec.Arguments
+                : string.Join(" ", spec.ArgumentList);
             return new CommandResult
             {
                 ExitCode = 1,
                 StdOut = string.Empty,
-                StdErr = $"{error}: {spec.FileName} {spec.Arguments}",
+                StdErr = $"{error}: {spec.FileName} {arguments}",
                 TerminationConfirmed = true
             };
         }
@@ -1529,6 +2079,9 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                     {
                         FileName = spec.FileName,
                         Arguments = spec.Arguments,
+                        ArgumentList = spec.ArgumentList == null
+                            ? null
+                            : spec.ArgumentList.ToArray(),
                         WorkingDirectory = spec.WorkingDirectory,
                         TimeoutMs = spec.TimeoutMs
                     });

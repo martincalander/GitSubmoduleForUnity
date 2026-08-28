@@ -1,7 +1,9 @@
 using System;
 using System.Collections;
 using System.Collections.Generic;
+using System.Linq;
 using System.Reflection;
+using System.Threading;
 using NUnit.Framework;
 using UnityEditor;
 using UnityEditor.UIElements;
@@ -20,10 +22,18 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
         [Test]
         public void LiveContract_ResolvesNativePrimaryActionSurface()
         {
-#if !UNITY_2023_2_OR_NEWER
-            Assert.Ignore(
-                "The native Sources > GitHub page uses the Unity 2023.2+ Package Manager extension-page contract; older Editors use the compatibility host.");
-#else
+            if (!PackageManagerUnityVersionSupport.IsCurrentVersionSupported)
+            {
+                Assert.That(
+                    PackageManagerGitHubNativeActions.HasSupportedLiveContract(),
+                    Is.False);
+                Assert.That(
+                    PackageManagerGitHubNativeActions
+                        .HasSupportedSelectionContract(),
+                    Is.False);
+                return;
+            }
+
             Type rootType = PackageManagerSubmoduleHarmonyPatch.FindLoadedType(
                 PackageManagerGitHubNativeActions.PackageManagerWindowRootTypeName);
             Type toolbarType = PackageManagerSubmoduleHarmonyPatch.FindLoadedType(
@@ -64,7 +74,6 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                 Is.True,
                 "The active-page selection seam must resolve independently of " +
                 "the primary-actions mounting contract.");
-#endif
         }
 
         [Test]
@@ -98,6 +107,65 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                 Is.SameAs(staleToolbarPackage),
                 "Harmony's explicit package remains the presentation fallback " +
                 "when the optional selection seam is unavailable.");
+        }
+
+        [Test]
+        public void ReadOnlyManageConversion_RejectsStaleSelectionIdentity()
+        {
+            PackageManagerReadOnlyGitInfo requestedInfo = CreateReadOnlyInfo(
+                "https://github.com/example/package.git",
+                "main",
+                "1111111111111111111111111111111111111111");
+            PackageManagerPackageConversionTarget requestedTarget =
+                CreateReadOnlyConversionTarget(requestedInfo);
+            PackageManagerReadOnlyGitInfo changedLiveInfo = CreateReadOnlyInfo(
+                "https://github.com/example/other.git",
+                "main",
+                "2222222222222222222222222222222222222222");
+
+            Assert.That(
+                PackageManagerGitHubNativeActions
+                    .IsCurrentReadOnlyConversionSelection(
+                        requestedTarget,
+                        requestedInfo,
+                        requestedInfo,
+                        requestedTarget),
+                Is.True);
+            Assert.That(
+                PackageManagerGitHubNativeActions
+                    .IsCurrentReadOnlyConversionSelection(
+                        requestedTarget,
+                        requestedInfo,
+                        changedLiveInfo,
+                        requestedTarget),
+                Is.False,
+                "A recycled native selection must not convert the previous package.");
+            Assert.That(
+                PackageManagerGitHubNativeActions
+                    .IsCurrentReadOnlyConversionSelection(
+                        requestedTarget,
+                        requestedInfo,
+                        requestedInfo,
+                        CreateReadOnlyConversionTarget(changedLiveInfo)),
+                Is.False,
+                "A stale Manage callback must match the currently mounted target.");
+        }
+
+        [TestCase(false, true, true)]
+        [TestCase(false, false, false)]
+        [TestCase(true, true, false)]
+        [TestCase(true, false, false)]
+        public void ReadOnlyManageConversion_ModalCancelAndBatchModeFailClosed(
+            bool isBatchMode,
+            bool promptAccepted,
+            bool expected)
+        {
+            Assert.That(
+                PackageManagerGitHubNativeActions
+                    .ShouldProceedWithReadOnlyConversionPrompt(
+                        isBatchMode,
+                        promptAccepted),
+                Is.EqualTo(expected));
         }
 
         [Test]
@@ -571,6 +639,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                 {
                     "release",
                     " main ",
+                    "agents/verdaccio",
                     "feature/new-ui",
                     "bad..branch",
                     string.Empty,
@@ -589,7 +658,18 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
         }
 
         [Test]
-        public void BranchSelector_DefaultsToMainBeforeDiscoveryCompletes()
+        public void BranchSelector_RemainsUnresolvedBeforeDiscoveryCompletes()
+        {
+            Assert.That(
+                PackageManagerGitHubDetails.BuildBranchChoices(
+                    "agents/verdaccio",
+                    null),
+                Is.Empty,
+                "Unknown branch state must not optimistically assume main or the default.");
+        }
+
+        [Test]
+        public void BranchSelector_TransientListingFailureDisablesInstallWithoutFallback()
         {
             using PackageManagerGitHubDetails details = CreateDetails(
                 out _,
@@ -597,14 +677,95 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                 out _,
                 (_, _) => { },
                 _ => { });
+            details.Refresh(CreateRepository("repository", "trunk"));
+            details.ApplyAvailableBranchesForTests(null);
 
-            details.Refresh(CreateRepository("repository", "agents/verdaccio"));
+            details.SetInstallState(true, true, "Ready");
 
-            Assert.That(details.SelectedBranch, Is.EqualTo("main"));
-            Assert.That(details.BranchField.value, Is.EqualTo("main"));
-            Assert.That(
-                details.BranchField.choices,
-                Is.EqualTo(new[] { "main", "agents/verdaccio" }));
+            Assert.That(details.HasAuthoritativeBranchSelection, Is.False);
+            Assert.That(details.SelectedBranch, Is.Empty);
+            Assert.That(details.BranchField.choices, Is.Empty);
+            Assert.That(details.InstallMenu.enabledSelf, Is.False);
+        }
+
+        [Test]
+        public void BranchSelector_ExplicitRefreshRetriesFailureAndSelectsMain()
+        {
+            if (AsyncCommandDrainRegistry.IsDraining)
+            {
+                Assert.Ignore(
+                    "The shared command drain is active; branch discovery cannot " +
+                    "start until it completes.");
+            }
+
+            ICommandRunner previousRunner = CliCommandRunner.CurrentRunner;
+            var runner = new BranchRefreshRunner(previousRunner);
+            PackageManagerGitHubDetails details = null;
+            try
+            {
+                CliCommandRunner.CurrentRunner = runner;
+                details = CreateDetails(
+                    out _,
+                    out _,
+                    out _,
+                    (_, _) => { },
+                    _ => { },
+                    enableBranchDiscovery: true);
+                details.InstallSelectionChanged += () =>
+                    details.SetInstallState(true, true, "Ready");
+                PackageManagerGitHubRepository repository = CreateRepository(
+                    "branch-retry",
+                    "trunk");
+
+                details.Refresh(repository);
+                details.SetInstallState(true, true, "Ready");
+                Assert.That(
+                    SpinWait.SpinUntil(
+                        () => details.TickBranchDiscoveryForTests(),
+                        TimeSpan.FromSeconds(3)),
+                    Is.True,
+                    "The first branch query did not publish its failure.");
+
+                Assert.That(runner.BranchRequestCount, Is.EqualTo(1));
+                Assert.That(details.HasAuthoritativeBranchSelection, Is.False);
+                Assert.That(details.SelectedBranch, Is.Empty);
+                Assert.That(details.InstallMenu.enabledSelf, Is.False);
+
+                // Rebinding and selecting away/back are normal Package Manager
+                // view lifecycles, not explicit retry gestures.
+                details.Refresh(repository);
+                details.Refresh(null);
+                details.Refresh(repository);
+                details.TickBranchDiscoveryForTests();
+                Assert.That(runner.BranchRequestCount, Is.EqualTo(1));
+
+                Assert.That(
+                    details.RetryFailedBranchDiscoveryFromUserRefresh(),
+                    Is.True);
+                Assert.That(details.InstallMenu.enabledSelf, Is.False);
+                Assert.That(
+                    SpinWait.SpinUntil(
+                        () => details.TickBranchDiscoveryForTests(),
+                        TimeSpan.FromSeconds(3)),
+                    Is.True,
+                    "The explicit branch retry did not publish its result.");
+
+                Assert.That(runner.BranchRequestCount, Is.EqualTo(2));
+                Assert.That(details.HasAuthoritativeBranchSelection, Is.True);
+                Assert.That(details.SelectedBranch, Is.EqualTo("main"));
+                Assert.That(details.BranchField.value, Is.EqualTo("main"));
+                Assert.That(details.InstallMenu.enabledSelf, Is.True);
+                Assert.That(
+                    details.RetryFailedBranchDiscoveryFromUserRefresh(),
+                    Is.False,
+                    "A successful branch cache must not be cleared by refresh.");
+                Assert.That(runner.BranchRequestCount, Is.EqualTo(2));
+            }
+            finally
+            {
+                details?.Dispose();
+                CliCommandRunner.CurrentRunner = previousRunner;
+            }
         }
 
         [Test]
@@ -628,6 +789,145 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
             Assert.That(
                 details.BranchField.choices,
                 Is.EqualTo(new[] { "trunk", "release" }));
+        }
+
+        [Test]
+        public void BranchSelector_UsesGitDefaultInsteadOfCatalogueDefault()
+        {
+            using PackageManagerGitHubDetails details = CreateDetails(
+                out _,
+                out _,
+                out _,
+                (_, _) => { },
+                _ => { });
+            details.Refresh(CreateRepository("repository", "catalogue-default"));
+
+            details.ApplyAvailableBranchesForTests(
+                new[] { "release", "git-default" },
+                "git-default",
+                defaultBranchIsAuthoritative: true);
+
+            Assert.That(details.SelectedBranch, Is.EqualTo("git-default"));
+            Assert.That(details.BranchField.value, Is.EqualTo("git-default"));
+            Assert.That(
+                details.BranchField.choices,
+                Is.EqualTo(new[] { "git-default", "release" }));
+        }
+
+        [Test]
+        public void BranchSelector_InvalidGitHeadStillPrefersCompleteMain()
+        {
+            using PackageManagerGitHubDetails details = CreateDetails(
+                out _,
+                out _,
+                out _,
+                (_, _) => { },
+                _ => { });
+            details.InstallSelectionChanged += () =>
+                details.SetInstallState(true, true, "Ready");
+            details.Refresh(CreateRepository("repository", "catalogue-default"));
+
+            details.ApplyAvailableBranchesForTests(
+                new[] { "main", "release" },
+                string.Empty,
+                defaultBranchIsAuthoritative: false);
+            details.SetInstallState(true, true, "Ready");
+
+            Assert.That(details.SelectedBranch, Is.EqualTo("main"));
+            Assert.That(details.BranchField.choices, Is.EqualTo(
+                new[] { "main", "release" }));
+            Assert.That(details.InstallMenu.enabledSelf, Is.True);
+        }
+
+        [UnityTest]
+        public IEnumerator BranchSelector_InvalidGitHeadWithoutMainRequiresManualChoice()
+        {
+            PackageManagerGitHubDetails details = CreateDetails(
+                out _,
+                out VisualElement extensionItems,
+                out _,
+                (_, _) => { },
+                _ => { });
+            var host = ScriptableObject.CreateInstance<NativeActionsHostWindow>();
+            try
+            {
+                VisualElement fixtureRoot = extensionItems.parent?.parent;
+                Assert.That(fixtureRoot, Is.Not.Null);
+                host.Show();
+                host.rootVisualElement.Add(fixtureRoot);
+                yield return null;
+
+                details.InstallSelectionChanged += () =>
+                    details.SetInstallState(true, true, "Ready");
+                details.Refresh(CreateRepository("repository", "catalogue-default"));
+                details.ApplyAvailableBranchesForTests(
+                    new[] { "release", "develop" },
+                    string.Empty,
+                    defaultBranchIsAuthoritative: false);
+                details.SetInstallState(true, true, "Ready");
+
+                Assert.That(details.SelectedBranch, Is.Empty);
+                Assert.That(details.InstallMenu.enabledSelf, Is.False);
+
+                details.BranchField.value = "release";
+                yield return null;
+
+                Assert.That(details.SelectedBranch, Is.EqualTo("release"));
+                Assert.That(details.InstallMenu.enabledSelf, Is.True);
+            }
+            finally
+            {
+                details.Dispose();
+                if (host != null)
+                    host.Close();
+            }
+        }
+
+        [UnityTest]
+        public IEnumerator BranchSelector_RequiresManualChoiceWhenMainAndDefaultAreAbsent()
+        {
+            PackageManagerGitHubDetails details = CreateDetails(
+                out _,
+                out VisualElement extensionItems,
+                out _,
+                (_, _) => { },
+                _ => { });
+            var host = ScriptableObject.CreateInstance<NativeActionsHostWindow>();
+            try
+            {
+                VisualElement fixtureRoot = extensionItems.parent?.parent;
+                Assert.That(fixtureRoot, Is.Not.Null);
+                host.Show();
+                host.rootVisualElement.Add(fixtureRoot);
+                yield return null;
+
+                details.InstallSelectionChanged += () =>
+                    details.SetInstallState(true, true, "Ready");
+                details.Refresh(CreateRepository("repository", "trunk"));
+                details.ApplyAvailableBranchesForTests(
+                    new[] { "release", "develop" });
+                details.SetInstallState(true, true, "Ready");
+
+                Assert.That(details.HasAuthoritativeBranchSelection, Is.False);
+                Assert.That(details.SelectedBranch, Is.Empty);
+                Assert.That(
+                    details.BranchField.choices,
+                    Is.EqualTo(new[] { "release", "develop" }));
+                Assert.That(details.InstallMenu.enabledSelf, Is.False);
+
+                details.BranchField.value = "release";
+                yield return null;
+
+                Assert.That(details.HasAuthoritativeBranchSelection, Is.True);
+                Assert.That(details.SelectedBranch, Is.EqualTo("release"));
+                Assert.That(details.InstallMenu.enabledSelf, Is.True);
+            }
+            finally
+            {
+                details.Dispose();
+                if (host != null)
+                    host.Close();
+            }
         }
 
         [UnityTest]
@@ -1893,14 +2193,16 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
             out VisualElement extensionItems,
             out VisualElement detailsLinks,
             Action<PackageManagerGitHubRepository, string> install,
-            Action<string> openUrl)
+            Action<string> openUrl,
+            bool enableBranchDiscovery = false)
         {
             return CreateDetails(
                 out primaryActions,
                 out extensionItems,
                 out detailsLinks,
                 (repository, branch, _) => install(repository, branch),
-                openUrl);
+                openUrl,
+                enableBranchDiscovery);
         }
 
         private static PackageManagerGitHubDetails CreateDetails(
@@ -1909,7 +2211,8 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
             out VisualElement detailsLinks,
             Action<PackageManagerGitHubRepository, string,
                 PackageManagerGitInstallMode> install,
-            Action<string> openUrl)
+            Action<string> openUrl,
+            bool enableBranchDiscovery = false)
         {
             var root = new VisualElement();
             var toolbar = new VisualElement();
@@ -1940,10 +2243,61 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                     detailsLinks,
                     install,
                     openUrl,
-                    false,
+                    enableBranchDiscovery,
                     out PackageManagerGitHubDetails details),
                 Is.True);
             return details;
+        }
+
+        private sealed class BranchRefreshRunner : ICommandRunner
+        {
+            private readonly ICommandRunner fallback;
+            private int branchRequestCount;
+
+            internal BranchRefreshRunner(ICommandRunner fallback)
+            {
+                this.fallback = fallback;
+            }
+
+            internal int BranchRequestCount =>
+                Volatile.Read(ref branchRequestCount);
+
+            public CommandResult Run(CommandSpec spec)
+            {
+                IReadOnlyList<string> arguments = spec?.ArgumentList;
+                if (arguments == null ||
+                    !arguments.Contains("ls-remote") ||
+                    !arguments.Contains("--symref"))
+                {
+                    return fallback.Run(spec);
+                }
+
+                int request = Interlocked.Increment(ref branchRequestCount);
+                if (request == 1)
+                {
+                    return new CommandResult
+                    {
+                        ExitCode = 1,
+                        StdOut = string.Empty,
+                        StdErr = "Transient branch listing failure.",
+                        TerminationConfirmed = true
+                    };
+                }
+
+                return new CommandResult
+                {
+                    ExitCode = 0,
+                    StdOut =
+                        "ref: refs/heads/main\tHEAD\n" +
+                        "2222222222222222222222222222222222222222\tHEAD\n" +
+                        "1111111111111111111111111111111111111111\t" +
+                        "refs/heads/release\n" +
+                        "2222222222222222222222222222222222222222\t" +
+                        "refs/heads/main\n",
+                    StdErr = string.Empty,
+                    TerminationConfirmed = true
+                };
+            }
         }
 
         private static void SendNavigationSubmit(VisualElement target)
@@ -2008,6 +2362,33 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                 DeclaredDisplayName = name,
                 DeclaredVersion = "1.0.0"
             });
+        }
+
+        private static PackageManagerReadOnlyGitInfo CreateReadOnlyInfo(
+            string repositoryUrl,
+            string revision,
+            string resolvedHash)
+        {
+            return new PackageManagerReadOnlyGitInfo(
+                "com.example.package",
+                repositoryUrl,
+                repositoryUrl + "#" + revision,
+                revision,
+                resolvedHash,
+                string.Empty,
+                null);
+        }
+
+        private static PackageManagerPackageConversionTarget
+            CreateReadOnlyConversionTarget(PackageManagerReadOnlyGitInfo info)
+        {
+            return new PackageManagerPackageConversionTarget(
+                GitPackageConversionDirection.ReadOnlyToSubmodule,
+                info.PackageName,
+                GitSubmoduleAddService.GetPackagePath(info.PackageName),
+                info.RepositoryUrl,
+                info.Revision + "@" + info.ResolvedHash + "|package-path:" +
+                info.PackageSubfolder);
         }
 
         private sealed class PrimaryActionsFieldFixture

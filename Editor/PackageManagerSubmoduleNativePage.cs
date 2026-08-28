@@ -10,6 +10,92 @@ using UnityEngine.UIElements;
 namespace MartinCalander.GitSubmoduleManager.Editor
 {
     /// <summary>
+    /// Exact runtime gate for the Package Manager reflection contract. UPM can
+    /// express only the minimum package version, so every native integration
+    /// entry point must independently reject Editors outside the validated,
+    /// non-contiguous support set.
+    /// </summary>
+    internal static class PackageManagerUnityVersionSupport
+    {
+        internal static bool IsCurrentVersionSupported =>
+            IsSupported(Application.unityVersion);
+
+        internal static bool IsSupported(string unityVersion)
+        {
+            if (string.IsNullOrEmpty(unityVersion))
+                return false;
+
+            int finalMarker = unityVersion.IndexOf('f');
+            if (finalMarker <= 0 ||
+                finalMarker != unityVersion.LastIndexOf('f') ||
+                !TryParseDigits(
+                    unityVersion,
+                    finalMarker + 1,
+                    unityVersion.Length - finalMarker - 1,
+                    out int finalRevision) ||
+                finalRevision != 1)
+            {
+                return false;
+            }
+
+            string[] versionParts = unityVersion
+                .Substring(0, finalMarker)
+                .Split('.');
+            if (versionParts.Length != 3 ||
+                !TryParseDigits(versionParts[0], out int major) ||
+                !TryParseDigits(versionParts[1], out int minor) ||
+                !TryParseDigits(versionParts[2], out int patch))
+            {
+                return false;
+            }
+
+            return major == 6000 &&
+                   (minor == 3 && patch == 22 || minor == 5);
+        }
+
+        private static bool TryParseDigits(string value, out int parsed)
+        {
+            parsed = 0;
+            return value != null &&
+                   TryParseDigits(value, 0, value.Length, out parsed);
+        }
+
+        private static bool TryParseDigits(
+            string value,
+            int startIndex,
+            int length,
+            out int parsed)
+        {
+            parsed = 0;
+            if (value == null || length <= 0 || startIndex < 0 ||
+                startIndex > value.Length - length ||
+                length > 1 && value[startIndex] == '0')
+            {
+                return false;
+            }
+
+            for (int index = startIndex; index < startIndex + length; index++)
+            {
+                char character = value[index];
+                if (character < '0' || character > '9')
+                    return false;
+
+                try
+                {
+                    parsed = checked(parsed * 10 + character - '0');
+                }
+                catch (OverflowException)
+                {
+                    parsed = 0;
+                    return false;
+                }
+            }
+
+            return true;
+        }
+    }
+
+    /// <summary>
     /// Bridges discovered GitHub packages and installed Git packages into
     /// Unity's internal extension-page contract. The package deliberately
     /// targets the validated Unity 6000.3.22f1 and Unity 6000.5 Package Manager
@@ -74,6 +160,9 @@ namespace MartinCalander.GitSubmoduleManager.Editor
 
         internal static bool IsSupportedContract()
         {
+            if (!PackageManagerUnityVersionSupport.IsCurrentVersionSupported)
+                return false;
+
             Type argsType = FindLoadedType(ExtensionPageArgsTypeName);
             Type pageManagerType = FindLoadedType(PageManagerTypeName);
             Type sidebarType = FindLoadedType(SidebarTypeName);

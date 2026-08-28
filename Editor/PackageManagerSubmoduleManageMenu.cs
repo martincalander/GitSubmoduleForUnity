@@ -7,11 +7,19 @@ using UnityEngine.UIElements;
 
 namespace MartinCalander.GitSubmoduleManager.Editor
 {
+    internal enum PackageManagerManagedPackageKind
+    {
+        None,
+        Submodule,
+        ReadOnlyGit
+    }
+
     /// <summary>
-    /// Extends Unity's existing Package Manager Manage dropdown for a verified
-    /// installed submodule. The native menu is rebuilt by Unity on every toolbar
-    /// refresh; this adapter replaces Unity's embedded-package Remove entry with
-    /// a selection-bound guarded uninstall action, then appends conversion.
+    /// Extends Unity's existing Package Manager Manage dropdown for verified
+    /// submodules and eligible direct read-only Git dependencies. The native menu
+    /// is rebuilt by Unity on every toolbar refresh; submodules replace Unity's
+    /// embedded Remove entry with a guarded uninstall, while read-only packages
+    /// retain Unity's native actions and receive only the conversion command.
     /// </summary>
     internal static class PackageManagerSubmoduleManageMenu
     {
@@ -30,7 +38,11 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         internal const string MenuItemElementFieldName = "element";
         internal const string MenuItemActionFieldName = "action";
         internal const string MenuItemUserDataActionFieldName = "actionUserData";
-        internal const string ConvertText = "Convert to Read-Only Package";
+        internal const string ConvertToReadOnlyText =
+            "Convert to Read-Only Package";
+        internal const string ConvertToSubmoduleText = "Convert to Submodule";
+        // Compatibility alias for existing callers and localized tests.
+        internal const string ConvertText = ConvertToReadOnlyText;
         internal const string UninstallText = "Uninstall Submodule";
 
         private const BindingFlags AnyInstance =
@@ -38,6 +50,9 @@ namespace MartinCalander.GitSubmoduleManager.Editor
 
         internal static bool IsSupportedContract()
         {
+            if (!PackageManagerUnityVersionSupport.IsCurrentVersionSupported)
+                return false;
+
             Type type = PackageManagerSubmoduleHarmonyPatch.FindLoadedType(
                 ManageDropdownTypeName);
             if (type == null || !typeof(VisualElement).IsAssignableFrom(type))
@@ -84,7 +99,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
 
         internal static bool Apply(
             VisualElement toolbar,
-            bool isInstalledSubmodule,
+            PackageManagerManagedPackageKind packageKind,
             bool conversionEnabled,
             string conversionTooltip,
             Action conversionRequested,
@@ -103,7 +118,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 return false;
             }
 
-            if (!isInstalledSubmodule)
+            if (packageKind == PackageManagerManagedPackageKind.None)
             {
                 GenericDropdownMenu currentMenu = GetPropertyValue(
                     manageDropdown,
@@ -115,7 +130,9 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                     currentMenu);
             }
 
-            if (conversionRequested == null || uninstallRequested == null)
+            if (conversionRequested == null ||
+                packageKind == PackageManagerManagedPackageKind.Submodule &&
+                uninstallRequested == null)
                 return false;
 
             // Rebuild first so every custom refresh starts from Unity's current
@@ -130,6 +147,15 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             if (menu == null)
                 return false;
 
+            if (packageKind == PackageManagerManagedPackageKind.ReadOnlyGit)
+            {
+                return ApplyReadOnlyToMenu(
+                    menu,
+                    conversionEnabled,
+                    conversionTooltip,
+                    conversionRequested);
+            }
+
             HashSet<string> removalTexts = GetVisibleRemovalTexts(manageDropdown);
             return ApplyToMenu(
                 menu,
@@ -140,6 +166,30 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 uninstallEnabled,
                 uninstallTooltip,
                 uninstallRequested);
+        }
+
+        internal static bool ApplyReadOnlyToMenu(
+            GenericDropdownMenu menu,
+            bool conversionEnabled,
+            string conversionTooltip,
+            Action conversionRequested)
+        {
+            if (menu == null || conversionRequested == null ||
+                !TryRemoveItems(menu, IsConversionItem) ||
+                !TryRemoveItems(menu, IsUninstallItem))
+            {
+                return false;
+            }
+
+            // A read-only Git package remains a normal UPM dependency. Preserve
+            // Unity's own Remove/Update actions and add only the conversion.
+            AddItem(
+                menu,
+                L10n.Tr(ConvertToSubmoduleText),
+                conversionEnabled,
+                conversionTooltip,
+                conversionRequested);
+            return true;
         }
 
         internal static bool ApplyToMenu(
@@ -200,7 +250,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 uninstallRequested);
             AddItem(
                 menu,
-                L10n.Tr(ConvertText),
+                L10n.Tr(ConvertToReadOnlyText),
                 conversionEnabled,
                 conversionTooltip,
                 conversionRequested);
@@ -606,7 +656,11 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         {
             return string.Equals(
                        itemName,
-                       L10n.Tr(ConvertText),
+                       L10n.Tr(ConvertToReadOnlyText),
+                       StringComparison.Ordinal) ||
+                   string.Equals(
+                       itemName,
+                       L10n.Tr(ConvertToSubmoduleText),
                        StringComparison.Ordinal) ||
                    string.Equals(
                        itemName,
@@ -617,9 +671,13 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         private static bool IsConversionItem(string itemName)
         {
             return string.Equals(
-                itemName,
-                L10n.Tr(ConvertText),
-                StringComparison.Ordinal);
+                       itemName,
+                       L10n.Tr(ConvertToReadOnlyText),
+                       StringComparison.Ordinal) ||
+                   string.Equals(
+                       itemName,
+                       L10n.Tr(ConvertToSubmoduleText),
+                       StringComparison.Ordinal);
         }
 
         private static bool IsUninstallItem(string itemName)

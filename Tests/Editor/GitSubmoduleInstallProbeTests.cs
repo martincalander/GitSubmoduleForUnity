@@ -10,6 +10,11 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
     [Parallelizable(ParallelScope.None)]
     public sealed class GitSubmoduleInstallProbeTests
     {
+        private const string ManifestObjectId =
+            "cccccccccccccccccccccccccccccccccccccccc";
+        private const string MetaObjectId =
+            "dddddddddddddddddddddddddddddddddddddddd";
+
         private ICommandRunner previousRunner;
         private GitSubmoduleInstallProbe probe;
 
@@ -178,12 +183,19 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                 output,
                 out List<string> branches,
                 out string defaultBranch,
+                out Dictionary<string, string> branchObjectIds,
                 out string error);
 
             Assert.That(parsed, Is.True, error);
             Assert.That(defaultBranch, Is.EqualTo("main"));
             Assert.That(branches, Is.EqualTo(new[] { "feature/install-ui", "main" }));
             Assert.That(branches, Has.None.EqualTo("main\tHEAD"));
+            Assert.That(
+                branchObjectIds["main"],
+                Is.EqualTo("1111111111111111111111111111111111111111"));
+            Assert.That(
+                branchObjectIds["feature/install-ui"],
+                Is.EqualTo("2222222222222222222222222222222222222222"));
         }
 
         [Test]
@@ -205,6 +217,111 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
         }
 
         [Test]
+        public void RemoteRefParser_RejectsBranchWithoutExactCommitIdentity()
+        {
+            const string output =
+                "not-an-object-id\trefs/heads/main\n";
+
+            Assert.That(
+                GitSubmoduleInstallProbe.TryParseRemoteRefs(
+                    output,
+                    out _,
+                    out _,
+                    out string error),
+                Is.False);
+            Assert.That(error, Does.Contain("commit identity"));
+        }
+
+        [Test]
+        public void RootTreeParser_AcceptsOnlyExactRegularRootBlobs()
+        {
+            Assert.That(
+                GitSubmoduleInstallProbe.TryParseRootPackageTree(
+                    RootPackageTree(manifestMode: "100755"),
+                    out string manifestObjectId,
+                    out string metaObjectId,
+                    out string metaMessage,
+                    out string error),
+                Is.True,
+                error);
+            Assert.That(manifestObjectId, Is.EqualTo(ManifestObjectId));
+            Assert.That(metaObjectId, Is.EqualTo(MetaObjectId));
+            Assert.That(metaMessage, Is.Empty);
+        }
+
+        [Test]
+        public void RootTreeParser_RejectsSymlinkedPackageManifest()
+        {
+            Assert.That(
+                GitSubmoduleInstallProbe.TryParseRootPackageTree(
+                    RootPackageTree(manifestMode: "120000"),
+                    out _,
+                    out _,
+                    out _,
+                    out string error),
+                Is.False);
+            Assert.That(error, Does.Contain("symbolic-link"));
+        }
+
+        [Test]
+        public void RootTreeParser_TreatsSymlinkedMetaAsUnverified()
+        {
+            Assert.That(
+                GitSubmoduleInstallProbe.TryParseRootPackageTree(
+                    RootPackageTree(metaMode: "120000"),
+                    out string manifestObjectId,
+                    out string metaObjectId,
+                    out string metaMessage,
+                    out string error),
+                Is.True,
+                error);
+            Assert.That(manifestObjectId, Is.EqualTo(ManifestObjectId));
+            Assert.That(metaObjectId, Is.Empty);
+            Assert.That(metaMessage, Does.Contain("symbolic-link"));
+            Assert.That(metaMessage, Does.Contain("unverified"));
+        }
+
+        [Test]
+        public void RootTreeParser_RejectsUnsupportedObjectIdLength()
+        {
+            string unsupportedObjectId = new string('a', 41);
+            string output = "100644 blob " + unsupportedObjectId +
+                            "\tpackage.json\0";
+
+            Assert.That(
+                GitSubmoduleInstallProbe.TryParseRootPackageTree(
+                    output,
+                    out _,
+                    out _,
+                    out _,
+                    out string error),
+                Is.False);
+            Assert.That(error, Does.Contain("malformed"));
+        }
+
+        [Test]
+        public void RootTreeParser_AcceptsSha256ObjectIds()
+        {
+            string manifestObjectId = new string('a', 64);
+            string metaObjectId = new string('b', 64);
+            string output =
+                "100644 blob " + manifestObjectId + "\tpackage.json\0" +
+                "100644 blob " + metaObjectId + "\tpackage.json.meta\0";
+
+            Assert.That(
+                GitSubmoduleInstallProbe.TryParseRootPackageTree(
+                    output,
+                    out string parsedManifest,
+                    out string parsedMeta,
+                    out _,
+                    out string error),
+                Is.True,
+                error);
+            Assert.That(parsedManifest, Is.EqualTo(manifestObjectId));
+            Assert.That(parsedMeta, Is.EqualTo(metaObjectId));
+        }
+
+        [Test]
         public void Request_UsesOnlyGitAndPublishesBranchesAndManifestMetadata()
         {
             var runner = new RecordingRunner(spec =>
@@ -221,8 +338,20 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                 if (HasArgument(spec, "clone"))
                     return Success(string.Empty);
 
+                if (HasArgument(spec, "ls-tree"))
+                    return Success(RootPackageTree());
+
                 if (HasArgument(spec, "cat-file"))
                 {
+                    if (HasArgument(spec, MetaObjectId))
+                    {
+                        return Success(
+                            "fileFormatVersion: 2\n" +
+                            "guid: 0123456789abcdef0123456789abcdef\n" +
+                            "PackageManifestImporter:\n" +
+                            "  externalObjects: {}\n");
+                    }
+
                     return Success(
                         "{\"name\":\"com.example.package\",\"version\":\"1.2.3\"," +
                         "\"displayName\":\"Example Package\",\"dependencies\":{" +
@@ -246,14 +375,24 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
             Assert.That(snapshot.DisplayName, Is.EqualTo("Example Package"));
             Assert.That(snapshot.Version, Is.EqualTo("1.2.3"));
             Assert.That(snapshot.InspectedBranch, Is.EqualTo("main"));
+            Assert.That(
+                snapshot.InspectedCommit,
+                Is.EqualTo("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"));
             Assert.That(snapshot.Dependencies, Has.Count.EqualTo(1));
             Assert.That(
                 snapshot.Dependencies[0].Name,
                 Is.EqualTo("com.example.dependency"));
             Assert.That(snapshot.ErrorMessage, Is.Empty);
             Assert.That(snapshot.ManifestMessage, Is.Empty);
+            Assert.That(
+                snapshot.PackageManifestMetaVerification,
+                Is.EqualTo(PackageManifestMetaVerification.Verified));
+            Assert.That(
+                snapshot.PackageManifestMetaGuid,
+                Is.EqualTo("0123456789abcdef0123456789abcdef"));
+            Assert.That(snapshot.PackageManifestMetaMessage, Is.Empty);
 
-            Assert.That(runner.Calls, Has.Count.EqualTo(3));
+            Assert.That(runner.Calls, Has.Count.EqualTo(5));
             Assert.That(runner.Calls.All(call => call.FileName == GitUtility.GitExecutable), Is.True);
             Assert.That(runner.Calls.All(call => call.FileName != "gh"), Is.True);
             Assert.That(
@@ -262,6 +401,8 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                 {
                     GitSubmoduleInstallProbe.RemoteRefsTimeoutMs,
                     GitSubmoduleInstallProbe.PartialCloneTimeoutMs,
+                    GitSubmoduleInstallProbe.ManifestReadTimeoutMs,
+                    GitSubmoduleInstallProbe.ManifestReadTimeoutMs,
                     GitSubmoduleInstallProbe.ManifestReadTimeoutMs
                 }));
             Assert.That(
@@ -276,6 +417,31 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
             Assert.That(
                 runner.Calls.SelectMany(call => call.ArgumentList ?? Array.Empty<string>()),
                 Does.Contain("cat-file"));
+            CommandSpec treeRead = runner.Calls.Single(call =>
+                HasArgument(call, "ls-tree"));
+            Assert.That(treeRead.ArgumentList, Does.Contain("-z"));
+            Assert.That(
+                treeRead.ArgumentList,
+                Does.Contain("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"));
+            Assert.That(treeRead.ArgumentList, Does.Not.Contain("HEAD"));
+            Assert.That(treeRead.ArgumentList, Does.Contain("package.json"));
+            Assert.That(treeRead.ArgumentList, Does.Contain("package.json.meta"));
+            Assert.That(
+                runner.Calls.SelectMany(call =>
+                    call.ArgumentList ?? Array.Empty<string>()),
+                Does.Contain(ManifestObjectId));
+            Assert.That(
+                runner.Calls.SelectMany(call =>
+                    call.ArgumentList ?? Array.Empty<string>()),
+                Does.Contain(MetaObjectId));
+            Assert.That(
+                runner.Calls.SelectMany(call =>
+                    call.ArgumentList ?? Array.Empty<string>()),
+                Has.None.EqualTo("HEAD:package.json"));
+            Assert.That(
+                runner.Calls.SelectMany(call =>
+                    call.ArgumentList ?? Array.Empty<string>()),
+                Has.None.EqualTo("HEAD:package.json.meta"));
         }
 
         [Test]
@@ -294,6 +460,8 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
 
                 if (HasArgument(spec, "clone"))
                     return Success(string.Empty);
+                if (HasArgument(spec, "ls-tree"))
+                    return Success(RootPackageTree());
                 if (HasArgument(spec, "cat-file"))
                 {
                     return Success(
@@ -350,6 +518,9 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                 if (HasArgument(spec, "clone"))
                     return Success(string.Empty);
 
+                if (HasArgument(spec, "ls-tree"))
+                    return Success(string.Empty);
+
                 return Failure("fatal: path 'package.json' does not exist in 'HEAD'");
             });
             CliCommandRunner.CurrentRunner = runner;
@@ -363,6 +534,245 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
             Assert.That(probe.Current.PackageName, Is.Empty);
             Assert.That(probe.Current.ErrorMessage, Is.Empty);
             Assert.That(probe.Current.ManifestMessage, Does.Contain("package.json"));
+        }
+
+        [Test]
+        public void MissingPackageManifestMeta_IsNonfatalButLeavesUnityIntentUnverified()
+        {
+            var runner = new RecordingRunner(spec =>
+            {
+                if (HasArgument(spec, "ls-remote"))
+                {
+                    return Success(
+                        "ref: refs/heads/main\tHEAD\n" +
+                        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\trefs/heads/main\n");
+                }
+
+                if (HasArgument(spec, "clone"))
+                    return Success(string.Empty);
+                if (HasArgument(spec, "ls-tree"))
+                    return Success(RootPackageTree(includeMeta: false));
+
+                return Success(
+                    "{\"name\":\"com.example.package\",\"version\":\"1.0.0\"}");
+            });
+            CliCommandRunner.CurrentRunner = runner;
+
+            probe.Request("https://example.com/owner/package.git", "main");
+            WaitForCompletion(probe);
+
+            Assert.That(probe.Current.Status, Is.EqualTo(GitSubmoduleInstallProbeStatus.Ready));
+            Assert.That(probe.Current.ManifestMessage, Is.Empty);
+            Assert.That(
+                probe.Current.PackageManifestMetaVerification,
+                Is.EqualTo(PackageManifestMetaVerification.Unverified));
+            Assert.That(probe.Current.PackageManifestMetaGuid, Is.Empty);
+            Assert.That(
+                probe.Current.PackageManifestMetaMessage,
+                Does.Contain("Unity package intent is unverified"));
+            Assert.That(
+                probe.Current.PackageManifestMetaMessage,
+                Does.Contain("package.json.meta"));
+        }
+
+        [Test]
+        public void InvalidUtf8PackageManifest_IsNotEligibleAndMetaIsNotRead()
+        {
+            var runner = new RecordingRunner(spec =>
+            {
+                if (HasArgument(spec, "ls-remote"))
+                {
+                    return Success(
+                        "ref: refs/heads/main\tHEAD\n" +
+                        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\trefs/heads/main\n");
+                }
+
+                if (HasArgument(spec, "clone"))
+                    return Success(string.Empty);
+                if (HasArgument(spec, "ls-tree"))
+                    return Success(RootPackageTree());
+                if (HasArgument(spec, ManifestObjectId))
+                {
+                    return new CommandResult
+                    {
+                        ExitCode = 0,
+                        StdOut =
+                            "{\"name\":\"com.example.package\",\"version\":\"1.0.0\"}",
+                        StdErr = string.Empty,
+                        StdOutInvalidUtf8 = true,
+                        TerminationConfirmed = true
+                    };
+                }
+
+                return Failure("Meta must not be read after invalid manifest encoding.");
+            });
+            CliCommandRunner.CurrentRunner = runner;
+
+            probe.Request("https://example.com/owner/package.git", "main");
+            WaitForCompletion(probe);
+
+            Assert.That(probe.Current.Status, Is.EqualTo(GitSubmoduleInstallProbeStatus.Ready));
+            Assert.That(probe.Current.PackageName, Is.Empty);
+            Assert.That(probe.Current.ManifestMessage, Does.Contain("valid UTF-8"));
+            Assert.That(
+                probe.Current.PackageManifestMetaVerification,
+                Is.EqualTo(PackageManifestMetaVerification.Unverified));
+            Assert.That(
+                runner.Calls.Any(call => HasArgument(call, MetaObjectId)),
+                Is.False);
+            Assert.That(
+                runner.Calls.Single(call => HasArgument(call, ManifestObjectId))
+                    .RequireStrictUtf8StdOut,
+                Is.True);
+        }
+
+        [Test]
+        public void InvalidUtf8PackageManifestMeta_IsNeverAcceptedAsVerified()
+        {
+            var runner = new RecordingRunner(spec =>
+            {
+                if (HasArgument(spec, "ls-remote"))
+                {
+                    return Success(
+                        "ref: refs/heads/main\tHEAD\n" +
+                        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\trefs/heads/main\n");
+                }
+
+                if (HasArgument(spec, "clone"))
+                    return Success(string.Empty);
+                if (HasArgument(spec, "ls-tree"))
+                    return Success(RootPackageTree());
+                if (HasArgument(spec, MetaObjectId))
+                {
+                    return new CommandResult
+                    {
+                        ExitCode = 0,
+                        StdOut =
+                            "fileFormatVersion: 2\n" +
+                            "guid: 0123456789abcdef0123456789abcdef\n",
+                        StdErr = string.Empty,
+                        StdOutInvalidUtf8 = true,
+                        TerminationConfirmed = true
+                    };
+                }
+
+                return Success(
+                    "{\"name\":\"com.example.package\",\"version\":\"1.0.0\"}");
+            });
+            CliCommandRunner.CurrentRunner = runner;
+
+            probe.Request("https://example.com/owner/package.git", "main");
+            WaitForCompletion(probe);
+
+            Assert.That(probe.Current.PackageName, Is.EqualTo("com.example.package"));
+            Assert.That(
+                probe.Current.PackageManifestMetaVerification,
+                Is.EqualTo(PackageManifestMetaVerification.Unverified));
+            Assert.That(probe.Current.PackageManifestMetaGuid, Is.Empty);
+            Assert.That(
+                probe.Current.PackageManifestMetaMessage,
+                Does.Contain("valid UTF-8"));
+
+            CommandSpec manifestRead = runner.Calls.Single(call =>
+                HasArgument(call, ManifestObjectId));
+            CommandSpec metaRead = runner.Calls.Single(call =>
+                HasArgument(call, MetaObjectId));
+            Assert.That(manifestRead.RequireStrictUtf8StdOut, Is.True);
+            Assert.That(metaRead.RequireStrictUtf8StdOut, Is.True);
+        }
+
+        [Test]
+        public void SymlinkedPackageManifest_IsRejectedBeforeBlobContentIsRead()
+        {
+            var runner = new RecordingRunner(spec =>
+            {
+                if (HasArgument(spec, "ls-remote"))
+                {
+                    return Success(
+                        "ref: refs/heads/main\tHEAD\n" +
+                        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\trefs/heads/main\n");
+                }
+
+                if (HasArgument(spec, "clone"))
+                    return Success(string.Empty);
+                if (HasArgument(spec, "ls-tree"))
+                {
+                    return Success(
+                        RootPackageTree(manifestMode: "120000"));
+                }
+
+                return Failure("Blob content must not be read.");
+            });
+            CliCommandRunner.CurrentRunner = runner;
+
+            probe.Request("https://example.com/owner/package.git", "main");
+            WaitForCompletion(probe);
+
+            Assert.That(probe.Current.Status, Is.EqualTo(GitSubmoduleInstallProbeStatus.Ready));
+            Assert.That(probe.Current.PackageName, Is.Empty);
+            Assert.That(probe.Current.ManifestMessage, Does.Contain("symbolic-link"));
+            Assert.That(
+                runner.Calls.Any(call => HasArgument(call, "cat-file")),
+                Is.False);
+        }
+
+        [Test]
+        public void SymlinkedPackageManifestMeta_IsUnverifiedAndNeverReadAsContent()
+        {
+            var runner = new RecordingRunner(spec =>
+            {
+                if (HasArgument(spec, "ls-remote"))
+                {
+                    return Success(
+                        "ref: refs/heads/main\tHEAD\n" +
+                        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\trefs/heads/main\n");
+                }
+
+                if (HasArgument(spec, "clone"))
+                    return Success(string.Empty);
+                if (HasArgument(spec, "ls-tree"))
+                    return Success(RootPackageTree(metaMode: "120000"));
+                if (HasArgument(spec, ManifestObjectId))
+                {
+                    return Success(
+                        "{\"name\":\"com.example.package\",\"version\":\"1.0.0\"}");
+                }
+
+                return Failure("Meta blob content must not be read.");
+            });
+            CliCommandRunner.CurrentRunner = runner;
+
+            probe.Request("https://example.com/owner/package.git", "main");
+            WaitForCompletion(probe);
+
+            Assert.That(probe.Current.PackageName, Is.EqualTo("com.example.package"));
+            Assert.That(
+                probe.Current.PackageManifestMetaVerification,
+                Is.EqualTo(PackageManifestMetaVerification.Unverified));
+            Assert.That(
+                probe.Current.PackageManifestMetaMessage,
+                Does.Contain("symbolic-link"));
+            Assert.That(
+                runner.Calls.Any(call => HasArgument(call, MetaObjectId)),
+                Is.False);
+        }
+
+        [Test]
+        public void Snapshot_AllZeroMetaGuidFailsClosedToUnverified()
+        {
+            var snapshot = new GitSubmoduleInstallProbeSnapshot(
+                1,
+                "https://example.com/package.git",
+                GitSubmoduleInstallProbeStatus.Ready,
+                packageManifestMetaVerification:
+                    PackageManifestMetaVerification.Verified,
+                packageManifestMetaGuid:
+                    "00000000000000000000000000000000");
+
+            Assert.That(
+                snapshot.PackageManifestMetaVerification,
+                Is.EqualTo(PackageManifestMetaVerification.Unverified));
+            Assert.That(snapshot.PackageManifestMetaGuid, Is.Empty);
         }
 
         [Test]
@@ -449,7 +859,18 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                 if (HasArgument(spec, "clone"))
                     return Success(string.Empty);
 
-                return Success("{\"name\":\"com.example.second\",\"version\":\"2.0.0\"}");
+                if (HasArgument(spec, "ls-tree"))
+                    return Success(RootPackageTree());
+
+                if (HasArgument(spec, MetaObjectId))
+                {
+                    return Success(
+                        "fileFormatVersion: 2\n" +
+                        "guid: 0123456789abcdef0123456789abcdef\n");
+                }
+
+                return Success(
+                    "{\"name\":\"com.example.second\",\"version\":\"2.0.0\"}");
             });
             CliCommandRunner.CurrentRunner = runner;
 
@@ -561,6 +982,22 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
             };
         }
 
+        private static string RootPackageTree(
+            bool includeMeta = true,
+            string manifestMode = "100644",
+            string metaMode = "100644")
+        {
+            string output = manifestMode + " blob " + ManifestObjectId +
+                            "\tpackage.json\0";
+            if (includeMeta)
+            {
+                output += metaMode + " blob " + MetaObjectId +
+                          "\tpackage.json.meta\0";
+            }
+
+            return output;
+        }
+
         private sealed class RecordingRunner : ICommandRunner
         {
             private readonly Func<CommandSpec, CommandResult> handler;
@@ -591,7 +1028,8 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                         WorkingDirectory = spec.WorkingDirectory,
                         TimeoutMs = spec.TimeoutMs,
                         CancellationToken = spec.CancellationToken,
-                        TerminationScope = spec.TerminationScope
+                        TerminationScope = spec.TerminationScope,
+                        RequireStrictUtf8StdOut = spec.RequireStrictUtf8StdOut
                     });
                 }
 

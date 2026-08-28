@@ -29,7 +29,8 @@ namespace MartinCalander.GitSubmoduleManager.Editor
 
         internal static bool InstallForRoot(object packageManagerRoot)
         {
-            if (!(packageManagerRoot is VisualElement root) ||
+            if (!PackageManagerUnityVersionSupport.IsCurrentVersionSupported ||
+                !(packageManagerRoot is VisualElement root) ||
                 !string.Equals(
                     root.GetType().FullName,
                     PackageManagerWindowRootTypeName,
@@ -91,6 +92,9 @@ namespace MartinCalander.GitSubmoduleManager.Editor
 
         internal static bool IsSupportedContract()
         {
+            if (!PackageManagerUnityVersionSupport.IsCurrentVersionSupported)
+                return false;
+
             Type rootType = PackageManagerSubmoduleHarmonyPatch.FindLoadedType(
                 PackageManagerWindowRootTypeName);
             PropertyInfo addMenu = FindAddMenuProperty(rootType);

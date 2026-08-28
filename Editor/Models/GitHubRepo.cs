@@ -36,7 +36,10 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         public string DeclaredLicensesUrl;
         public PackageManifestDependency[] DeclaredDependencies =
             Array.Empty<PackageManifestDependency>();
+        public string PackageManifestCommitOid;
         public string PackageManifestBlobOid;
+        public string PackageManifestMetaBlobOid;
+        public string PackageManifestMetaGuid;
 
         public bool PackageJsonChecked =>
             ManifestState == PackageManifestState.Valid ||

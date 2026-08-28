@@ -57,6 +57,9 @@ namespace MartinCalander.GitSubmoduleManager.Editor
 
         static PackageManagerGitHubNativeActions()
         {
+            if (!PackageManagerUnityVersionSupport.IsCurrentVersionSupported)
+                return;
+
             PackageManagerReadOnlyGitInstallService.Completed +=
                 OnReadOnlyInstallServiceCompleted;
             PackageDependencyInstallPipeline.Changed +=
@@ -318,7 +321,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                             : BuildConversionDisabledTooltip(conversionError));
                     PackageManagerSubmoduleManageMenu.Apply(
                         entry.Toolbar,
-                        true,
+                        PackageManagerManagedPackageKind.Submodule,
                         conversionEnabled,
                         conversionEnabled
                             ? "Convert this editable submodule to a normal " +
@@ -350,16 +353,6 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                     return;
                 }
 
-                PackageManagerSubmoduleManageMenu.Apply(
-                    entry.Toolbar,
-                    false,
-                    false,
-                    string.Empty,
-                    null,
-                    false,
-                    string.Empty,
-                    null);
-
                 entry.RemoveDetails.Refresh(null);
                 entry.RemoveDetails.SetRemoveState(false, string.Empty);
 
@@ -376,14 +369,28 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                     bool conversionEnabled =
                         string.IsNullOrWhiteSpace(conversionError) &&
                         GitPackageConversionService.CanStart;
+                    string conversionTooltip = conversionEnabled
+                        ? "Convert this normal read-only UPM Git dependency " +
+                          "to an editable submodule at " +
+                          conversionTarget.PackagePath + "."
+                        : BuildConversionDisabledTooltip(conversionError);
                     entry.ConversionDetails.SetActionState(
                         conversionTarget,
                         conversionEnabled,
-                        conversionEnabled
-                            ? "Convert this normal read-only UPM Git dependency " +
-                              "to an editable submodule at " +
-                              conversionTarget.PackagePath + "."
-                            : BuildConversionDisabledTooltip(conversionError));
+                        conversionTooltip);
+                    PackageManagerSubmoduleManageMenu.Apply(
+                        entry.Toolbar,
+                        PackageManagerManagedPackageKind.ReadOnlyGit,
+                        conversionEnabled,
+                        conversionTooltip,
+                        () => BeginReadOnlyConversion(
+                            entry.Toolbar,
+                            entry.ConversionDetails,
+                            conversionTarget,
+                            readOnlyInfo),
+                        false,
+                        string.Empty,
+                        null);
                     if (entry.ConversionDetails.IsConverting &&
                         GitOperationService.IsBusy)
                     {
@@ -393,6 +400,16 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                     }
                     return;
                 }
+
+                PackageManagerSubmoduleManageMenu.Apply(
+                    entry.Toolbar,
+                    PackageManagerManagedPackageKind.None,
+                    false,
+                    string.Empty,
+                    null,
+                    false,
+                    string.Empty,
+                    null);
 
                 entry.ConversionDetails.Refresh(null);
                 entry.ConversionDetails.SetActionState(false, string.Empty);
@@ -673,6 +690,9 @@ namespace MartinCalander.GitSubmoduleManager.Editor
 
         internal static bool HasSupportedLiveContract()
         {
+            if (!SupportsNativePageEditorVersion)
+                return false;
+
             try
             {
                 Type rootType = PackageManagerSubmoduleHarmonyPatch.FindLoadedType(
@@ -714,6 +734,9 @@ namespace MartinCalander.GitSubmoduleManager.Editor
 
         internal static bool HasSupportedSelectionContract()
         {
+            if (!SupportsNativePageEditorVersion)
+                return false;
+
             Type toolbarType = PackageManagerSubmoduleHarmonyPatch.FindLoadedType(
                 PackageToolbarTypeName);
             return TryGetSelectionContract(toolbarType, out _);
@@ -723,11 +746,8 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         {
             get
             {
-#if UNITY_2023_2_OR_NEWER
-                return true;
-#else
-                return false;
-#endif
+                return PackageManagerUnityVersionSupport
+                    .IsCurrentVersionSupported;
             }
         }
 
@@ -1320,6 +1340,74 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             return false;
         }
 
+        private static bool BeginReadOnlyConversion(
+            VisualElement toolbar,
+            PackageManagerPackageConversionDetails preferredDetails,
+            PackageManagerPackageConversionTarget requestedTarget,
+            PackageManagerReadOnlyGitInfo requestedInfo)
+        {
+            bool hasLivePackage = TryGetAuthoritativeSelectedPackage(
+                toolbar,
+                out object livePackage);
+            if (toolbar == null ||
+                !hasLivePackage ||
+                !PackageManagerReadOnlyGitPackage.TryGetInfo(
+                    livePackage,
+                    out PackageManagerReadOnlyGitInfo liveInfo) ||
+                !EntriesByToolbar.TryGetValue(
+                    toolbar,
+                    out NativeActionEntry entry) ||
+                !IsCurrentReadOnlyConversionSelection(
+                    requestedTarget,
+                    requestedInfo,
+                    liveInfo,
+                    entry.ConversionDetails.CurrentTarget))
+            {
+                ReportConversionError(
+                    preferredDetails,
+                    requestedTarget,
+                    "The selected read-only Git dependency changed before " +
+                    "conversion could start. Select it again and retry.");
+                return false;
+            }
+
+            string validationError =
+                GitPackageConversionService.ValidateToSubmodule(requestedInfo);
+            if (!string.IsNullOrWhiteSpace(validationError) ||
+                !GitPackageConversionService.CanStart)
+            {
+                ReportConversionError(
+                    preferredDetails,
+                    requestedTarget,
+                    string.IsNullOrWhiteSpace(validationError)
+                        ? GitPackageConversionService.BuildUnavailableMessage()
+                        : validationError);
+                return false;
+            }
+
+            bool promptAccepted = !Application.isBatchMode &&
+                EditorUtility.DisplayDialog(
+                    "Convert Package to Submodule?",
+                    PackageManagerPackageConversionDetails
+                        .BuildConfirmationMessage(requestedTarget),
+                    "Convert",
+                    "Cancel");
+            if (!ShouldProceedWithReadOnlyConversionPrompt(
+                    Application.isBatchMode,
+                    promptAccepted))
+                return false;
+
+            entry.ConversionDetails.ShowProgress(
+                requestedTarget,
+                "Creating and verifying the target submodule before removing " +
+                "the manifest dependency...");
+            OnConversionRequested(
+                toolbar,
+                entry.ConversionDetails,
+                requestedTarget);
+            return true;
+        }
+
         private static void OnConversionAssessmentCompleted(
             VisualElement toolbar,
             PackageManagerPackageConversionDetails preferredDetails,
@@ -1853,6 +1941,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                     repository.PackageName,
                     installMode,
                     null,
+                    PackageManifestMetaPolicy.RequireVerified,
                     null,
                     out string startError);
                 operationStarted = started;
@@ -2215,6 +2304,23 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             }
         }
 
+        internal static int RetryFailedBranchDiscoveryForSelectedRepositories()
+        {
+            int retryCount = 0;
+            var detailsControllers = new HashSet<PackageManagerGitHubDetails>();
+            foreach (NativeActionEntry entry in EntriesByToolbar.Values)
+            {
+                PackageManagerGitHubDetails details = entry?.Details;
+                if (details == null || !detailsControllers.Add(details))
+                    continue;
+
+                if (details.RetryFailedBranchDiscoveryFromUserRefresh())
+                    retryCount++;
+            }
+
+            return retryCount;
+        }
+
         private static string BuildEnabledTooltip(
             PackageManagerGitHubRepository repository,
             string selectedBranch,
@@ -2537,7 +2643,32 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                    string.Equals(
                        left.SelectionIdentity,
                        right.SelectionIdentity,
-                       StringComparison.Ordinal);
+                   StringComparison.Ordinal);
+        }
+
+        internal static bool IsCurrentReadOnlyConversionSelection(
+            PackageManagerPackageConversionTarget requestedTarget,
+            PackageManagerReadOnlyGitInfo requestedInfo,
+            PackageManagerReadOnlyGitInfo liveInfo,
+            PackageManagerPackageConversionTarget mountedTarget)
+        {
+            return requestedTarget != null &&
+                   requestedTarget.Direction ==
+                   GitPackageConversionDirection.ReadOnlyToSubmodule &&
+                   SameConversionTarget(
+                       BuildConversionTarget(requestedInfo),
+                       requestedTarget) &&
+                   SameConversionTarget(
+                       BuildConversionTarget(liveInfo),
+                       requestedTarget) &&
+                   SameConversionTarget(mountedTarget, requestedTarget);
+        }
+
+        internal static bool ShouldProceedWithReadOnlyConversionPrompt(
+            bool isBatchMode,
+            bool promptAccepted)
+        {
+            return !isBatchMode && promptAccepted;
         }
 
         private static string BuildConversionDisabledTooltip(string error)

@@ -7,6 +7,76 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Security
+
+- Structural command output that requires UTF-8 is now decoded from raw bytes
+  with BOM auto-detection disabled and the strict decoder flushed at EOF. This
+  prevents UTF-16 BOM content from being accepted as a package manifest or
+  Unity meta marker while retaining bounded, concurrent stream draining.
+- Registry fallback for custom dependencies is now bound to the exact complete
+  GitHub catalogue revision that proved package absence. If discovery revision
+  or coverage changes while a registry search is pending, the stale result is
+  discarded and the requirement is resolved again against current evidence.
+- Submodule add completion now binds the package gitlink and immutable staged
+  `.gitmodules` blob in one index snapshot, verifies the initialized child
+  `origin`, exact `HEAD`, and regular bounded worktree file, and repeats the
+  terminal proof around the origin read. Stage-only redirects, late origin or
+  commit swaps, late dirty or interrupted child state, linked `.gitmodules`
+  files, and unstable evidence fail closed.
+- Dependency-step completion now requires each fresh worktree `.gitmodules`
+  proof to be one regular, non-linked, strict-UTF-8 file no larger than 128 KiB
+  whose raw Git blob identity equals the staged registration, including at the
+  terminal acceptance boundary.
+- Failed-add rollback is now bound to the exact add-produced gitlink and staged
+  `.gitmodules` identity and proceeds only when target-section removal exactly
+  reproduces the pre-add baseline. Recovery postconditions are non-cancellable,
+  and unsafe outcomes report the exact preserved worktree and metadata paths.
+- Submodule removal now closes on the exact desired index, regular worktree
+  identity, quiet diff, and package absence after late hooks. Concurrent regular
+  or linked replacements are preserved; CRLF worktrees are accepted only when
+  exact CRLF-to-LF normalization hashes to the staged blob.
+- Reload journals are now read through bounded strict-UTF-8 regular-file
+  snapshots with nonblocking, no-follow POSIX opens. Replacement and deletion
+  use exact identity checks, and quarantined journal bytes remain recoverable so
+  a late writer can never be unlinked as cleanup-owned data.
+- Manifest compare-and-swap cleanup now atomically quarantines and retains each
+  exact randomized sibling instead of deleting it after a mutable byte read.
+  Late or ambiguous writer bytes therefore remain recoverable under their
+  unique sibling path.
+
+## [2.0.0] - 2026-08-27
+
+### Security
+
+- GitHub catalogue discovery now requires a valid regular root
+  `package.json.meta`, fetched with `package.json` from the same commit, before a
+  repository is classified as a Unity package. The marker is bounded and must
+  contain `fileFormatVersion: 2` plus one nonzero root GUID.
+- Explicit direct-URL installs still accept a valid root UPM manifest when the
+  Unity meta marker is missing or invalid, but now show a mandatory warning;
+  verified marker identity is carried into post-install validation. Git tree
+  modes and exact blob IDs are checked so symbolic-link entries cannot satisfy
+  manifest or verified-meta validation.
+- Read-only catalogue and dependency installs now pin the exact commit whose
+  root manifest and meta marker were inspected, retain that commit across
+  reload, and require Unity's resolved Git hash to match before succeeding.
+- Submodule-to-read-only conversion now requires exact-commit regular root
+  `package.json` and `package.json.meta` blobs, a matching valid UPM package
+  identity, and a bounded canonical Unity meta marker before either the project
+  manifest or source submodule can change.
+- Read-only-to-submodule conversion now validates the regular root
+  `package.json` blob and declared package name directly from Unity's exact
+  resolved commit before removing the source dependency.
+- Submodule installs now require the checked-out `HEAD` to match the exact
+  commit inspected during preflight and bind root tree-mode validation to that
+  immutable commit before the transaction can succeed.
+- Dependency-aware submodule steps no longer advance from the presentation
+  snapshot's cached commit alone. A fresh operation- and step-scoped worker
+  verifies the current origin, exact worktree and staged `.gitmodules`
+  registration, and repeated parent stage-0 gitlink plus initialized submodule
+  `HEAD` reads. The terminal stability sequence rechecks commit state, origin,
+  then commit state again; pending, stale, unstable, truncated, or unconfirmed
+  evidence fails closed.
 - Hardened destructive operations with exact Git-root/worktree/origin checks,
   ignored-file protection, cancellable transactions, and recovery ownership.
 - Hardened CI and releases so pull-request code cannot access Unity credentials
@@ -189,6 +259,31 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- Submodule removal and failed-add rollback no longer use a broad forced Git
+  removal. They preserve the worktree and `.gitmodules` inode in Recovery, then
+  update the exact 160000 gitlink and full staged `.gitmodules` blob together
+  under one Git index lock; concurrent staged replacements and late package
+  writers are preserved and fail closed. Authoritative `.gitmodules` reads are
+  capped at 128 KiB before patch generation to prevent oversized allocation or
+  truncated binary-patch evidence.
+- Submodule removal now proves that the exact package commit is both reachable
+  from a currently advertised remote branch or tag and present on the remote,
+  rejects locally rewritten Git ancestry, and rechecks the complete removal
+  snapshot after the bounded network proof before mutating anything.
+- Project-manifest compare-and-swap now rejects linked or junction-backed
+  project paths and revalidates its exact operation siblings across atomic
+  replacement and recovery boundaries.
+- Reload recovery now restores owned Asset Database auto-refresh suppression on
+  every terminal path, verifies installed package dependency fingerprints, and
+  keeps damaged or uncorrelated native Package Manager operations blocked rather
+  than issuing or accepting a second mutation.
+- Native Package Manager integration now activates only on the exact validated
+  Unity versions, keeps conversions in **Manage**, retains discovery state when
+  projection enumeration fails, requires authoritative Git branch data before
+  installation, and stops snapshot polling when no host or work remains.
+- Release validation now behaves consistently on Windows, includes required
+  attribution in package archives, and checks out and revalidates the exact
+  annotated tag without persisting repository credentials.
 - Resolve native actions from Package Manager's exact active-page selection
   after package resolves or script reloads, preventing a recycled stale toolbar
   package from disabling an installed submodule's **Manage** actions.
@@ -275,6 +370,7 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Basic project submodule listing, update, remove, and branch operations.
 - Early GitHub discovery and direct URL installation.
 
-[Unreleased]: https://github.com/martincalander/GitSubmoduleManager/compare/v1.0.0...HEAD
-[1.0.0]: https://github.com/martincalander/GitSubmoduleManager/releases/tag/v1.0.0
-[0.1.0]: https://github.com/martincalander/GitSubmoduleManager/releases/tag/v0.1.0
+[Unreleased]: https://github.com/martincalander/GitSubmoduleManager/compare/v2.0.0...HEAD
+[2.0.0]: https://github.com/martincalander/GitSubmoduleManager/compare/5644e381f90f883aa9d12bbdca9efbf5c2b2eb05...v2.0.0
+[1.0.0]: https://github.com/martincalander/GitSubmoduleManager/tree/5644e381f90f883aa9d12bbdca9efbf5c2b2eb05
+[0.1.0]: https://github.com/martincalander/GitSubmoduleManager/tree/49bac435

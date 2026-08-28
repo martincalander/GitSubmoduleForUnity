@@ -55,11 +55,18 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                         "com.example.dependency",
                         "4.5.6")
                 },
+                PackageManifestCommitOid = new string('c', 40),
+                PackageManifestBlobOid = new string('a', 40),
+                PackageManifestMetaBlobOid = new string('b', 40),
+                PackageManifestMetaGuid = "0123456789abcdef0123456789abcdef",
                 ManifestState = PackageManifestState.Valid
             };
 
             var copy = new PackageManagerGitHubRepository(source);
             var equivalent = new PackageManagerGitHubRepository(source);
+            source.PackageManifestMetaBlobOid = new string('c', 40);
+            var changedMeta = new PackageManagerGitHubRepository(source);
+            source.PackageManifestMetaBlobOid = new string('b', 40);
             source.Name = "mutated";
             source.Description = "Changed";
             source.DeclaredPackageName = "com.example.changed";
@@ -89,7 +96,14 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
             Assert.That(copy.Dependencies, Has.Count.EqualTo(1));
             Assert.That(copy.Dependencies[0].Name, Is.EqualTo("com.example.dependency"));
             Assert.That(copy.Dependencies[0].Version, Is.EqualTo("4.5.6"));
+            Assert.That(copy.PackageManifestCommitOid,
+                Is.EqualTo(new string('c', 40)));
+            Assert.That(copy.PackageManifestMetaBlobOid, Is.EqualTo(new string('b', 40)));
+            Assert.That(copy.PackageManifestMetaGuid,
+                Is.EqualTo("0123456789abcdef0123456789abcdef"));
             Assert.That(copy.HasSameContent(equivalent), Is.True);
+            Assert.That(copy.HasSameContent(changedMeta), Is.False,
+                "A different Unity meta blob must create a new catalogue identity.");
             Assert.That(
                 copy.HasSameContent(new PackageManagerGitHubRepository(source)),
                 Is.False,
@@ -871,6 +885,62 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
             CliCommandRunner.ResetGitHubCommandRestartRequirementForTests();
         }
 
+        private const string ValidPackageManifestMeta =
+            "fileFormatVersion: 2\n" +
+            "guid: 0123456789abcdef0123456789abcdef\n" +
+            "PackageManifestImporter:\n" +
+            "  externalObjects: {}\n" +
+            "  userData: \n" +
+            "  assetBundleName: \n" +
+            "  assetBundleVariant: \n";
+
+        private static string BuildDiscoveryManifestCommitNode(
+            string nodeId,
+            string manifest,
+            char manifestOidSeed)
+        {
+            return
+                "{\"id\":" + QuoteDiscoveryJson(nodeId) +
+                ",\"defaultBranchRef\":{\"target\":{" +
+                "\"__typename\":\"Commit\"," +
+                "\"oid\":\"" + new string('c', 40) + "\"," +
+                "\"packageManifest\":" +
+                BuildDiscoveryManifestTreeEntry(
+                    "package.json",
+                    new string(manifestOidSeed, 40),
+                    manifest) + "," +
+                "\"packageManifestMeta\":" +
+                BuildDiscoveryManifestTreeEntry(
+                    "package.json.meta",
+                    new string('f', 40),
+                    ValidPackageManifestMeta) +
+                "}}}";
+        }
+
+        private static string BuildDiscoveryManifestTreeEntry(
+            string fileName,
+            string oid,
+            string text)
+        {
+            return
+                "{\"name\":" + QuoteDiscoveryJson(fileName) +
+                ",\"mode\":33188,\"type\":\"blob\",\"object\":{" +
+                "\"__typename\":\"Blob\",\"oid\":" + QuoteDiscoveryJson(oid) +
+                ",\"byteSize\":" + Encoding.UTF8.GetByteCount(text) +
+                ",\"isBinary\":false,\"isTruncated\":false,\"text\":" +
+                QuoteDiscoveryJson(text) + "}}";
+        }
+
+        private static string QuoteDiscoveryJson(string value)
+        {
+            return "\"" + (value ?? string.Empty)
+                .Replace("\\", "\\\\")
+                .Replace("\"", "\\\"")
+                .Replace("\r", "\\r")
+                .Replace("\n", "\\n")
+                .Replace("\t", "\\t") + "\"";
+        }
+
         private sealed class PersonalFailureDrainRunner : ICommandRunner
         {
             private readonly ManualResetEventSlim organizationStarted = new(false);
@@ -1303,16 +1373,10 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                         "NODE-GAMMA" => 'e',
                         _ => 'f'
                     };
-                    nodes.Add(
-                        "{\"id\":\"" + nodeId +
-                        "\",\"packageManifest\":{" +
-                        "\"__typename\":\"Blob\"," +
-                        "\"oid\":\"" + new string(manifestOidSeed, 40) + "\"," +
-                        "\"byteSize\":" + Encoding.UTF8.GetByteCount(manifest) + "," +
-                        "\"isBinary\":false," +
-                        "\"isTruncated\":false," +
-                        "\"text\":" + QuoteJson(manifest) + "}}"
-                    );
+                    nodes.Add(BuildDiscoveryManifestCommitNode(
+                        nodeId,
+                        manifest,
+                        manifestOidSeed));
 
                     if (nodeId == "NODE-PERSONAL")
                         Volatile.Write(ref personalValidationCompleted, 1);
@@ -1479,18 +1543,10 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                         "\"changelogUrl\":\"https://example.com/changelog\"," +
                         "\"licensesUrl\":\"https://example.com/license\"," +
                         "\"dependencies\":{\"com.example.shared\":\"3.2.1\"}}";
-                    nodes.Add(
-                        "{\"id\":\"" + nodeId +
-                        "\",\"packageManifest\":{" +
-                        "\"__typename\":\"Blob\"," +
-                        "\"oid\":\"" + new string(
-                            nodeId == "NODE-ORGANIZATION" ? 'b' : 'a',
-                            40) + "\"," +
-                        "\"byteSize\":" + Encoding.UTF8.GetByteCount(manifest) + "," +
-                        "\"isBinary\":false," +
-                        "\"isTruncated\":false," +
-                        "\"text\":" + QuoteJson(manifest) + "}}"
-                    );
+                    nodes.Add(BuildDiscoveryManifestCommitNode(
+                        nodeId,
+                        manifest,
+                        nodeId == "NODE-ORGANIZATION" ? 'b' : 'a'));
                 }
 
                 return

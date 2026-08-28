@@ -135,6 +135,52 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                 Is.EqualTo(expected));
         }
 
+        [TestCase(false, 0, false, false, false, false)]
+        [TestCase(false, 1, false, false, false, true)]
+        [TestCase(false, 0, true, false, false, true)]
+        [TestCase(false, 0, false, true, false, true)]
+        [TestCase(false, 0, false, false, true, true)]
+        [TestCase(true, 1, true, true, true, false)]
+        public void PackageManagerSnapshot_UpdatesOnlyForHostsOrActiveWork(
+            bool shuttingDown,
+            int observerCount,
+            bool readerActive,
+            bool hasPendingResult,
+            bool hasPendingRequest,
+            bool expected)
+        {
+            Assert.That(
+                PackageManagerSubmoduleSnapshot.ShouldKeepListening(
+                    shuttingDown,
+                    observerCount,
+                    readerActive,
+                    hasPendingResult,
+                    hasPendingRequest),
+                Is.EqualTo(expected));
+        }
+
+        [TestCase(0, true, false, 1)]
+        [TestCase(1, true, false, 2)]
+        [TestCase(int.MaxValue, true, false, int.MaxValue)]
+        [TestCase(2, false, false, 1)]
+        [TestCase(1, false, false, 0)]
+        [TestCase(0, false, false, 0)]
+        [TestCase(4, true, true, 0)]
+        [TestCase(4, false, true, 0)]
+        public void PackageManagerSnapshot_ObserverRetainReleaseAndShutdownAreBounded(
+            int observerCount,
+            bool retain,
+            bool shuttingDown,
+            int expected)
+        {
+            Assert.That(
+                PackageManagerSubmoduleSnapshot.TransitionHostObserverCount(
+                    observerCount,
+                    retain,
+                    shuttingDown),
+                Is.EqualTo(expected));
+        }
+
         private static void IgnoreWhenLivePackageManagerDiscoveryOwnsGitHubCommands()
         {
             if (PackageManagerGitHubDiscovery.IsStarted ||

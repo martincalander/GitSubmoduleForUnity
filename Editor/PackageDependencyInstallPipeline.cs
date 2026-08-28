@@ -157,7 +157,12 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             if (PackageDependencyInstallCoordinator.IsBusy)
             {
                 PublishCoordinatorState();
-                SubscribeUpdate();
+                if (ShouldSubscribeToCoordinatorUpdates(
+                        PackageDependencyInstallCoordinator.IsBusy,
+                        PackageDependencyInstallCoordinator.NeedsUpdate))
+                {
+                    SubscribeUpdate();
+                }
             }
         }
 
@@ -172,6 +177,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             string expectedPackageName,
             PackageManagerGitInstallMode installMode,
             GitSubmoduleInstallProbeSnapshot exactProbeSnapshot,
+            PackageManifestMetaPolicy packageManifestMetaPolicy,
             Action<PackageDependencyInstallPipelineCompletion> onComplete,
             out string error)
         {
@@ -212,6 +218,22 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 error = "The selected package install mode is invalid.";
                 return false;
             }
+            if (packageManifestMetaPolicy !=
+                    PackageManifestMetaPolicy.AllowUnverifiedWithWarning &&
+                packageManifestMetaPolicy !=
+                    PackageManifestMetaPolicy.RequireVerified)
+            {
+                error = "The package.json.meta verification policy is invalid.";
+                return false;
+            }
+            if (installMode == PackageManagerGitInstallMode.ReadOnlyPackage &&
+                packageManifestMetaPolicy !=
+                    PackageManifestMetaPolicy.RequireVerified)
+            {
+                error =
+                    "Read-only Git installs require verified root package.json.meta evidence.";
+                return false;
+            }
 
             var operation = new PendingInstall(
                 Guid.NewGuid().ToString("N"),
@@ -219,6 +241,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 selectedBranch,
                 packageName,
                 installMode,
+                packageManifestMetaPolicy,
                 onComplete,
                 EditorApplication.timeSinceStartup);
             pending = operation;
@@ -230,7 +253,8 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                     packageName,
                     installMode,
                     out PackageDependencyInstallRequest request,
-                    out _))
+                    out _,
+                    packageManifestMetaPolicy))
             {
                 if (BeginPreflight(operation, request, out error))
                     return true;
@@ -368,8 +392,12 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             if (operation == null)
             {
                 if (PackageDependencyInstallCoordinator.IsBusy)
-                {
                     PublishCoordinatorStateIfChanged();
+
+                if (ShouldSubscribeToCoordinatorUpdates(
+                        PackageDependencyInstallCoordinator.IsBusy,
+                        PackageDependencyInstallCoordinator.NeedsUpdate))
+                {
                     SubscribeUpdate();
                 }
                 else
@@ -414,7 +442,8 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                     operation.PackageName,
                     operation.InstallMode,
                     out PackageDependencyInstallRequest request,
-                    out string error))
+                    out string error,
+                    operation.PackageManifestMetaPolicy))
             {
                 Fail(operation, error, false);
                 return;
@@ -605,9 +634,11 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                        left.PackageName,
                        right.PackageName,
                        StringComparison.Ordinal) &&
-                   GitUtility.AreRepositoryUrlsEquivalent(
-                       left.RepositoryUrl,
-                       right.RepositoryUrl) &&
+                   ((string.IsNullOrWhiteSpace(left.RepositoryUrl) &&
+                     string.IsNullOrWhiteSpace(right.RepositoryUrl)) ||
+                    GitUtility.AreRepositoryUrlsEquivalent(
+                        left.RepositoryUrl,
+                        right.RepositoryUrl)) &&
                    string.Equals(
                        left.Branch,
                        right.Branch,
@@ -658,6 +689,17 @@ namespace MartinCalander.GitSubmoduleManager.Editor
 
         internal static string BuildCoordinatorStatusMessage()
         {
+            if (PackageDependencyInstallCoordinator.IsRecoveryBlocked)
+            {
+                string recoveryMessage =
+                    PackageDependencyInstallCoordinator.ActiveRecoveryMessage;
+                return string.IsNullOrWhiteSpace(recoveryMessage)
+                    ? "Dependency-aware package installation is blocked until " +
+                      "the persisted recovery evidence is inspected and Unity " +
+                      "is restarted."
+                    : recoveryMessage;
+            }
+
             int count = PackageDependencyInstallCoordinator.ActiveStepCount;
             int index = PackageDependencyInstallCoordinator.ActiveStepIndex;
             string packageName =
@@ -670,6 +712,13 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             }
 
             return "Resuming dependency-aware package installation...";
+        }
+
+        internal static bool ShouldSubscribeToCoordinatorUpdates(
+            bool coordinatorIsBusy,
+            bool coordinatorNeedsUpdate)
+        {
+            return coordinatorIsBusy && coordinatorNeedsUpdate;
         }
 
         private static void Fail(
@@ -746,8 +795,12 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 PackageManagerGitInstallMode.GitSubmodule,
                 string.Empty);
             Invoke(Changed, Current);
-            if (!PackageDependencyInstallCoordinator.IsBusy)
+            if (!ShouldSubscribeToCoordinatorUpdates(
+                    PackageDependencyInstallCoordinator.IsBusy,
+                    PackageDependencyInstallCoordinator.NeedsUpdate))
+            {
                 UnsubscribeUpdate();
+            }
         }
 
         private static void SubscribeUpdate()
@@ -808,6 +861,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 string branch,
                 string packageName,
                 PackageManagerGitInstallMode installMode,
+                PackageManifestMetaPolicy packageManifestMetaPolicy,
                 Action<PackageDependencyInstallPipelineCompletion> callback,
                 double startedAt)
             {
@@ -816,6 +870,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 Branch = branch;
                 PackageName = packageName;
                 InstallMode = installMode;
+                PackageManifestMetaPolicy = packageManifestMetaPolicy;
                 Callback = callback;
                 StartedAt = startedAt;
             }
@@ -825,6 +880,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             internal string Branch { get; }
             internal string PackageName { get; }
             internal PackageManagerGitInstallMode InstallMode { get; }
+            internal PackageManifestMetaPolicy PackageManifestMetaPolicy { get; }
             internal Action<PackageDependencyInstallPipelineCompletion> Callback
                 { get; }
             internal double StartedAt { get; }

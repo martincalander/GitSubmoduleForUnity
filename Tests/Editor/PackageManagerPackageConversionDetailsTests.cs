@@ -87,7 +87,8 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                 Assert.That(details.Feedback.text, Does.Contain("verified submodule"));
                 Assert.That(
                     details.Controls.style.display.value,
-                    Is.EqualTo(DisplayStyle.Flex));
+                    Is.EqualTo(DisplayStyle.None),
+                    "Manage remains the only primary conversion surface during confirmation.");
 
                 details.TriggerConversion();
 
@@ -102,7 +103,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
         }
 
         [Test]
-        public void ReadOnlyToSubmodule_UsesEditableDestinationLanguage()
+        public void ReadOnlyToSubmodule_UsesManageOnlySurfaceAndEditableDestinationLanguage()
         {
             PackageManagerPackageConversionDetails details = CreateDetails(
                 out _);
@@ -116,8 +117,8 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
 
                 Assert.That(
                     details.Controls.style.display.value,
-                    Is.EqualTo(DisplayStyle.Flex),
-                    "Read-only packages keep their standalone Convert to Submodule action.");
+                    Is.EqualTo(DisplayStyle.None),
+                    "Read-only conversion is exposed only through Unity's Manage menu.");
                 Assert.That(
                     details.ConvertButton.text,
                     Is.EqualTo(L10n.Tr(

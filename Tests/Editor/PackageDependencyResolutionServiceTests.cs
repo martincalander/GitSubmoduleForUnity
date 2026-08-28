@@ -296,6 +296,56 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                 result.SelectedCandidate.RepositoryUrl,
                 Is.EqualTo("https://github.com/owner/shared.git"));
             Assert.That(result.SelectedCandidate.RepositoryBranch, Is.EqualTo("main"));
+            Assert.That(
+                result.SelectedCandidate.PackageManifestMetaVerification,
+                Is.EqualTo(PackageManifestMetaVerification.Verified));
+            Assert.That(
+                result.SelectedCandidate.PackageManifestMetaGuid,
+                Is.EqualTo("0123456789abcdef0123456789abcdef"));
+            Assert.That(
+                result.SelectedCandidate.RepositoryCommit,
+                Is.EqualTo(new string('c', 40)));
+            Assert.That(facade.SearchCalls, Is.Empty);
+        }
+
+        [Test]
+        public void GitHubCandidateWithoutVerifiedMeta_IsBlockingWithoutRegistryFallback()
+        {
+            const string packageName = "com.example.missing-meta-evidence";
+            var repository = new PackageManagerGitHubRepository(new GitHubRepo
+            {
+                NodeId = "owner-missing-meta",
+                Owner = "owner",
+                Name = "missing-meta",
+                Url = "https://github.com/owner/missing-meta.git",
+                DefaultBranch = "main",
+                DeclaredPackageName = packageName,
+                DeclaredVersion = "1.0.0",
+                ManifestState = PackageManifestState.Valid
+            });
+            var facade = new FakeFacade
+            {
+                Snapshot = SuccessfulSnapshot(repository)
+            };
+            facade.Searches[packageName] = FakeSearch.Successful(
+                RegistryPackage(
+                    packageName,
+                    "1.0.0",
+                    false,
+                    "Fallback Registry"));
+            using var service = new PackageDependencyResolutionService(facade);
+
+            Assert.That(service.TryStart(
+                "com.example.root",
+                new[] { Dependency(packageName, "1.0.0") },
+                out string error), Is.True, error);
+            Assert.That(service.Tick(), Is.True);
+
+            PackageDependencyResolutionResult result = service.Current.Results.Single();
+            Assert.That(result.Status,
+                Is.EqualTo(PackageDependencyResolutionStatus.Unresolved));
+            Assert.That(result.Message, Does.Contain("package.json.meta GUID"));
+            Assert.That(result.Message, Does.Contain("Registry search was skipped"));
             Assert.That(facade.SearchCalls, Is.Empty);
         }
 
@@ -375,6 +425,144 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                 "Company Registry"));
             Assert.That(service.Tick(), Is.True);
             Assert.That(service.Current.IsComplete, Is.True);
+        }
+
+        [Test]
+        public void RegistryFallback_IsDiscardedWhenNewDiscoveryRevisionFindsGitHubMatch()
+        {
+            const string packageName = "com.example.catalogue-race";
+            var registrySearch = new FakeSearch();
+            var facade = new FakeFacade
+            {
+                Snapshot = SuccessfulSnapshotAtRevision(10)
+            };
+            facade.Searches[packageName] = registrySearch;
+            using var service = new PackageDependencyResolutionService(facade);
+            Assert.That(service.TryStart(
+                "com.example.root",
+                new[] { Dependency(packageName, "1.0.0") },
+                out string error), Is.True, error);
+
+            Assert.That(service.Tick(), Is.True);
+            Assert.That(facade.SearchCalls, Is.EqualTo(new[] { packageName }));
+            Assert.That(service.Current.IsComplete, Is.False);
+
+            facade.Snapshot = SuccessfulSnapshotAtRevision(
+                11,
+                Repository(
+                    "owner",
+                    "catalogue-race",
+                    packageName,
+                    "1.0.0"));
+            registrySearch.CompleteSuccess(RegistryPackage(
+                packageName,
+                "1.0.0",
+                false,
+                "Stale Registry"));
+            Assert.That(service.Tick(), Is.True);
+
+            PackageDependencyResolutionResult result =
+                service.Current.Results.Single();
+            Assert.That(service.Current.IsComplete, Is.True);
+            Assert.That(result.Status,
+                Is.EqualTo(PackageDependencyResolutionStatus.Resolved));
+            Assert.That(result.SelectedCandidate.Source,
+                Is.EqualTo(PackageDependencyCandidateSource.GitHub));
+            Assert.That(result.SelectedCandidate.SourceName,
+                Is.EqualTo("owner/catalogue-race"));
+            Assert.That(facade.SearchCalls, Is.EqualTo(new[] { packageName }));
+        }
+
+        [Test]
+        public void RegistryFallback_RestartsWhenNewDiscoveryRevisionStillProvesAbsence()
+        {
+            const string packageName = "com.example.catalogue-refresh";
+            var firstSearch = new FakeSearch();
+            var secondSearch = new FakeSearch();
+            var facade = new FakeFacade
+            {
+                Snapshot = SuccessfulSnapshotAtRevision(20)
+            };
+            facade.Searches[packageName] = firstSearch;
+            using var service = new PackageDependencyResolutionService(facade);
+            Assert.That(service.TryStart(
+                "com.example.root",
+                new[] { Dependency(packageName, "2.0.0") },
+                out string error), Is.True, error);
+
+            Assert.That(service.Tick(), Is.True);
+            facade.Snapshot = SuccessfulSnapshotAtRevision(21);
+            facade.Searches[packageName] = secondSearch;
+            firstSearch.CompleteSuccess(RegistryPackage(
+                packageName,
+                "2.0.0",
+                false,
+                "Stale Registry"));
+
+            Assert.That(service.Tick(), Is.True);
+            Assert.That(facade.SearchCalls,
+                Is.EqualTo(new[] { packageName, packageName }));
+            Assert.That(service.Current.IsComplete, Is.False);
+            Assert.That(service.Current.Results.Single().Status,
+                Is.EqualTo(PackageDependencyResolutionStatus.Pending));
+
+            secondSearch.CompleteSuccess(RegistryPackage(
+                packageName,
+                "2.0.0",
+                false,
+                "Current Registry"));
+            Assert.That(service.Tick(), Is.True);
+
+            PackageDependencyResolutionResult result =
+                service.Current.Results.Single();
+            Assert.That(service.Current.IsComplete, Is.True);
+            Assert.That(result.Status,
+                Is.EqualTo(PackageDependencyResolutionStatus.Resolved));
+            Assert.That(result.SelectedCandidate.Source,
+                Is.EqualTo(PackageDependencyCandidateSource.CustomRegistry));
+            Assert.That(result.SelectedCandidate.SourceName,
+                Is.EqualTo("Current Registry"));
+        }
+
+        [Test]
+        public void RegistryFallback_IsDiscardedWhenCurrentCoverageIsIncomplete()
+        {
+            const string packageName = "com.example.coverage-race";
+            var registrySearch = new FakeSearch();
+            var facade = new FakeFacade
+            {
+                Snapshot = SuccessfulSnapshotAtRevision(30)
+            };
+            facade.Searches[packageName] = registrySearch;
+            using var service = new PackageDependencyResolutionService(facade);
+            Assert.That(service.TryStart(
+                "com.example.root",
+                new[] { Dependency(packageName, "1.0.0") },
+                out string error), Is.True, error);
+
+            Assert.That(service.Tick(), Is.True);
+            facade.Snapshot = TerminalSnapshot(
+                Array.Empty<PackageManagerGitHubRepository>(),
+                string.Empty,
+                completedOwners: 1,
+                totalOwners: 1,
+                coverageWarning: "One organization could not be inspected.",
+                revision: 31);
+            registrySearch.CompleteSuccess(RegistryPackage(
+                packageName,
+                "1.0.0",
+                false,
+                "Stale Registry"));
+
+            Assert.That(service.Tick(), Is.True);
+
+            PackageDependencyResolutionResult result =
+                service.Current.Results.Single();
+            Assert.That(service.Current.IsComplete, Is.True);
+            Assert.That(result.Status,
+                Is.EqualTo(PackageDependencyResolutionStatus.Unresolved));
+            Assert.That(result.Message, Does.Contain("absence was not proven"));
+            Assert.That(facade.SearchCalls, Is.EqualTo(new[] { packageName }));
         }
 
         [Test]
@@ -998,6 +1186,11 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                 DeclaredVersion = version,
                 DeclaredDependencies = dependencies ??
                                        Array.Empty<PackageManifestDependency>(),
+                PackageManifestCommitOid = new string('c', 40),
+                PackageManifestBlobOid = new string('a', 40),
+                PackageManifestMetaBlobOid = new string('b', 40),
+                PackageManifestMetaGuid =
+                    "0123456789abcdef0123456789abcdef",
                 ManifestState = PackageManifestState.Valid
             });
         }
@@ -1027,13 +1220,26 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                 totalOwners: 1);
         }
 
+        private static PackageManagerGitHubDiscoverySnapshot SuccessfulSnapshotAtRevision(
+            long revision,
+            params PackageManagerGitHubRepository[] repositories)
+        {
+            return TerminalSnapshot(
+                repositories,
+                string.Empty,
+                completedOwners: 1,
+                totalOwners: 1,
+                revision: revision);
+        }
+
         private static PackageManagerGitHubDiscoverySnapshot TerminalSnapshot(
             IReadOnlyList<PackageManagerGitHubRepository> repositories,
             string error,
             int completedOwners,
             int totalOwners,
             int unavailableManifestCount = 0,
-            string coverageWarning = "")
+            string coverageWarning = "",
+            long revision = 2)
         {
             return new PackageManagerGitHubDiscoverySnapshot(
                 repositories,
@@ -1046,7 +1252,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                 completedOwners,
                 totalOwners,
                 unavailableManifestCount,
-                2,
+                revision,
                 coverageWarning);
         }
 

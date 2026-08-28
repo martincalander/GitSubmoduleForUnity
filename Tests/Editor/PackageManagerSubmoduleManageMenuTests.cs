@@ -12,14 +12,17 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
         [Test]
         public void LiveContract_ResolvesUnityManageDropdownAndMenuStorage()
         {
-#if !UNITY_2023_2_OR_NEWER
-            Assert.Ignore(
-                "The native Manage dropdown integration requires Unity 2023.2 or newer.");
-#else
+            if (!PackageManagerUnityVersionSupport.IsCurrentVersionSupported)
+            {
+                Assert.That(
+                    PackageManagerSubmoduleManageMenu.IsSupportedContract(),
+                    Is.False);
+                return;
+            }
+
             Assert.That(
                 PackageManagerSubmoduleManageMenu.IsSupportedContract(),
                 Is.True);
-#endif
         }
 
         [Test]
@@ -206,6 +209,56 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                     L10n.Tr(PackageManagerSubmoduleManageMenu.UninstallText)),
                 Is.True);
             Assert.That(uninstallCount, Is.EqualTo(1));
+        }
+
+        [Test]
+        public void ApplyReadOnly_PreservesNativeActionsAndAddsCurrentConversionExactlyOnce()
+        {
+            var menu = new GenericDropdownMenu();
+            int nativeRemoveCount = 0;
+            int oldConversionCount = 0;
+            int currentConversionCount = 0;
+            menu.AddItem("Update", false, () => { });
+            menu.AddItem("Remove", false, () => nativeRemoveCount++);
+
+            Assert.That(
+                PackageManagerSubmoduleManageMenu.ApplyReadOnlyToMenu(
+                    menu,
+                    true,
+                    "Ready",
+                    () => oldConversionCount++),
+                Is.True);
+            Assert.That(
+                PackageManagerSubmoduleManageMenu.ApplyReadOnlyToMenu(
+                    menu,
+                    true,
+                    "Ready",
+                    () => currentConversionCount++),
+                Is.True);
+
+            Assert.That(
+                PackageManagerSubmoduleManageMenu.GetItemNamesForTests(menu),
+                Is.EqualTo(new[]
+                {
+                    "Update",
+                    "Remove",
+                    L10n.Tr(
+                        PackageManagerSubmoduleManageMenu.ConvertToSubmoduleText)
+                }));
+            Assert.That(
+                PackageManagerSubmoduleManageMenu.InvokeItemForTests(
+                    menu,
+                    "Remove"),
+                Is.True);
+            Assert.That(nativeRemoveCount, Is.EqualTo(1));
+            Assert.That(
+                PackageManagerSubmoduleManageMenu.InvokeItemForTests(
+                    menu,
+                    L10n.Tr(
+                        PackageManagerSubmoduleManageMenu.ConvertToSubmoduleText)),
+                Is.True);
+            Assert.That(oldConversionCount, Is.Zero);
+            Assert.That(currentConversionCount, Is.EqualTo(1));
         }
     }
 }

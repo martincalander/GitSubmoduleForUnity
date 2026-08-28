@@ -57,9 +57,13 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         // code leaves this null and always uses the guarded reflection factory.
         internal static Func<string, PackageManagerGitHubRepository, bool>
             ProjectedPackageCreationGateForTests { get; set; }
+        internal static Func<bool> PackageEnumerationGateForTests { get; set; }
 
         static PackageManagerGitHubPackageProjection()
         {
+            if (!PackageManagerUnityVersionSupport.IsCurrentVersionSupported)
+                return;
+
             PackageManagerGitHubDiscovery.SnapshotChanged += OnDiscoverySnapshotChanged;
             PackageManagerSubmoduleSnapshot.SnapshotChanged += OnSubmoduleSnapshotChanged;
             AssemblyReloadEvents.beforeAssemblyReload += OnBeforeAssemblyReload;
@@ -73,7 +77,8 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         /// </summary>
         internal static bool IsSupportedContract()
         {
-            return TryGetContract(out _);
+            return PackageManagerUnityVersionSupport.IsCurrentVersionSupported &&
+                   TryGetContract(out _);
         }
 
         // PackageDatabase.UpdatePackages synchronously refreshes active pages.
@@ -89,7 +94,8 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         /// </summary>
         internal static bool RetainHost(object packageManagerRoot)
         {
-            if (packageManagerRoot == null)
+            if (packageManagerRoot == null ||
+                !PackageManagerUnityVersionSupport.IsCurrentVersionSupported)
                 return false;
 
             PackageManagerGitHubDiscovery.PrepareForHost();
@@ -105,6 +111,8 @@ namespace MartinCalander.GitSubmoduleManager.Editor
 
                 firstHost = RetainedHosts.Count == 1;
             }
+
+            PackageManagerSubmoduleSnapshot.RetainHostObserver();
 
             if (!firstHost)
                 return true;
@@ -126,12 +134,17 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             if (packageManagerRoot == null)
                 return false;
 
+            bool removedHost = false;
             bool lastHost = false;
             lock (Gate)
             {
-                if (RetainedHosts.Remove(packageManagerRoot))
+                removedHost = RetainedHosts.Remove(packageManagerRoot);
+                if (removedHost)
                     lastHost = RetainedHosts.Count == 0;
             }
+
+            if (removedHost)
+                PackageManagerSubmoduleSnapshot.ReleaseHostObserver();
 
             if (!lastHost)
                 return true;
@@ -316,9 +329,13 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 lock (Gate)
                     lastPackageDatabase = packageDatabase;
 
-                List<string> ownedIds = GetOwnedPackageIds(
-                    contract,
-                    packageDatabase);
+                if (!TryGetOwnedPackageIds(
+                        contract,
+                        packageDatabase,
+                        out List<string> ownedIds))
+                {
+                    return false;
+                }
                 if (ownedIds.Count != 0 &&
                     !UpdatePackageDatabase(
                         contract,
@@ -354,7 +371,8 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         {
             packageDatabaseUpdated = false;
             allDesiredPackagesProjected = false;
-            if (!contract.TryGetAllPackages(
+            if (!TryEnumeratePackages(
+                    contract,
                     packageDatabase,
                     out List<object> allPackages))
             {
@@ -546,13 +564,19 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             }
         }
 
-        private static List<string> GetOwnedPackageIds(
+        private static bool TryGetOwnedPackageIds(
             ReflectionContract contract,
-            object packageDatabase)
+            object packageDatabase,
+            out List<string> ownedIds)
         {
-            var ownedIds = new List<string>();
-            if (!contract.TryGetAllPackages(packageDatabase, out List<object> packages))
-                return ownedIds;
+            ownedIds = new List<string>();
+            if (!TryEnumeratePackages(
+                    contract,
+                    packageDatabase,
+                    out List<object> packages))
+            {
+                return false;
+            }
 
             foreach (object package in packages)
             {
@@ -564,7 +588,19 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                     ownedIds.Add(packageId);
             }
 
-            return ownedIds;
+            return true;
+        }
+
+        private static bool TryEnumeratePackages(
+            ReflectionContract contract,
+            object packageDatabase,
+            out List<object> packages)
+        {
+            packages = new List<object>();
+            Func<bool> enumerationGate = PackageEnumerationGateForTests;
+            return (enumerationGate == null || enumerationGate()) &&
+                   contract != null &&
+                   contract.TryGetAllPackages(packageDatabase, out packages);
         }
 
         private static bool IsValidRepository(
@@ -677,8 +713,20 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                        StringComparison.Ordinal) &&
                    DependenciesEqual(left.Dependencies, right.Dependencies) &&
                    string.Equals(
+                       left.PackageManifestCommitOid,
+                       right.PackageManifestCommitOid,
+                       StringComparison.OrdinalIgnoreCase) &&
+                   string.Equals(
                        left.PackageManifestBlobOid,
                        right.PackageManifestBlobOid,
+                       StringComparison.Ordinal) &&
+                   string.Equals(
+                       left.PackageManifestMetaBlobOid,
+                       right.PackageManifestMetaBlobOid,
+                       StringComparison.Ordinal) &&
+                   string.Equals(
+                       left.PackageManifestMetaGuid,
+                       right.PackageManifestMetaGuid,
                        StringComparison.Ordinal);
         }
 
@@ -940,9 +988,11 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             if (hasProjectedState)
                 RemoveOwnedPackages();
 
+            int retainedHostCount;
             lock (Gate)
             {
                 isShuttingDown = true;
+                retainedHostCount = RetainedHosts.Count;
                 RetainedHosts.Clear();
                 RepositoryByPackageId.Clear();
                 lastPackageDatabase = null;
@@ -953,7 +1003,11 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 projectionRetryQueued = false;
                 isProjectionRetryInProgress = false;
                 ProjectedPackageCreationGateForTests = null;
+                PackageEnumerationGateForTests = null;
             }
+
+            for (int index = 0; index < retainedHostCount; index++)
+                PackageManagerSubmoduleSnapshot.ReleaseHostObserver();
 
             PackageManagerGitHubDiscovery.SnapshotChanged -= OnDiscoverySnapshotChanged;
             PackageManagerSubmoduleSnapshot.SnapshotChanged -= OnSubmoduleSnapshotChanged;
@@ -965,6 +1019,12 @@ namespace MartinCalander.GitSubmoduleManager.Editor
 
         private static bool TryGetContract(out ReflectionContract contract)
         {
+            if (!PackageManagerUnityVersionSupport.IsCurrentVersionSupported)
+            {
+                contract = null;
+                return false;
+            }
+
             lock (Gate)
             {
                 contract = supportedContract;

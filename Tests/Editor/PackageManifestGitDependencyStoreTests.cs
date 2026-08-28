@@ -17,6 +17,9 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
         public void SetUp()
         {
             PackageManifestGitDependencyStore.BeforeInitialAtomicReplaceForTests = null;
+            PackageManifestGitDependencyStore.BeforeDependencyCompareAndSwapForTests = null;
+            PackageManifestGitDependencyStore.AfterInitialAtomicReplaceForTests = null;
+            PackageManifestGitDependencyStore.BeforeKnownFileCleanupForTests = null;
             PackageManifestGitDependencyStore.ResetReadCacheForTests();
             temporaryDirectory = Path.Combine(
                 Path.GetTempPath(),
@@ -30,6 +33,9 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
         public void TearDown()
         {
             PackageManifestGitDependencyStore.BeforeInitialAtomicReplaceForTests = null;
+            PackageManifestGitDependencyStore.BeforeDependencyCompareAndSwapForTests = null;
+            PackageManifestGitDependencyStore.AfterInitialAtomicReplaceForTests = null;
+            PackageManifestGitDependencyStore.BeforeKnownFileCleanupForTests = null;
             PackageManifestGitDependencyStore.ResetReadCacheForTests();
             if (!string.IsNullOrEmpty(temporaryDirectory) &&
                 Directory.Exists(temporaryDirectory))
@@ -307,6 +313,295 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
         }
 
         [Test]
+        public void ProjectMutation_RejectsLinkedPackagesDirectoryBeforeCreatingOperationFiles()
+        {
+            if (Path.DirectorySeparatorChar == '\\')
+            {
+                Assert.Ignore(
+                    "Creating an unprivileged directory link is not portable on Windows test hosts.");
+            }
+
+            string projectRoot = Path.Combine(temporaryDirectory, "project");
+            string externalPackages = Path.Combine(
+                temporaryDirectory,
+                "external-packages");
+            string linkedPackages = Path.Combine(projectRoot, "Packages");
+            string externalManifest = Path.Combine(
+                externalPackages,
+                "manifest.json");
+            Directory.CreateDirectory(projectRoot);
+            Directory.CreateDirectory(externalPackages);
+            byte[] original = Encoding.UTF8.GetBytes(
+                "{\n  \"dependencies\": {}\n}\n");
+            File.WriteAllBytes(externalManifest, original);
+
+            CommandResult linkResult = CliCommandRunner.Run(
+                "/bin/ln",
+                "-s -- " + GitUtility.Quote(externalPackages) + " " +
+                GitUtility.Quote(linkedPackages),
+                projectRoot,
+                5000);
+            if (!linkResult.IsSuccess)
+            {
+                Assert.Ignore(
+                    "The test host could not create a symbolic link: " +
+                    linkResult.StdErr);
+            }
+
+            IDisposable projectRootOverride = null;
+            try
+            {
+                projectRootOverride = GitUtility.OverrideProjectRootForTests(
+                    projectRoot);
+
+                bool success = PackageManifestGitDependencyStore.TryAddDependency(
+                    "com.example.redirected",
+                    "https://github.com/example/redirected.git#main",
+                    out PackageManifestDependencyMutation mutation,
+                    out string error);
+
+                Assert.That(success, Is.False);
+                Assert.That(mutation, Is.Null);
+                Assert.That(error, Does.Contain("symbolic link"));
+                Assert.That(File.ReadAllBytes(externalManifest), Is.EqualTo(original));
+                Assert.That(
+                    Directory.GetFiles(externalPackages).Select(Path.GetFileName),
+                    Is.EquivalentTo(new[] { "manifest.json" }),
+                    "No replacement, displaced, or recovery file may be created through the link.");
+            }
+            finally
+            {
+                projectRootOverride?.Dispose();
+                try
+                {
+                    if (Directory.Exists(linkedPackages))
+                        Directory.Delete(linkedPackages);
+                }
+                catch
+                {
+                    // The class teardown will retry sandbox cleanup. Do not
+                    // hide the safety assertion with best-effort link cleanup.
+                }
+            }
+        }
+
+        [Test]
+        public void ProjectMutation_PackagesLinkSwapAtAtomicBoundaryCannotRedirectReplaceOrCleanup()
+        {
+            if (Path.DirectorySeparatorChar == '\\')
+            {
+                Assert.Ignore(
+                    "Reliable unprivileged junction creation and cleanup is not portable across Windows Unity test hosts; production detection uses FileAttributes.ReparsePoint for both links and junctions.");
+            }
+
+            string projectRoot = Path.Combine(temporaryDirectory, "race-project");
+            string packagesPath = Path.Combine(projectRoot, "Packages");
+            string preservedPackagesPath = Path.Combine(
+                projectRoot,
+                "Packages-before-link-swap");
+            string externalPackages = Path.Combine(
+                temporaryDirectory,
+                "race-external-packages");
+            string projectManifest = Path.Combine(packagesPath, "manifest.json");
+            string preservedManifest = Path.Combine(
+                preservedPackagesPath,
+                "manifest.json");
+            string externalManifest = Path.Combine(
+                externalPackages,
+                "manifest.json");
+            Directory.CreateDirectory(packagesPath);
+            Directory.CreateDirectory(externalPackages);
+            byte[] originalProjectBytes = Encoding.UTF8.GetBytes(
+                "{\n  \"dependencies\": {}\n}\n");
+            byte[] externalBytes = Encoding.UTF8.GetBytes(
+                "{\n  \"dependencies\": {\n" +
+                "    \"com.example.external\": \"9.0.0\"\n" +
+                "  }\n}\n");
+            File.WriteAllBytes(projectManifest, originalProjectBytes);
+            File.WriteAllBytes(externalManifest, externalBytes);
+
+            bool swapApplied = false;
+            IDisposable projectRootOverride = null;
+            try
+            {
+                projectRootOverride = GitUtility.OverrideProjectRootForTests(
+                    projectRoot);
+                PackageManifestGitDependencyStore.BeforeInitialAtomicReplaceForTests = _ =>
+                {
+                    Directory.Move(packagesPath, preservedPackagesPath);
+                    CommandResult linkResult = CliCommandRunner.Run(
+                        "/bin/ln",
+                        "-s -- " + GitUtility.Quote(externalPackages) + " " +
+                        GitUtility.Quote(packagesPath),
+                        projectRoot,
+                        5000);
+                    if (!linkResult.IsSuccess)
+                    {
+                        throw new InvalidOperationException(
+                            "The test host could not create the race symbolic link: " +
+                            linkResult.StdErr);
+                    }
+
+                    swapApplied = true;
+                };
+
+                bool success = PackageManifestGitDependencyStore.TryAddDependency(
+                    "com.example.redirected",
+                    "https://github.com/example/redirected.git#main",
+                    out PackageManifestDependencyMutation mutation,
+                    out string error);
+
+                Assert.That(swapApplied, Is.True);
+                Assert.That(success, Is.False);
+                Assert.That(mutation, Is.Null);
+                Assert.That(error, Does.Contain("symbolic link"));
+                Assert.That(
+                    File.ReadAllBytes(externalManifest),
+                    Is.EqualTo(externalBytes));
+                Assert.That(
+                    Directory.GetFiles(externalPackages).Select(Path.GetFileName),
+                    Is.EquivalentTo(new[] { "manifest.json" }),
+                    "Revalidation and cleanup must not create, replace, or delete files through the swapped link.");
+                Assert.That(
+                    File.ReadAllBytes(preservedManifest),
+                    Is.EqualTo(originalProjectBytes));
+            }
+            finally
+            {
+                PackageManifestGitDependencyStore.BeforeInitialAtomicReplaceForTests = null;
+                projectRootOverride?.Dispose();
+                try
+                {
+                    if (Directory.Exists(packagesPath))
+                        Directory.Delete(packagesPath);
+                    if (Directory.Exists(preservedPackagesPath) &&
+                        !Directory.Exists(packagesPath))
+                    {
+                        Directory.Move(preservedPackagesPath, packagesPath);
+                    }
+                }
+                catch
+                {
+                    // Teardown owns final sandbox cleanup; preserve the primary
+                    // safety assertion if best-effort fixture restoration fails.
+                }
+            }
+        }
+
+        [Test]
+        public void ProjectMutation_PackagesLinkSwapAfterAtomicReplacePreservesRecoveryWithoutExternalCleanup()
+        {
+            if (Path.DirectorySeparatorChar == '\\')
+            {
+                Assert.Ignore(
+                    "Reliable unprivileged junction creation and cleanup is not portable across Windows Unity test hosts; production detection uses FileAttributes.ReparsePoint for both links and junctions.");
+            }
+
+            string projectRoot = Path.Combine(temporaryDirectory, "post-replace-race-project");
+            string packagesPath = Path.Combine(projectRoot, "Packages");
+            string preservedPackagesPath = Path.Combine(
+                projectRoot,
+                "Packages-after-replace");
+            string externalPackages = Path.Combine(
+                temporaryDirectory,
+                "post-replace-race-external-packages");
+            string projectManifest = Path.Combine(packagesPath, "manifest.json");
+            string preservedManifest = Path.Combine(
+                preservedPackagesPath,
+                "manifest.json");
+            string externalManifest = Path.Combine(
+                externalPackages,
+                "manifest.json");
+            Directory.CreateDirectory(packagesPath);
+            Directory.CreateDirectory(externalPackages);
+            byte[] originalProjectBytes = Encoding.UTF8.GetBytes(
+                "{\n  \"dependencies\": {}\n}\n");
+            byte[] externalBytes = Encoding.UTF8.GetBytes(
+                "{\n  \"dependencies\": {\n" +
+                "    \"com.example.external\": \"9.0.0\"\n" +
+                "  }\n}\n");
+            File.WriteAllBytes(projectManifest, originalProjectBytes);
+            File.WriteAllBytes(externalManifest, externalBytes);
+
+            bool swapApplied = false;
+            IDisposable projectRootOverride = null;
+            try
+            {
+                projectRootOverride = GitUtility.OverrideProjectRootForTests(
+                    projectRoot);
+                PackageManifestGitDependencyStore.AfterInitialAtomicReplaceForTests = _ =>
+                {
+                    Directory.Move(packagesPath, preservedPackagesPath);
+                    CommandResult linkResult = CliCommandRunner.Run(
+                        "/bin/ln",
+                        "-s -- " + GitUtility.Quote(externalPackages) + " " +
+                        GitUtility.Quote(packagesPath),
+                        projectRoot,
+                        5000);
+                    if (!linkResult.IsSuccess)
+                    {
+                        throw new InvalidOperationException(
+                            "The test host could not create the post-replace race symbolic link: " +
+                            linkResult.StdErr);
+                    }
+
+                    swapApplied = true;
+                };
+
+                bool success = PackageManifestGitDependencyStore.TryAddDependency(
+                    "com.example.redirected",
+                    "https://github.com/example/redirected.git#main",
+                    out PackageManifestDependencyMutation mutation,
+                    out string error);
+
+                Assert.That(swapApplied, Is.True);
+                Assert.That(success, Is.False);
+                Assert.That(mutation, Is.Null);
+                Assert.That(error, Does.Contain("Automatic recovery could not be proven safe"));
+                Assert.That(error, Does.Contain("symbolic link"));
+                Assert.That(
+                    File.ReadAllBytes(externalManifest),
+                    Is.EqualTo(externalBytes));
+                Assert.That(
+                    Directory.GetFiles(externalPackages).Select(Path.GetFileName),
+                    Is.EquivalentTo(new[] { "manifest.json" }),
+                    "Post-replace validation and cleanup must not read or delete through the swapped link.");
+                Assert.That(
+                    File.ReadAllText(preservedManifest),
+                    Does.Contain("com.example.redirected"),
+                    "The completed replacement remains in the moved project directory for manual recovery.");
+                string[] preservedRecoveryFiles = Directory.GetFiles(
+                    preservedPackagesPath,
+                    "manifest.json.displaced.*.tmp");
+                Assert.That(preservedRecoveryFiles, Has.Length.EqualTo(1));
+                Assert.That(
+                    File.ReadAllBytes(preservedRecoveryFiles[0]),
+                    Is.EqualTo(originalProjectBytes),
+                    "The exact displaced manifest must be retained when post-replace ancestry changes.");
+            }
+            finally
+            {
+                PackageManifestGitDependencyStore.AfterInitialAtomicReplaceForTests = null;
+                projectRootOverride?.Dispose();
+                try
+                {
+                    if (Directory.Exists(packagesPath))
+                        Directory.Delete(packagesPath);
+                    if (Directory.Exists(preservedPackagesPath) &&
+                        !Directory.Exists(packagesPath))
+                    {
+                        Directory.Move(preservedPackagesPath, packagesPath);
+                    }
+                }
+                catch
+                {
+                    // Teardown owns final sandbox cleanup; preserve the primary
+                    // safety assertion if best-effort fixture restoration fails.
+                }
+            }
+        }
+
+        [Test]
         public void MutationRollback_RestoresExactOriginalBytes()
         {
             byte[] original = Encoding.UTF8.GetBytes(
@@ -398,9 +693,67 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
             Assert.That(error, Does.Contain("restored"));
             Assert.That(hookCallCount, Is.EqualTo(1));
             Assert.That(File.ReadAllBytes(manifestPath), Is.EqualTo(externalEdit));
+            string[] cleanupRecoveries = Directory.GetFiles(
+                temporaryDirectory,
+                "manifest.json.recovery.*.tmp.cleanup-recovery.*.tmp");
             Assert.That(
-                Directory.GetFiles(temporaryDirectory).Select(Path.GetFileName),
-                Is.EquivalentTo(new[] { "manifest.json" }));
+                cleanupRecoveries,
+                Has.Length.EqualTo(1),
+                "The exact manager-installed manifest displaced during restoration remains recoverable instead of being unlinked after a mutable read.");
+            Assert.That(
+                Encoding.UTF8.GetString(File.ReadAllBytes(cleanupRecoveries[0])),
+                Does.Contain("com.example.readonly"));
+        }
+
+        [Test]
+        public void Cleanup_LateWriterAtKnownSiblingIsAtomicallyQuarantinedAndPreserved()
+        {
+            byte[] original = Encoding.UTF8.GetBytes(
+                "{\n  \"dependencies\": {}\n}\n");
+            byte[] lateBytes = Encoding.UTF8.GetBytes(
+                "late external bytes that must remain recoverable\n");
+            File.WriteAllBytes(manifestPath, original);
+
+            int hookCallCount = 0;
+            string cleanupSourcePath = string.Empty;
+            PackageManifestGitDependencyStore.BeforeKnownFileCleanupForTests = path =>
+            {
+                hookCallCount++;
+                cleanupSourcePath = path;
+                Assert.That(Path.GetFileName(path), Does.Contain(".displaced."));
+                File.WriteAllBytes(path, lateBytes);
+            };
+
+            try
+            {
+                Assert.That(
+                    PackageManifestGitDependencyStore.TryAddDependencyAtPath(
+                        manifestPath,
+                        "com.example.readonly",
+                        "https://github.com/example/readonly.git#main",
+                        out PackageManifestDependencyMutation mutation,
+                        out string error),
+                    Is.True,
+                    error);
+                Assert.That(mutation, Is.Not.Null);
+            }
+            finally
+            {
+                PackageManifestGitDependencyStore.BeforeKnownFileCleanupForTests = null;
+            }
+
+            Assert.That(hookCallCount, Is.EqualTo(1));
+            Assert.That(cleanupSourcePath, Is.Not.Empty);
+            Assert.That(File.Exists(cleanupSourcePath), Is.False);
+            string[] recoveryFiles = Directory.GetFiles(
+                temporaryDirectory,
+                Path.GetFileName(cleanupSourcePath) +
+                ".cleanup-recovery.*.tmp");
+            Assert.That(recoveryFiles, Has.Length.EqualTo(1));
+            Assert.That(File.ReadAllBytes(recoveryFiles[0]), Is.EqualTo(lateBytes));
+            Assert.That(
+                File.ReadAllText(manifestPath),
+                Does.Contain("com.example.readonly"));
         }
 
         [Test]
@@ -443,6 +796,178 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                 Is.False);
             Assert.That(mutation.TryRollback(out error), Is.True, error);
             Assert.That(File.ReadAllBytes(manifestPath), Is.EqualTo(original));
+        }
+
+        [Test]
+        public void ReadOnlyOwnership_AcquiresAndCleansOnlyNewExactManifestKey()
+        {
+            const string packageName = "com.example.readonly";
+            const string spec =
+                "https://github.com/example/readonly.git#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+            File.WriteAllText(
+                manifestPath,
+                "{\n  \"dependencies\": {}\n}\n",
+                new UTF8Encoding(false));
+
+            Assert.That(
+                PackageManagerReadOnlyGitInstallService
+                    .TryAcquireExactManifestDependencyAtPath(
+                        manifestPath,
+                        packageName,
+                        spec,
+                        out PackageManifestDependencyMutation mutation,
+                        out string addError),
+                Is.True,
+                addError);
+            Assert.That(mutation, Is.Not.Null);
+            Assert.That(mutation.Changed, Is.True);
+            Assert.That(
+                PackageManifestGitDependencyStore.TryGetDependencyAtPath(
+                    manifestPath,
+                    packageName,
+                    out PackageManifestGitDependency installed,
+                    out string readError),
+                Is.True,
+                readError);
+            Assert.That(installed.Spec, Is.EqualTo(spec));
+
+            Assert.That(
+                PackageManagerReadOnlyGitInstallService
+                    .TryRemoveExactMismatchDependencyAtPath(
+                        manifestPath,
+                        packageName,
+                        spec,
+                        out string removeError),
+                Is.True,
+                removeError);
+            Assert.That(
+                PackageManifestGitDependencyStore.TryGetDependencyAtPath(
+                    manifestPath,
+                    packageName,
+                    out _,
+                    out _),
+                Is.False);
+        }
+
+        [Test]
+        public void ReadOnlyOwnership_RefusesPreExistingUnregisteredManifestKey()
+        {
+            const string packageName = "com.example.readonly";
+            const string spec =
+                "https://github.com/example/readonly.git#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+            byte[] original = Encoding.UTF8.GetBytes(
+                "{\n  \"dependencies\": {\n" +
+                "    \"" + packageName + "\": \"" + spec + "\"\n" +
+                "  }\n}\n");
+            File.WriteAllBytes(manifestPath, original);
+
+            Assert.That(
+                PackageManagerReadOnlyGitInstallService
+                    .TryAcquireExactManifestDependencyAtPath(
+                        manifestPath,
+                        packageName,
+                        spec,
+                        out PackageManifestDependencyMutation mutation,
+                        out string error),
+                Is.False);
+            Assert.That(mutation, Is.Null);
+            Assert.That(error, Does.Contain("not claimed"));
+            Assert.That(File.ReadAllBytes(manifestPath), Is.EqualTo(original));
+        }
+
+        [Test]
+        public void ReadOnlyOwnership_IdenticalInsertionRaceIsNotClaimed()
+        {
+            const string packageName = "com.example.readonly";
+            const string requestedSpec =
+                "https://github.com/example/readonly.git#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+            byte[] original = Encoding.UTF8.GetBytes(
+                "{\n  \"dependencies\": {}\n}\n");
+            byte[] concurrent = Encoding.UTF8.GetBytes(
+                "{\n  \"dependencies\": {\n" +
+                "    \"" + packageName + "\": \"" + requestedSpec + "\"\n" +
+                "  }\n}\n");
+            File.WriteAllBytes(manifestPath, original);
+            PackageManifestGitDependencyStore.BeforeDependencyCompareAndSwapForTests =
+                path => File.WriteAllBytes(path, concurrent);
+
+            Assert.That(
+                PackageManagerReadOnlyGitInstallService
+                    .TryAcquireExactManifestDependencyAtPath(
+                        manifestPath,
+                        packageName,
+                        requestedSpec,
+                        out PackageManifestDependencyMutation mutation,
+                        out string error),
+                Is.False);
+            Assert.That(mutation, Is.Null);
+            Assert.That(error, Does.Contain("not claimed"));
+            Assert.That(File.ReadAllBytes(manifestPath), Is.EqualTo(concurrent));
+        }
+
+        [Test]
+        public void ReadOnlyCleanup_RacePreservesConcurrentReplacement()
+        {
+            const string packageName = "com.example.readonly";
+            const string ownedSpec =
+                "https://github.com/example/readonly.git#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+            byte[] original = Encoding.UTF8.GetBytes(
+                "{\n  \"dependencies\": {\n" +
+                "    \"" + packageName + "\": \"" + ownedSpec + "\"\n" +
+                "  }\n}\n");
+            byte[] concurrent = Encoding.UTF8.GetBytes(
+                "{\n  \"dependencies\": {\n" +
+                "    \"" + packageName +
+                "\": \"https://github.com/example/replacement.git#release\"\n" +
+                "  }\n}\n");
+            File.WriteAllBytes(manifestPath, original);
+            PackageManifestGitDependencyStore.BeforeInitialAtomicReplaceForTests =
+                path => File.WriteAllBytes(path, concurrent);
+
+            Assert.That(
+                PackageManagerReadOnlyGitInstallService
+                    .TryRemoveExactMismatchDependencyAtPath(
+                        manifestPath,
+                        packageName,
+                        ownedSpec,
+                        out string error),
+                Is.False);
+            Assert.That(error, Does.Contain("changed"));
+            Assert.That(File.ReadAllBytes(manifestPath), Is.EqualTo(concurrent));
+        }
+
+        [Test]
+        public void Remove_IdenticalConcurrentRemovalReturnsUnownedMutation()
+        {
+            const string packageName = "com.example.readonly";
+            const string ownedSpec =
+                "https://github.com/example/readonly.git#aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+            File.WriteAllText(
+                manifestPath,
+                "{\n  \"dependencies\": {\n" +
+                "    \"" + packageName + "\": \"" + ownedSpec + "\"\n" +
+                "  }\n}\n",
+                new UTF8Encoding(false));
+            byte[] concurrentlyRemoved = Encoding.UTF8.GetBytes(
+                "{\n  \"dependencies\": {}\n}\n");
+            PackageManifestGitDependencyStore.BeforeDependencyCompareAndSwapForTests =
+                path => File.WriteAllBytes(path, concurrentlyRemoved);
+
+            Assert.That(
+                PackageManifestGitDependencyStore.TryRemoveDependencyAtPath(
+                    manifestPath,
+                    packageName,
+                    ownedSpec,
+                    out PackageManifestDependencyMutation mutation,
+                    out string error),
+                Is.True,
+                error);
+            Assert.That(mutation, Is.Not.Null);
+            Assert.That(mutation.Changed, Is.False);
+            Assert.That(mutation.TryRollback(out error), Is.True, error);
+            Assert.That(
+                File.ReadAllBytes(manifestPath),
+                Is.EqualTo(concurrentlyRemoved));
         }
 
         [Test]
@@ -501,6 +1026,30 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                 error);
             Assert.That(parsedUrl, Is.EqualTo(repositoryUrl));
             Assert.That(parsedRevision, Is.EqualTo(revision));
+        }
+
+        [TestCase("./repository?path=/Nested", "")]
+        [TestCase("./repository#literal", "main")]
+        [TestCase("git@example.com:repository.git?path=/Nested", "main")]
+        [TestCase("git@example.com:repository.git#literal", "")]
+        public void BuildGitSpec_RejectsLiteralUnitySpecDelimitersInRepositoryUrl(
+            string repositoryUrl,
+            string revision)
+        {
+            Assert.That(
+                GitUtility.IsValidRepositoryUrl(repositoryUrl),
+                Is.True,
+                "The fixture must exercise a repository URL accepted for direct Git operations.");
+
+            Assert.That(
+                PackageManifestGitDependencyStore.TryBuildGitSpec(
+                    repositoryUrl,
+                    revision,
+                    out string spec,
+                    out string error),
+                Is.False);
+            Assert.That(spec, Is.Empty);
+            Assert.That(error, Does.Contain("cannot be represented unambiguously"));
         }
 
         [TestCase(

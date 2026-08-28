@@ -47,6 +47,14 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
         [Test]
         public void LiveContract_ResolvesTheNativeAddMenuExtensionSurface()
         {
+            if (!PackageManagerUnityVersionSupport.IsCurrentVersionSupported)
+            {
+                Assert.That(
+                    PackageManagerGitSubmoduleInstallMenu.IsSupportedContract(),
+                    Is.False);
+                return;
+            }
+
             Type rootType = PackageManagerSubmoduleHarmonyPatch.FindLoadedType(
                 PackageManagerGitSubmoduleInstallMenu
                     .PackageManagerWindowRootTypeName);

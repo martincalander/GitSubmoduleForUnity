@@ -153,6 +153,21 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         // this hook.
         internal static Action<string> BeforeInitialAtomicReplaceForTests { get; set; }
 
+        // Tests use this to create a dependency-level race after the manifest
+        // document was parsed and serialized but before byte CAS re-reads it.
+        internal static Action<string> BeforeDependencyCompareAndSwapForTests
+            { get; set; }
+
+        // Tests use this to swap project ancestry after File.Replace succeeds
+        // but before recovery siblings are inspected. Production code never
+        // assigns this hook.
+        internal static Action<string> AfterInitialAtomicReplaceForTests { get; set; }
+
+        // Tests use this to replace an exact operation sibling after cleanup
+        // inspected its bytes but immediately before the atomic quarantine.
+        // Production code never assigns this hook.
+        internal static Action<string> BeforeKnownFileCleanupForTests { get; set; }
+
         // Tests use this to simulate a transient presentation-read failure
         // without changing the manifest stamp. Production code never assigns
         // this hook.
@@ -597,11 +612,12 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             if (!TrySerialize(document, out byte[] replacementBytes, out error))
                 return false;
 
+            BeforeDependencyCompareAndSwapForTests?.Invoke(document.Path);
             if (!TryCompareAndSwapBytes(
                     document.Path,
                     document.Bytes,
                     replacementBytes,
-                    out _,
+                    out bool alreadyReplaced,
                     out error))
             {
                 return false;
@@ -611,7 +627,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 document.Path,
                 document.Bytes,
                 replacementBytes,
-                true);
+                !alreadyReplaced);
             return true;
         }
 
@@ -671,11 +687,12 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             if (!TrySerialize(document, out byte[] replacementBytes, out error))
                 return false;
 
+            BeforeDependencyCompareAndSwapForTests?.Invoke(document.Path);
             if (!TryCompareAndSwapBytes(
                     document.Path,
                     document.Bytes,
                     replacementBytes,
-                    out _,
+                    out bool alreadyReplaced,
                     out error))
             {
                 return false;
@@ -685,7 +702,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 document.Path,
                 document.Bytes,
                 replacementBytes,
-                true);
+                !alreadyReplaced);
             return true;
         }
 
@@ -704,6 +721,18 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             {
                 error =
                     "Use a secure HTTPS, SSH, or explicit local repository URL without embedded credentials.";
+                return false;
+            }
+
+            // Unity assigns '?' to its package-subfolder query and '#' to the
+            // revision fragment. A literal delimiter in a local or SCP-style
+            // repository name cannot be escaped unambiguously in a UPM Git
+            // specification, so never reinterpret a repository that was
+            // inspected under a different identity.
+            if (url.IndexOf('?') >= 0 || url.IndexOf('#') >= 0)
+            {
+                error =
+                    "The repository URL contains '?' or '#', which cannot be represented unambiguously as a Unity Git package specification.";
                 return false;
             }
 
@@ -963,6 +992,20 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                         return false;
                     }
 
+                    // The manifest and both unique siblings were resolved
+                    // lexically above. Revalidate their project-owned ancestry
+                    // immediately before creating the replacement file so a
+                    // linked Packages directory (or a directory swapped to a
+                    // link after the read) cannot redirect the write.
+                    if (!TryValidateManifestOperationPaths(
+                            fullPath,
+                            out error,
+                            temporaryPath,
+                            displacedPath))
+                    {
+                        return false;
+                    }
+
                     using (var stream = new FileStream(
                                temporaryPath,
                                FileMode.CreateNew,
@@ -980,8 +1023,33 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                     // another process writes at this boundary, its bytes land
                     // in displacedPath and are compared before success.
                     BeforeInitialAtomicReplaceForTests?.Invoke(fullPath);
+                    if (!TryValidateManifestOperationPaths(
+                            fullPath,
+                            out error,
+                            temporaryPath,
+                            displacedPath))
+                    {
+                        return false;
+                    }
+
                     File.Replace(temporaryPath, fullPath, displacedPath, true);
                     initialReplaceCompleted = true;
+                    AfterInitialAtomicReplaceForTests?.Invoke(fullPath);
+
+                    // The replace may have completed immediately before an
+                    // ancestor was swapped to a link. Revalidate before
+                    // following, reading, or deleting the displaced sibling;
+                    // on drift it remains untouched for manual recovery.
+                    if (!TryValidateManifestOperationPaths(
+                            fullPath,
+                            out string postReplaceValidationError,
+                            displacedPath))
+                    {
+                        error = BuildUnsafeRecoveryError(
+                            displacedPath,
+                            postReplaceValidationError);
+                        return false;
+                    }
 
                     if (!TryReadRawBytes(
                             displacedPath,
@@ -1042,13 +1110,13 @@ namespace MartinCalander.GitSubmoduleManager.Editor
 
                 // The replacement file contains only bytes created by this
                 // operation. File.Replace consumes it on success.
-                TryDeleteKnownFile(temporaryPath, replacementBytes);
+                TryQuarantineKnownFile(temporaryPath, replacementBytes);
 
-                // Delete the displaced copy only after it was proven to be the
-                // caller's expected manifest. On every uncertain/failure path
-                // it is retained as recovery data.
+                // Quarantine the displaced copy only after it was proven to be
+                // the caller's expected manifest. The captured inode remains
+                // recovery data so a late writer can never be unlinked.
                 if (initialReplaceCompleted && displacedFileCanBeDeleted)
-                    TryDeleteKnownFile(displacedPath, expectedBytes);
+                    TryQuarantineKnownFile(displacedPath, expectedBytes);
             }
         }
 
@@ -1075,6 +1143,18 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                     return false;
                 }
 
+                if (!TryValidateManifestOperationPaths(
+                        fullPath,
+                        out string validationError,
+                        candidatePath,
+                        capturedPath))
+                {
+                    error = BuildUnsafeRecoveryError(
+                        candidatePath,
+                        validationError);
+                    return false;
+                }
+
                 try
                 {
                     File.Replace(candidatePath, fullPath, capturedPath, true);
@@ -1092,6 +1172,20 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                     return false;
                 }
 
+                // As with the initial swap, validate immediately after the
+                // atomic replace and before the captured sibling is read or
+                // removed. Any ancestry drift leaves recovery data in place.
+                if (!TryValidateManifestOperationPaths(
+                        fullPath,
+                        out string postReplaceValidationError,
+                        capturedPath))
+                {
+                    error = BuildUnsafeRecoveryError(
+                        capturedPath,
+                        postReplaceValidationError);
+                    return false;
+                }
+
                 if (!TryReadRawBytes(
                         capturedPath,
                         out byte[] capturedBytes,
@@ -1105,7 +1199,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 {
                     // Restoration displaced exactly the bytes installed by the
                     // preceding operation, so no later writer was overwritten.
-                    TryDeleteKnownFile(capturedPath, bytesExpectedAtDestination);
+                    TryQuarantineKnownFile(capturedPath, bytesExpectedAtDestination);
                     error =
                         "Packages/manifest.json changed after it was inspected. " +
                         "The external edit was restored and no project dependency was overwritten.";
@@ -1203,6 +1297,97 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             Path.DirectorySeparatorChar == '\\'
                 ? StringComparison.OrdinalIgnoreCase
                 : StringComparison.Ordinal;
+
+        private static bool TryValidateManifestOperationPaths(
+            string manifestPath,
+            out string error,
+            params string[] operationPaths)
+        {
+            error = string.Empty;
+            if (!TryResolveManifestPath(
+                    manifestPath,
+                    out string resolvedManifestPath,
+                    out error) ||
+                !string.Equals(
+                    resolvedManifestPath,
+                    Path.GetFullPath(manifestPath),
+                    PathComparison))
+            {
+                if (string.IsNullOrWhiteSpace(error))
+                    error = "Packages/manifest.json no longer resolves to the inspected file.";
+                return false;
+            }
+
+            if (!IsProjectManifestPath(resolvedManifestPath))
+                return true;
+
+            string manifestDirectory = Path.GetDirectoryName(resolvedManifestPath);
+            foreach (string operationPath in operationPaths ?? Array.Empty<string>())
+            {
+                string candidate;
+                try
+                {
+                    candidate = Path.GetFullPath(operationPath ?? string.Empty);
+                }
+                catch (Exception exception)
+                {
+                    error = SanitizeFileError(
+                        "A project manifest operation path could not be resolved safely: ",
+                        exception);
+                    return false;
+                }
+
+                if (string.IsNullOrEmpty(manifestDirectory) ||
+                    !string.Equals(
+                        Path.GetDirectoryName(candidate),
+                        manifestDirectory,
+                        PathComparison) ||
+                    !GitUtility.TryValidateProjectOwnedPath(candidate, out error))
+                {
+                    if (string.IsNullOrWhiteSpace(error))
+                    {
+                        error =
+                            "A project manifest operation path is not an exact sibling of Packages/manifest.json.";
+                    }
+
+                    return false;
+                }
+            }
+
+            return true;
+        }
+
+        private static bool IsProjectManifestPath(string fullPath)
+        {
+            try
+            {
+                return string.Equals(
+                    Path.GetFullPath(fullPath),
+                    Path.GetFullPath(ManifestPath),
+                    PathComparison);
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        private static bool IsProjectManifestSiblingPath(string path)
+        {
+            try
+            {
+                string candidate = Path.GetFullPath(path);
+                string projectManifest = Path.GetFullPath(ManifestPath);
+                return string.Equals(
+                    Path.GetDirectoryName(candidate),
+                    Path.GetDirectoryName(projectManifest),
+                    PathComparison);
+            }
+            catch
+            {
+                return false;
+            }
+        }
 
         private static bool TryReadDocument(
             string manifestPath,
@@ -1438,6 +1623,17 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             try
             {
                 fullPath = Path.GetFullPath(manifestPath);
+                if (IsProjectManifestPath(fullPath) &&
+                    !GitUtility.TryValidateProjectOwnedPath(
+                        fullPath,
+                        out string projectPathError))
+                {
+                    error =
+                        "Packages/manifest.json must be reached through a normal " +
+                        "project-local Packages directory. " + projectPathError;
+                    return false;
+                }
+
                 var fileInfo = new FileInfo(fullPath);
                 if (!fileInfo.Exists)
                 {
@@ -1657,12 +1853,18 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             return GitHubUtility.SanitizeUiDiagnostic(prefix + detail);
         }
 
-        private static void TryDeleteKnownFile(string path, byte[] expectedBytes)
+        private static void TryQuarantineKnownFile(string path, byte[] expectedBytes)
         {
             try
             {
                 if (string.IsNullOrWhiteSpace(path) || !File.Exists(path))
                     return;
+
+                if (IsProjectManifestSiblingPath(path) &&
+                    !GitUtility.TryValidateProjectOwnedPath(path, out _))
+                {
+                    return;
+                }
 
                 // Operation paths are unique siblings, but still verify their
                 // contents before cleanup so recovery/external data is never
@@ -1670,14 +1872,52 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 if (TryReadRawBytes(path, out byte[] actualBytes, out _) &&
                     BytesEqual(actualBytes, expectedBytes))
                 {
-                    File.Delete(path);
+                    if (!TryCreateSiblingOperationPath(
+                            path,
+                            "cleanup-recovery",
+                            out string recoveryPath,
+                            out _))
+                    {
+                        return;
+                    }
+
+                    bool isProjectSibling = IsProjectManifestSiblingPath(path);
+                    if (isProjectSibling &&
+                        !TryValidateManifestOperationPaths(
+                            ManifestPath,
+                            out _,
+                            path,
+                            recoveryPath))
+                    {
+                        return;
+                    }
+
+                    BeforeKnownFileCleanupForTests?.Invoke(path);
+
+                    if (isProjectSibling &&
+                        !TryValidateManifestOperationPaths(
+                            ManifestPath,
+                            out _,
+                            path,
+                            recoveryPath))
+                    {
+                        return;
+                    }
+
+                    // Move instead of delete. The rename atomically captures
+                    // whichever inode occupies the randomized sibling at the
+                    // mutation boundary, including a late writer. Keep that
+                    // captured file permanently: deleting it after another
+                    // exact read would only reopen the same read-to-unlink
+                    // race under a new randomized name.
+                    File.Move(path, recoveryPath);
                 }
             }
             catch
             {
                 // Cleanup failure must not hide the original compare-and-swap
-                // result. Leaving a verified operation file is safer than
-                // broadening deletion behavior.
+                // result. Leaving either the original sibling or its atomic
+                // recovery capture is safer than broadening removal behavior.
             }
         }
 

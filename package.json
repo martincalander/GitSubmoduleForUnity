@@ -1,6 +1,6 @@
 {
   "name": "com.martincalander.gitsubmodulemanager",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "displayName": "Git Submodule Manager",
   "description": "Reliable, cross-platform Unity Editor tooling for discovering and managing Git submodule packages under Packages/.",
   "unity": "6000.3",

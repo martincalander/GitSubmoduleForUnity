@@ -18,6 +18,18 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         Failed
     }
 
+    internal enum PackageManifestMetaVerification
+    {
+        Unverified,
+        Verified
+    }
+
+    internal enum PackageManifestMetaPolicy
+    {
+        AllowUnverifiedWithWarning,
+        RequireVerified
+    }
+
     /// <summary>
     /// Immutable, host-neutral result of inspecting a prospective Git package.
     /// A manifest failure is deliberately separate from a remote-ref failure:
@@ -44,7 +56,12 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             bool requiresEditorRestart = false,
             string requestedBranch = "",
             string inspectedBranch = "",
-            IEnumerable<PackageManifestDependency> dependencies = null)
+            IEnumerable<PackageManifestDependency> dependencies = null,
+            PackageManifestMetaVerification packageManifestMetaVerification =
+                PackageManifestMetaVerification.Unverified,
+            string packageManifestMetaGuid = "",
+            string packageManifestMetaMessage = "",
+            string inspectedCommit = "")
         {
             Revision = revision;
             Url = url ?? string.Empty;
@@ -60,6 +77,21 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             RequiresEditorRestart = requiresEditorRestart;
             RequestedBranch = requestedBranch?.Trim() ?? string.Empty;
             InspectedBranch = inspectedBranch?.Trim() ?? string.Empty;
+            PackageManifestMetaVerification =
+                packageManifestMetaVerification ==
+                    PackageManifestMetaVerification.Verified &&
+                IsValidMetaGuid(packageManifestMetaGuid)
+                    ? PackageManifestMetaVerification.Verified
+                    : PackageManifestMetaVerification.Unverified;
+            PackageManifestMetaGuid = PackageManifestMetaVerification ==
+                                      PackageManifestMetaVerification.Verified
+                ? packageManifestMetaGuid.Trim().ToLowerInvariant()
+                : string.Empty;
+            PackageManifestMetaMessage =
+                packageManifestMetaMessage?.Trim() ?? string.Empty;
+            InspectedCommit = GitUtility.IsValidGitObjectId(inspectedCommit)
+                ? inspectedCommit.Trim().ToLowerInvariant()
+                : string.Empty;
             this.dependencies = new ReadOnlyCollection<PackageManifestDependency>(
                 (dependencies ?? Array.Empty<PackageManifestDependency>())
                 .Where(dependency => dependency != null)
@@ -84,6 +116,11 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         internal string InspectedBranch { get; }
         internal IReadOnlyList<PackageManifestDependency> Dependencies =>
             dependencies;
+        internal PackageManifestMetaVerification PackageManifestMetaVerification
+            { get; }
+        internal string PackageManifestMetaGuid { get; }
+        internal string PackageManifestMetaMessage { get; }
+        internal string InspectedCommit { get; }
 
         internal bool IsLoading =>
             Status == GitSubmoduleInstallProbeStatus.LoadingRemoteRefs ||
@@ -92,6 +129,27 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         internal bool IsComplete =>
             Status == GitSubmoduleInstallProbeStatus.Ready ||
             Status == GitSubmoduleInstallProbeStatus.Failed;
+
+        internal static bool IsValidMetaGuid(string value)
+        {
+            string candidate = value?.Trim() ?? string.Empty;
+            if (candidate.Length != 32)
+                return false;
+
+            bool hasNonZeroDigit = false;
+            foreach (char character in candidate)
+            {
+                bool isHex = character >= '0' && character <= '9' ||
+                             character >= 'a' && character <= 'f' ||
+                             character >= 'A' && character <= 'F';
+                if (!isHex)
+                    return false;
+                if (character != '0')
+                    hasNonZeroDigit = true;
+            }
+
+            return hasNonZeroDigit;
+        }
     }
 
     /// <summary>
@@ -123,7 +181,9 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             None,
             RemoteRefs,
             PartialClone,
-            ReadManifest
+            ReadRootTree,
+            ReadManifest,
+            ReadManifestMeta
         }
 
         private AsyncCommandHandle commandHandle;
@@ -132,10 +192,19 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         private string queuedUrl = string.Empty;
         private string activeRequestedBranch = string.Empty;
         private string activeManifestBranch = string.Empty;
+        private string activeInspectedCommit = string.Empty;
         private string queuedRequestedBranch = string.Empty;
         private string temporaryClonePath = string.Empty;
         private List<string> activeBranches = new();
         private string activeDefaultBranch = string.Empty;
+        private string activePackageName = string.Empty;
+        private string activeDisplayName = string.Empty;
+        private string activeVersion = string.Empty;
+        private IReadOnlyList<PackageManifestDependency> activeDependencies =
+            Array.Empty<PackageManifestDependency>();
+        private string activePackageManifestBlobOid = string.Empty;
+        private string activePackageManifestMetaBlobOid = string.Empty;
+        private string activePackageManifestMetaTreeMessage = string.Empty;
         private bool discardActiveResult;
         private bool disposed;
         private int revision;
@@ -306,8 +375,14 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 case ProbePhase.PartialClone:
                     CompletePartialClone(result);
                     break;
+                case ProbePhase.ReadRootTree:
+                    CompleteRootTreeRead(result);
+                    break;
                 case ProbePhase.ReadManifest:
                     CompleteManifestRead(result);
+                    break;
+                case ProbePhase.ReadManifestMeta:
+                    CompleteManifestMetaRead(result);
                     break;
             }
 
@@ -350,8 +425,16 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             activeUrl = string.Empty;
             activeRequestedBranch = string.Empty;
             activeManifestBranch = string.Empty;
+            activeInspectedCommit = string.Empty;
             activeBranches.Clear();
             activeDefaultBranch = string.Empty;
+            activePackageName = string.Empty;
+            activeDisplayName = string.Empty;
+            activeVersion = string.Empty;
+            activeDependencies = Array.Empty<PackageManifestDependency>();
+            activePackageManifestBlobOid = string.Empty;
+            activePackageManifestMetaBlobOid = string.Empty;
+            activePackageManifestMetaTreeMessage = string.Empty;
             temporaryClonePath = string.Empty;
             discardActiveResult = false;
             readerLease = null;
@@ -380,8 +463,25 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             out string defaultBranch,
             out string error)
         {
+            return TryParseRemoteRefs(
+                output,
+                out branches,
+                out defaultBranch,
+                out _,
+                out error);
+        }
+
+        internal static bool TryParseRemoteRefs(
+            string output,
+            out List<string> branches,
+            out string defaultBranch,
+            out Dictionary<string, string> branchObjectIds,
+            out string error)
+        {
             branches = new List<string>();
             defaultBranch = string.Empty;
+            branchObjectIds = new Dictionary<string, string>(
+                StringComparer.Ordinal);
             error = string.Empty;
             if (string.IsNullOrWhiteSpace(output))
             {
@@ -426,7 +526,9 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 string refName = line.Substring(tab + 1).Trim();
                 if (string.Equals(refName, "HEAD", StringComparison.Ordinal))
                 {
-                    headObjectId = objectId;
+                    headObjectId = GitUtility.IsValidGitObjectId(objectId)
+                        ? objectId.ToLowerInvariant()
+                        : string.Empty;
                     continue;
                 }
 
@@ -434,16 +536,34 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 {
                     branchLines.Add(line);
                     string candidate = refName.Substring(HeadsPrefix.Length);
-                    if (!string.IsNullOrWhiteSpace(objectId) &&
+                    if (GitUtility.IsValidGitObjectId(objectId) &&
                         GitUtility.IsValidBranchName(candidate) &&
                         !string.Equals(candidate, ".", StringComparison.Ordinal))
                     {
+                        string normalizedObjectId = objectId.ToLowerInvariant();
+                        if (branchObjectIds.TryGetValue(
+                                candidate,
+                                out string priorObjectId) &&
+                            !string.Equals(
+                                priorObjectId,
+                                normalizedObjectId,
+                                StringComparison.Ordinal))
+                        {
+                            branches.Clear();
+                            defaultBranch = string.Empty;
+                            branchObjectIds.Clear();
+                            error =
+                                "Git returned conflicting commit identities for one remote branch.";
+                            return false;
+                        }
+
+                        branchObjectIds[candidate] = normalizedObjectId;
                         if (!branchesByObjectId.TryGetValue(
-                                objectId,
+                                normalizedObjectId,
                                 out List<string> matchingBranches))
                         {
                             matchingBranches = new List<string>();
-                            branchesByObjectId[objectId] = matchingBranches;
+                            branchesByObjectId[normalizedObjectId] = matchingBranches;
                         }
 
                         matchingBranches.Add(candidate);
@@ -511,7 +631,203 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 return false;
             }
 
+            bool hasBranchWithoutObjectId = false;
+            foreach (string branch in branches)
+            {
+                if (branchObjectIds.ContainsKey(branch))
+                    continue;
+
+                hasBranchWithoutObjectId = true;
+                break;
+            }
+
+            if (hasBranchWithoutObjectId)
+            {
+                branches.Clear();
+                defaultBranch = string.Empty;
+                branchObjectIds.Clear();
+                error =
+                    "A remote branch did not provide a verifiable Git commit identity.";
+                return false;
+            }
+
             return true;
+        }
+
+        internal static bool TryParseRootPackageTree(
+            string output,
+            out string packageManifestObjectId,
+            out string packageManifestMetaObjectId,
+            out string packageManifestMetaMessage,
+            out string error)
+        {
+            packageManifestObjectId = string.Empty;
+            packageManifestMetaObjectId = string.Empty;
+            packageManifestMetaMessage = string.Empty;
+            error = string.Empty;
+            if (string.IsNullOrEmpty(output))
+            {
+                error = "Root package.json is missing from the selected branch.";
+                return false;
+            }
+
+            if (output[output.Length - 1] != '\0')
+            {
+                error =
+                    "Git returned an unterminated root package tree record; the package metadata was discarded.";
+                return false;
+            }
+
+            bool sawManifest = false;
+            bool sawMeta = false;
+            string[] records = output.Split(
+                new[] { '\0' },
+                StringSplitOptions.None);
+            for (int index = 0; index < records.Length - 1; index++)
+            {
+                string record = records[index];
+                if (string.IsNullOrEmpty(record) ||
+                    !TryParseRootTreeEntry(
+                        record,
+                        out string mode,
+                        out string type,
+                        out string objectId,
+                        out string path))
+                {
+                    error =
+                        "Git returned a malformed root package tree record; the package metadata was discarded.";
+                    return false;
+                }
+
+                if (string.Equals(path, "package.json", StringComparison.Ordinal))
+                {
+                    if (sawManifest)
+                    {
+                        error =
+                            "Git returned duplicate root package.json tree records; the package metadata was discarded.";
+                        return false;
+                    }
+
+                    sawManifest = true;
+                    if (!IsRegularBlobTreeEntry(mode, type))
+                    {
+                        error = mode == "120000"
+                            ? "Root package.json is a Git symbolic-link entry; only a regular root package manifest is accepted."
+                            : "Root package.json is not a regular Git blob with mode 100644 or 100755.";
+                        return false;
+                    }
+
+                    packageManifestObjectId = objectId;
+                    continue;
+                }
+
+                if (string.Equals(
+                        path,
+                        "package.json.meta",
+                        StringComparison.Ordinal))
+                {
+                    if (sawMeta)
+                    {
+                        error =
+                            "Git returned duplicate root package.json.meta tree records; the package metadata was discarded.";
+                        return false;
+                    }
+
+                    sawMeta = true;
+                    if (IsRegularBlobTreeEntry(mode, type))
+                    {
+                        packageManifestMetaObjectId = objectId;
+                    }
+                    else
+                    {
+                        packageManifestMetaMessage = BuildMetaWarning(
+                            mode == "120000"
+                                ? "Root package.json.meta is a Git symbolic-link entry, not a regular file."
+                                : "Root package.json.meta is not a regular Git blob with mode 100644 or 100755.");
+                    }
+
+                    continue;
+                }
+
+                error =
+                    "Git returned an unexpected root package tree path; the package metadata was discarded.";
+                return false;
+            }
+
+            if (!sawManifest || string.IsNullOrEmpty(packageManifestObjectId))
+            {
+                error = "Root package.json is missing from the selected branch.";
+                return false;
+            }
+
+            if (!sawMeta)
+            {
+                packageManifestMetaMessage = BuildMetaWarning(
+                    "Root package.json.meta is missing from the selected branch.");
+            }
+
+            return true;
+        }
+
+        private static bool TryParseRootTreeEntry(
+            string record,
+            out string mode,
+            out string type,
+            out string objectId,
+            out string path)
+        {
+            mode = string.Empty;
+            type = string.Empty;
+            objectId = string.Empty;
+            path = string.Empty;
+            int tab = record.IndexOf('\t');
+            if (tab <= 0 || tab == record.Length - 1 ||
+                record.IndexOf('\t', tab + 1) >= 0)
+            {
+                return false;
+            }
+
+            string[] header = record.Substring(0, tab).Split(
+                new[] { ' ' },
+                StringSplitOptions.RemoveEmptyEntries);
+            if (header.Length != 3 || !IsValidGitObjectId(header[2]))
+                return false;
+
+            mode = header[0];
+            type = header[1];
+            objectId = header[2].ToLowerInvariant();
+            path = record.Substring(tab + 1);
+            return true;
+        }
+
+        private static bool IsRegularBlobTreeEntry(string mode, string type)
+        {
+            return (string.Equals(mode, "100644", StringComparison.Ordinal) ||
+                    string.Equals(mode, "100755", StringComparison.Ordinal)) &&
+                   string.Equals(type, "blob", StringComparison.Ordinal);
+        }
+
+        private static bool IsValidGitObjectId(string value)
+        {
+            if (string.IsNullOrEmpty(value) ||
+                value.Length != 40 && value.Length != 64)
+            {
+                return false;
+            }
+
+            bool hasNonZero = false;
+            foreach (char character in value)
+            {
+                bool hexadecimal = character >= '0' && character <= '9' ||
+                                   character >= 'a' && character <= 'f' ||
+                                   character >= 'A' && character <= 'F';
+                if (!hexadecimal)
+                    return false;
+                if (character != '0')
+                    hasNonZero = true;
+            }
+
+            return hasNonZero;
         }
 
         internal static bool HasConfirmedTermination(CommandResult result)
@@ -542,9 +858,24 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                     result.StdOut,
                     out activeBranches,
                     out activeDefaultBranch,
+                    out Dictionary<string, string> branchObjectIds,
                     out string parseError))
             {
                 FinishFailure(parseError);
+                return;
+            }
+
+            activeManifestBranch = string.IsNullOrEmpty(activeRequestedBranch)
+                ? activeDefaultBranch
+                : activeRequestedBranch;
+            if (string.IsNullOrEmpty(activeManifestBranch) ||
+                !branchObjectIds.TryGetValue(
+                    activeManifestBranch,
+                    out activeInspectedCommit) ||
+                !GitUtility.IsValidGitObjectId(activeInspectedCommit))
+            {
+                FinishFailure(
+                    "The selected remote branch did not provide a verifiable Git commit identity.");
                 return;
             }
 
@@ -556,7 +887,8 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 requestedBranch: activeRequestedBranch,
                 inspectedBranch: string.IsNullOrEmpty(activeRequestedBranch)
                     ? activeDefaultBranch
-                    : activeRequestedBranch);
+                    : activeRequestedBranch,
+                inspectedCommit: activeInspectedCommit);
 
             try
             {
@@ -574,9 +906,6 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                     "--filter=blob:none",
                     "--no-local"
                 };
-                activeManifestBranch = string.IsNullOrEmpty(activeRequestedBranch)
-                    ? activeDefaultBranch
-                    : activeRequestedBranch;
                 if (!string.IsNullOrEmpty(activeManifestBranch))
                 {
                     arguments.Add("--branch");
@@ -623,15 +952,68 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                         "-C", temporaryClonePath,
                         "-c", "credential.interactive=false",
                         "--no-pager",
-                        "cat-file", "blob", "HEAD:package.json"
+                        "ls-tree", "-z", "--full-tree",
+                        activeInspectedCommit, "--",
+                        "package.json", "package.json.meta"
                     },
                     ManifestReadTimeoutMs,
-                    ProbePhase.ReadManifest);
+                    ProbePhase.ReadRootTree);
             }
             catch (Exception exception)
             {
                 FinishReadyWithManifestMessage(
-                    "Could not read root package.json: " +
+                    "Could not inspect root package tree entries: " +
+                    SanitizeDiagnostic(exception.Message));
+            }
+        }
+
+        private void CompleteRootTreeRead(CommandResult result)
+        {
+            if (!TryRequireSuccessfulOutput(
+                    result,
+                    "Could not inspect root package tree entries",
+                    out string commandError))
+            {
+                FinishReadyWithManifestMessage(commandError);
+                return;
+            }
+
+            if (result.StdOutTruncated)
+            {
+                FinishReadyWithManifestMessage(
+                    "Root package tree entries exceeded the command output inspection limit.");
+                return;
+            }
+
+            if (!TryParseRootPackageTree(
+                    result.StdOut,
+                    out activePackageManifestBlobOid,
+                    out activePackageManifestMetaBlobOid,
+                    out activePackageManifestMetaTreeMessage,
+                    out string parseError))
+            {
+                FinishReadyWithManifestMessage(parseError);
+                return;
+            }
+
+            try
+            {
+                StartCommand(
+                    new[]
+                    {
+                        "-C", temporaryClonePath,
+                        "-c", "credential.interactive=false",
+                        "--no-pager",
+                        "cat-file", "blob", activePackageManifestBlobOid
+                    },
+                    ManifestReadTimeoutMs,
+                    ProbePhase.ReadManifest,
+                    requireStrictUtf8StdOut: true);
+            }
+            catch (Exception exception)
+            {
+                FinishReadyWithManifestMessage(
+                    "Could not read the validated root package.json object: " +
                     SanitizeDiagnostic(exception.Message));
             }
         }
@@ -657,6 +1039,11 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 manifestMessage =
                     "Root package.json exceeds the command output inspection limit.";
             }
+            else if (result.StdOutInvalidUtf8)
+            {
+                manifestMessage =
+                    "Root package.json must contain valid UTF-8 text.";
+            }
             else if (!GitUtility.TryReadPackageManifestMetadataFromJson(
                          result.StdOut,
                          out PackageManifestMetadata metadata,
@@ -666,15 +1053,50 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             }
             else
             {
-                packageName = metadata.PackageName;
-                displayName = metadata.DisplayName;
-                version = metadata.Version;
-                dependencies = metadata.Dependencies;
+                activePackageName = metadata.PackageName;
+                activeDisplayName = metadata.DisplayName;
+                activeVersion = metadata.Version;
+                activeDependencies = metadata.Dependencies;
+                if (string.IsNullOrEmpty(activePackageManifestMetaBlobOid))
+                {
+                    FinishReadyWithPackageMetadata(
+                        PackageManifestMetaVerification.Unverified,
+                        string.Empty,
+                        activePackageManifestMetaTreeMessage);
+                    return;
+                }
+
+                try
+                {
+                    StartCommand(
+                        new[]
+                        {
+                            "-C", temporaryClonePath,
+                            "-c", "credential.interactive=false",
+                            "--no-pager",
+                            "cat-file", "blob", activePackageManifestMetaBlobOid
+                        },
+                        ManifestReadTimeoutMs,
+                        ProbePhase.ReadManifestMeta,
+                        requireStrictUtf8StdOut: true);
+                    return;
+                }
+                catch (Exception exception)
+                {
+                    FinishReadyWithPackageMetadata(
+                        PackageManifestMetaVerification.Unverified,
+                        string.Empty,
+                        BuildMetaWarning(
+                            "Root package.json.meta could not be read: " +
+                            SanitizeDiagnostic(exception.Message)));
+                    return;
+                }
             }
 
             string completedUrl = activeUrl;
             string completedRequestedBranch = activeRequestedBranch;
             string completedManifestBranch = activeManifestBranch;
+            string completedInspectedCommit = activeInspectedCommit;
             List<string> completedBranches = activeBranches;
             string completedDefaultBranch = activeDefaultBranch;
             ResetActiveState(cleanTemporaryClone: true);
@@ -690,7 +1112,84 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 manifestMessage: manifestMessage,
                 requestedBranch: completedRequestedBranch,
                 inspectedBranch: completedManifestBranch,
-                dependencies: dependencies);
+                dependencies: dependencies,
+                inspectedCommit: completedInspectedCommit);
+        }
+
+        private void CompleteManifestMetaRead(CommandResult result)
+        {
+            PackageManifestMetaVerification verification =
+                PackageManifestMetaVerification.Unverified;
+            string guid = string.Empty;
+            string warning;
+            if (!TryRequireSuccessfulOutput(
+                    result,
+                    "Could not read root package.json.meta",
+                    out string readError))
+            {
+                warning = BuildMetaWarning(readError);
+            }
+            else if (result.StdOutTruncated)
+            {
+                warning = BuildMetaWarning(
+                    "Root package.json.meta exceeds the command output inspection limit.");
+            }
+            else if (result.StdOutInvalidUtf8)
+            {
+                warning = BuildMetaWarning(
+                    "Root package.json.meta must contain valid UTF-8 text.");
+            }
+            else if (!GitUtility.TryReadValidPackageManifestMetaFromText(
+                         result.StdOut,
+                         out guid,
+                         out string validationError))
+            {
+                warning = BuildMetaWarning(
+                    "Root package.json.meta is invalid: " + validationError);
+                guid = string.Empty;
+            }
+            else
+            {
+                verification = PackageManifestMetaVerification.Verified;
+                warning = string.Empty;
+            }
+
+            FinishReadyWithPackageMetadata(verification, guid, warning);
+        }
+
+        private void FinishReadyWithPackageMetadata(
+            PackageManifestMetaVerification verification,
+            string guid,
+            string metaMessage)
+        {
+            string completedUrl = activeUrl;
+            string completedRequestedBranch = activeRequestedBranch;
+            string completedManifestBranch = activeManifestBranch;
+            string completedInspectedCommit = activeInspectedCommit;
+            List<string> completedBranches = activeBranches;
+            string completedDefaultBranch = activeDefaultBranch;
+            string completedPackageName = activePackageName;
+            string completedDisplayName = activeDisplayName;
+            string completedVersion = activeVersion;
+            IReadOnlyList<PackageManifestDependency> completedDependencies =
+                activeDependencies;
+            ResetActiveState(cleanTemporaryClone: true);
+            ReleaseReaderLease();
+            Publish(
+                completedUrl,
+                GitSubmoduleInstallProbeStatus.Ready,
+                completedBranches,
+                completedDefaultBranch,
+                completedPackageName,
+                completedDisplayName,
+                completedVersion,
+                requestedBranch: completedRequestedBranch,
+                inspectedBranch: completedManifestBranch,
+                dependencies: completedDependencies,
+                packageManifestMetaVerification: verification,
+                packageManifestMetaGuid: guid,
+                packageManifestMetaMessage: metaMessage,
+                inspectedCommit: completedInspectedCommit);
         }
 
         private void FinishFailure(string error)
@@ -711,6 +1210,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             string completedUrl = activeUrl;
             string completedRequestedBranch = activeRequestedBranch;
             string completedManifestBranch = activeManifestBranch;
+            string completedInspectedCommit = activeInspectedCommit;
             List<string> completedBranches = activeBranches;
             string completedDefaultBranch = activeDefaultBranch;
             ResetActiveState(cleanTemporaryClone: true);
@@ -722,7 +1222,8 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 completedDefaultBranch,
                 manifestMessage: SanitizeDiagnostic(message),
                 requestedBranch: completedRequestedBranch,
-                inspectedBranch: completedManifestBranch);
+                inspectedBranch: completedManifestBranch,
+                inspectedCommit: completedInspectedCommit);
         }
 
         private bool TryStartQueuedRequest()
@@ -765,6 +1266,14 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             activeBranches = new List<string>();
             activeDefaultBranch = string.Empty;
             activeManifestBranch = string.Empty;
+            activeInspectedCommit = string.Empty;
+            activePackageName = string.Empty;
+            activeDisplayName = string.Empty;
+            activeVersion = string.Empty;
+            activeDependencies = Array.Empty<PackageManifestDependency>();
+            activePackageManifestBlobOid = string.Empty;
+            activePackageManifestMetaBlobOid = string.Empty;
+            activePackageManifestMetaTreeMessage = string.Empty;
             temporaryClonePath = string.Empty;
             discardActiveResult = false;
             Publish(
@@ -799,14 +1308,16 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         private void StartCommand(
             IReadOnlyList<string> arguments,
             int timeoutMs,
-            ProbePhase nextPhase)
+            ProbePhase nextPhase,
+            bool requireStrictUtf8StdOut = false)
         {
             commandHandle = CliCommandRunner.RunAsync(
                 GitUtility.GitExecutable,
                 arguments,
                 GitUtility.ProjectRoot,
                 timeoutMs,
-                CommandTerminationScope.CompleteProcessTree);
+                CommandTerminationScope.CompleteProcessTree,
+                requireStrictUtf8StdOut: requireStrictUtf8StdOut);
             phase = nextPhase;
         }
 
@@ -816,8 +1327,16 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             activeUrl = string.Empty;
             activeRequestedBranch = string.Empty;
             activeManifestBranch = string.Empty;
+            activeInspectedCommit = string.Empty;
             activeBranches = new List<string>();
             activeDefaultBranch = string.Empty;
+            activePackageName = string.Empty;
+            activeDisplayName = string.Empty;
+            activeVersion = string.Empty;
+            activeDependencies = Array.Empty<PackageManifestDependency>();
+            activePackageManifestBlobOid = string.Empty;
+            activePackageManifestMetaBlobOid = string.Empty;
+            activePackageManifestMetaTreeMessage = string.Empty;
             temporaryClonePath = string.Empty;
             discardActiveResult = false;
             phase = ProbePhase.None;
@@ -838,7 +1357,12 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             bool requiresEditorRestart = false,
             string requestedBranch = "",
             string inspectedBranch = "",
-            IEnumerable<PackageManifestDependency> dependencies = null)
+            IEnumerable<PackageManifestDependency> dependencies = null,
+            PackageManifestMetaVerification packageManifestMetaVerification =
+                PackageManifestMetaVerification.Unverified,
+            string packageManifestMetaGuid = "",
+            string packageManifestMetaMessage = "",
+            string inspectedCommit = "")
         {
             revision++;
             Current = new GitSubmoduleInstallProbeSnapshot(
@@ -855,7 +1379,24 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 requiresEditorRestart,
                 requestedBranch,
                 inspectedBranch,
-                dependencies);
+                dependencies,
+                packageManifestMetaVerification,
+                packageManifestMetaGuid,
+                packageManifestMetaMessage,
+                inspectedCommit);
+        }
+
+        private static string BuildMetaWarning(string detail)
+        {
+            const string summary =
+                "Unity package intent is unverified. package.json is also used " +
+                "by npm, and this branch does not contain a valid root " +
+                "package.json.meta.";
+            string sanitized = SanitizeDiagnostic(detail);
+            string message = string.IsNullOrWhiteSpace(sanitized)
+                ? summary
+                : summary + " " + sanitized;
+            return SanitizeDiagnostic(message);
         }
 
         private static bool TryRequireSuccessfulOutput(

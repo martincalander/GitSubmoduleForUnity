@@ -438,6 +438,13 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
             Assert.That(calls.All(call => call.Arguments == null), Is.True, "GraphQL requests must use tokenized argv.");
             Assert.That(calls.All(call => GetArguments(call).Contains("--hostname github.com")), Is.True);
             Assert.That(GetGraphQlNodeIds(calls.Single()), Has.Length.EqualTo(50));
+            string queryArgument = calls.Single().ArgumentList.Single(argument =>
+                argument.StartsWith("query=", StringComparison.Ordinal));
+            Assert.That(queryArgument, Does.Contain("defaultBranchRef"));
+            Assert.That(queryArgument, Does.Contain("file(path: \"package.json\")"));
+            Assert.That(queryArgument, Does.Contain("file(path: \"package.json.meta\")"));
+            Assert.That(queryArgument, Does.Not.Contain("HEAD:package.json"),
+                "Both files must be read from one captured default-branch commit.");
             Assert.That(coordinator.PackageManifestCheckTotal, Is.EqualTo(50));
             Assert.That(coordinator.PackageManifestCheckCompleted, Is.EqualTo(50));
             Assert.That(coordinator.DisplayedRepos.Count(repo => repo.ManifestState == PackageManifestState.Valid), Is.EqualTo(17));
@@ -447,6 +454,66 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                 .All(repo => repo.DeclaredPackageName.StartsWith("com.example.repo", StringComparison.Ordinal)), Is.True);
             Assert.That(coordinator.DisplayedRepos.Where(repo => repo.ManifestState == PackageManifestState.Valid)
                 .All(repo => repo.DeclaredLicense == "MIT"), Is.True);
+        }
+
+        [TestCase(40, "valid", true)]
+        [TestCase(64, "valid", true)]
+        [TestCase(40, "zero", false)]
+        [TestCase(64, "zero", false)]
+        [TestCase(40, "invalid-hex", false)]
+        [TestCase(64, "invalid-hex", false)]
+        [TestCase(39, "valid", false)]
+        [TestCase(65, "valid", false)]
+        public void PackageManifestValidation_RejectsInvalidCommitObjectIds(
+            int length,
+            string scenario,
+            bool expectedValid)
+        {
+            string objectId = new string(
+                string.Equals(scenario, "zero", StringComparison.Ordinal) ? '0' : 'a',
+                length);
+            if (string.Equals(scenario, "invalid-hex", StringComparison.Ordinal))
+                objectId = objectId.Substring(0, objectId.Length - 1) + "g";
+
+            var runner = new RecordingRunner(spec =>
+            {
+                if (GetArguments(spec).Contains("user/repos"))
+                    return Success(BuildRepositoryPageJson(1));
+
+                if (IsGraphQlCall(spec))
+                {
+                    string node = BuildManifestCommitNode(
+                        "R_repo_0",
+                        BuildManifestTreeEntry(
+                            "package.json",
+                            new string('a', 40),
+                            "{\"name\":\"com.example.repo0\",\"version\":\"1.0.0\"}"),
+                        BuildManifestTreeEntry(
+                            "package.json.meta",
+                            new string('e', 40),
+                            ValidPackageManifestMeta),
+                        objectId);
+                    return Success(
+                        "{\"data\":{\"nodes\":[" + node +
+                        "],\"rateLimit\":{\"remaining\":100,\"resetAt\":\"\"}}}");
+                }
+
+                return Success(string.Empty);
+            });
+            CliCommandRunner.CurrentRunner = runner;
+            using var coordinator = new DiscoveryCoordinator();
+
+            coordinator.LoadInitialPage();
+            TickUntil(coordinator, () => coordinator.DisplayedRepos.Count == 1);
+            TickUntil(coordinator, () => !coordinator.IsValidatingPackageManifests);
+
+            GitHubRepo repository = coordinator.DisplayedRepos.Single();
+            Assert.That(
+                repository.ManifestState,
+                Is.EqualTo(expectedValid
+                    ? PackageManifestState.Valid
+                    : PackageManifestState.Unavailable),
+                repository.PackageManifestMessage);
         }
 
         [Test]
@@ -477,6 +544,12 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
             TickUntil(coordinator, () => !coordinator.IsValidatingPackageManifests);
 
             Assert.That(coordinator.DisplayedRepos.Single().DeclaredLicense, Is.EqualTo("MIT"));
+            Assert.That(
+                coordinator.DisplayedRepos.Single().PackageManifestMetaGuid,
+                Is.EqualTo("0123456789abcdef0123456789abcdef"));
+            Assert.That(
+                coordinator.DisplayedRepos.Single().PackageManifestCommitOid,
+                Is.EqualTo(new string('c', 40)));
 
             coordinator.LoadInitialPage();
             TickUntil(
@@ -487,6 +560,201 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                       PackageManifestState.Valid);
 
             Assert.That(coordinator.DisplayedRepos.Single().DeclaredLicense, Is.EqualTo("MIT"));
+            Assert.That(
+                coordinator.DisplayedRepos.Single().PackageManifestMetaGuid,
+                Is.EqualTo("0123456789abcdef0123456789abcdef"),
+                "The composite cache must retain the validated Unity meta GUID.");
+            Assert.That(
+                coordinator.DisplayedRepos.Single().PackageManifestCommitOid,
+                Is.EqualTo(new string('c', 40)),
+                "The cache must not replace the current response's commit identity.");
+        }
+
+        [TestCase("missing")]
+        [TestCase("tree")]
+        [TestCase("binary")]
+        [TestCase("truncated")]
+        [TestCase("oversized")]
+        [TestCase("actual-oversized")]
+        [TestCase("invalid")]
+        [TestCase("symlink")]
+        public void PackageManifestValidation_InvalidOrMissingMetaPreventsEligibility(
+            string scenario)
+        {
+            PackageManifestState expectedState = scenario == "missing"
+                ? PackageManifestState.Missing
+                : PackageManifestState.Invalid;
+            var runner = new RecordingRunner(spec =>
+            {
+                if (GetArguments(spec).Contains("user/repos"))
+                    return Success(BuildRepositoryPageJson(1));
+
+                if (IsGraphQlCall(spec))
+                {
+                    const string manifest =
+                        "{\"name\":\"com.example.repo0\",\"version\":\"1.0.0\"}";
+                    string metaEntry = scenario switch
+                    {
+                        "missing" => "null",
+                        "tree" =>
+                            "{\"name\":\"package.json.meta\",\"mode\":16384," +
+                            "\"type\":\"tree\",\"object\":{\"__typename\":\"Tree\"," +
+                            $"\"oid\":\"{new string('e', 40)}\"" + "}}",
+                        "binary" => BuildManifestTreeEntry(
+                                "package.json.meta",
+                                new string('e', 40),
+                                ValidPackageManifestMeta)
+                            .Replace("\"isBinary\":false", "\"isBinary\":true"),
+                        "truncated" => BuildManifestTreeEntry(
+                                "package.json.meta",
+                                new string('e', 40),
+                                ValidPackageManifestMeta)
+                            .Replace("\"isTruncated\":false", "\"isTruncated\":true"),
+                        "oversized" => BuildManifestTreeEntry(
+                            "package.json.meta",
+                            new string('e', 40),
+                            ValidPackageManifestMeta,
+                            16 * 1024 + 1),
+                        "actual-oversized" => BuildManifestTreeEntry(
+                            "package.json.meta",
+                            new string('e', 40),
+                            ValidPackageManifestMeta +
+                            "userData: " + new string('x', 16 * 1024),
+                            1),
+                        "symlink" => BuildManifestTreeEntry(
+                                "package.json.meta",
+                                new string('e', 40),
+                                ValidPackageManifestMeta)
+                            .Replace("\"mode\":33188", "\"mode\":40960"),
+                        _ => BuildManifestTreeEntry(
+                            "package.json.meta",
+                            new string('e', 40),
+                            "fileFormatVersion: 2\nguid: invalid\nPackageManifestImporter:\n")
+                    };
+                    string node = BuildManifestCommitNode(
+                        "R_repo_0",
+                        BuildManifestTreeEntry(
+                            "package.json",
+                            new string('a', 40),
+                            manifest),
+                        metaEntry);
+                    return Success(
+                        "{\"data\":{\"nodes\":[" + node +
+                        "],\"rateLimit\":{\"remaining\":100,\"resetAt\":\"\"}}}");
+                }
+
+                return Success(string.Empty);
+            });
+            CliCommandRunner.CurrentRunner = runner;
+            using var coordinator = new DiscoveryCoordinator();
+
+            coordinator.LoadInitialPage();
+            TickUntil(coordinator, () => coordinator.DisplayedRepos.Count == 1);
+            TickUntil(coordinator, () => !coordinator.IsValidatingPackageManifests);
+
+            GitHubRepo repository = coordinator.DisplayedRepos.Single();
+            Assert.That(
+                repository.ManifestState,
+                Is.EqualTo(expectedState),
+                repository.PackageManifestMessage);
+            Assert.That(repository.ManifestState, Is.Not.EqualTo(PackageManifestState.Valid));
+            Assert.That(repository.PackageManifestMessage, Does.Contain("package.json.meta"));
+        }
+
+        [Test]
+        public void PackageManifestValidation_CacheIdentityIncludesMetaBlob()
+        {
+            int graphQlCalls = 0;
+            var runner = new RecordingRunner(spec =>
+            {
+                if (GetArguments(spec).Contains("user/repos"))
+                    return Success(BuildRepositoryPageJson(1));
+
+                if (IsGraphQlCall(spec))
+                {
+                    const string manifest =
+                        "{\"name\":\"com.example.repo0\",\"version\":\"1.0.0\"}";
+                    int call = Interlocked.Increment(ref graphQlCalls);
+                    string meta = call == 1
+                        ? ValidPackageManifestMeta
+                        : "fileFormatVersion: 2\nguid: invalid\nPackageManifestImporter:\n";
+                    string node = BuildManifestCommitNode(
+                        "R_repo_0",
+                        BuildManifestTreeEntry(
+                            "package.json",
+                            new string('a', 40),
+                            manifest,
+                            System.Text.Encoding.UTF8.GetByteCount(manifest)),
+                        BuildManifestTreeEntry(
+                            "package.json.meta",
+                            new string(call == 1 ? 'e' : 'd', 40),
+                            meta));
+                    return Success(
+                        "{\"data\":{\"nodes\":[" + node +
+                        "],\"rateLimit\":{\"remaining\":100,\"resetAt\":\"\"}}}");
+                }
+
+                return Success(string.Empty);
+            });
+            CliCommandRunner.CurrentRunner = runner;
+            using var coordinator = new DiscoveryCoordinator();
+
+            coordinator.LoadInitialPage();
+            TickUntil(coordinator, () => coordinator.DisplayedRepos.Count == 1);
+            TickUntil(coordinator, () => !coordinator.IsValidatingPackageManifests);
+            Assert.That(coordinator.DisplayedRepos.Single().ManifestState,
+                Is.EqualTo(PackageManifestState.Valid));
+
+            coordinator.LoadInitialPage();
+            TickUntil(coordinator, () => Volatile.Read(ref graphQlCalls) == 2 &&
+                                         !coordinator.IsValidatingPackageManifests);
+
+            Assert.That(coordinator.DisplayedRepos.Single().ManifestState,
+                Is.EqualTo(PackageManifestState.Invalid),
+                "A different meta blob must not reuse the package-only cache entry.");
+        }
+
+        [Test]
+        public void PackageManifestValidation_UsesActualPackageTextSizeNotClaimedBlobSize()
+        {
+            var runner = new RecordingRunner(spec =>
+            {
+                if (GetArguments(spec).Contains("user/repos"))
+                    return Success(BuildRepositoryPageJson(1));
+
+                if (IsGraphQlCall(spec))
+                {
+                    string oversizedManifest =
+                        "{\"name\":\"com.example.repo0\",\"version\":\"1.0.0\"," +
+                        "\"description\":\"" + new string('x', 64 * 1024) + "\"}";
+                    string node = BuildManifestCommitNode(
+                        "R_repo_0",
+                        BuildManifestTreeEntry(
+                            "package.json",
+                            new string('a', 40),
+                            oversizedManifest,
+                            1),
+                        BuildManifestTreeEntry(
+                            "package.json.meta",
+                            new string('e', 40),
+                            ValidPackageManifestMeta));
+                    return Success(
+                        "{\"data\":{\"nodes\":[" + node +
+                        "],\"rateLimit\":{\"remaining\":100,\"resetAt\":\"\"}}}");
+                }
+
+                return Success(string.Empty);
+            });
+            CliCommandRunner.CurrentRunner = runner;
+            using var coordinator = new DiscoveryCoordinator();
+
+            coordinator.LoadInitialPage();
+            TickUntil(coordinator, () => coordinator.DisplayedRepos.Count == 1);
+            TickUntil(coordinator, () => !coordinator.IsValidatingPackageManifests);
+
+            GitHubRepo repository = coordinator.DisplayedRepos.Single();
+            Assert.That(repository.ManifestState, Is.EqualTo(PackageManifestState.Invalid));
+            Assert.That(repository.PackageManifestMessage, Does.Contain("64 KiB"));
         }
 
         [Test]
@@ -807,13 +1075,16 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
             const string newestUrl = "https://github.com/owner/newest.git";
             var runner = new RecordingRunner(spec =>
             {
-                if (spec.Arguments.Contains(firstUrl))
+                if (GetArguments(spec).Contains(firstUrl))
                 {
                     firstStarted.Set();
                     releaseFirst.Wait(TimeSpan.FromSeconds(2));
                 }
 
-                return Success("0123456789abcdef\trefs/heads/main");
+                return Success(
+                    "ref: refs/heads/main\tHEAD\n" +
+                    "0123456789abcdef0123456789abcdef01234567\tHEAD\n" +
+                    "0123456789abcdef0123456789abcdef01234567\trefs/heads/main\n");
             });
             CliCommandRunner.CurrentRunner = runner;
             using var coordinator = new RepositoryCoordinator();
@@ -921,26 +1192,27 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
 
                 if (index % 3 == 1)
                 {
-                    nodes.Add($"{{\"id\":\"{nodeId}\",\"packageManifest\":null}}");
+                    nodes.Add(BuildManifestCommitNode(
+                        nodeId,
+                        "null",
+                        BuildManifestTreeEntry(
+                            "package.json.meta",
+                            new string('f', 40),
+                            ValidPackageManifestMeta)));
                     continue;
                 }
 
                 string manifest = index % 3 == 2
                     ? $"{{\"name\":\"com.example.repo{index}\",\"version\":\"01.0.0\"}}"
                     : $"{{\"name\":\"com.example.repo{index}\",\"version\":\"1.0.{index}\",\"license\":\"MIT\"}}";
-                string escapedManifest = manifest.Replace("\\", "\\\\").Replace("\"", "\\\"");
-                string oid = index.ToString("x40");
-                nodes.Add(
-                    "{" +
-                    $"\"id\":\"{nodeId}\"," +
-                    "\"packageManifest\":{" +
-                    "\"__typename\":\"Blob\"," +
-                    $"\"oid\":\"{oid}\"," +
-                    $"\"byteSize\":{System.Text.Encoding.UTF8.GetByteCount(manifest)}," +
-                    "\"isBinary\":false," +
-                    "\"isTruncated\":false," +
-                    $"\"text\":\"{escapedManifest}\"" +
-                    "}}");
+                string oid = (index + 1).ToString("x40");
+                nodes.Add(BuildManifestCommitNode(
+                    nodeId,
+                    BuildManifestTreeEntry("package.json", oid, manifest),
+                    BuildManifestTreeEntry(
+                        "package.json.meta",
+                        new string('f', 40),
+                        ValidPackageManifestMeta)));
             }
 
             return "{\"data\":{\"nodes\":[" + string.Join(",", nodes) +
@@ -949,17 +1221,77 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
 
         private static string BuildManifestGraphQlResponseWithoutText(string nodeId)
         {
-            return "{\"data\":{\"nodes\":[{" +
-                   $"\"id\":\"{nodeId}\"," +
-                   "\"packageManifest\":{" +
-                   "\"__typename\":\"Blob\"," +
-                   "\"oid\":\"0000000000000000000000000000000000000000\"," +
-                   "\"byteSize\":70," +
-                   "\"isBinary\":false," +
-                   "\"isTruncated\":false," +
-                   "\"text\":null}}]," +
+            string node = BuildManifestCommitNode(
+                nodeId,
+                BuildManifestTreeEntry(
+                    "package.json",
+                    1.ToString("x40"),
+                    null,
+                    70),
+                BuildManifestTreeEntry(
+                    "package.json.meta",
+                    new string('f', 40),
+                    null,
+                    System.Text.Encoding.UTF8.GetByteCount(
+                        ValidPackageManifestMeta)));
+            return "{\"data\":{\"nodes\":[" + node + "]," +
                    "\"rateLimit\":{\"cost\":1,\"remaining\":4999," +
                    "\"resetAt\":\"2026-07-13T01:00:00Z\"}}}";
+        }
+
+        private const string ValidPackageManifestMeta =
+            "fileFormatVersion: 2\n" +
+            "guid: 0123456789abcdef0123456789abcdef\n" +
+            "PackageManifestImporter:\n" +
+            "  externalObjects: {}\n" +
+            "  userData: \n" +
+            "  assetBundleName: \n" +
+            "  assetBundleVariant: \n";
+
+        private static string BuildManifestCommitNode(
+            string nodeId,
+            string packageManifestEntry,
+            string packageManifestMetaEntry,
+            string commitObjectId = null)
+        {
+            return "{" +
+                   $"\"id\":{QuoteJson(nodeId)}," +
+                   "\"defaultBranchRef\":{\"target\":{" +
+                   "\"__typename\":\"Commit\"," +
+                   $"\"oid\":{QuoteJson(commitObjectId ?? new string('c', 40))}," +
+                   $"\"packageManifest\":{packageManifestEntry}," +
+                   $"\"packageManifestMeta\":{packageManifestMetaEntry}" +
+                   "}}}";
+        }
+
+        private static string BuildManifestTreeEntry(
+            string fileName,
+            string oid,
+            string text,
+            int? byteSize = null)
+        {
+            return "{" +
+                   $"\"name\":{QuoteJson(fileName)}," +
+                   "\"mode\":33188," +
+                   "\"type\":\"blob\"," +
+                   "\"object\":{" +
+                   "\"__typename\":\"Blob\"," +
+                   $"\"oid\":{QuoteJson(oid)}," +
+                   $"\"byteSize\":{byteSize ?? System.Text.Encoding.UTF8.GetByteCount(text ?? string.Empty)}," +
+                   "\"isBinary\":false," +
+                   "\"isTruncated\":false," +
+                   $"\"text\":{(text == null ? "null" : QuoteJson(text))}" +
+                   "}}";
+        }
+
+        private static string QuoteJson(string value)
+        {
+            return "\"" + (value ?? string.Empty)
+                .Replace("\\", "\\\\")
+                .Replace("\"", "\\\"")
+                .Replace("\r", "\\r")
+                .Replace("\n", "\\n")
+                .Replace("\t", "\\t") + "\"";
         }
 
         private static void TickUntil(DiscoveryCoordinator coordinator, Func<bool> condition)

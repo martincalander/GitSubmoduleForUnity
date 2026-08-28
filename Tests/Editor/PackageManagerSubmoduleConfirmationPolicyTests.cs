@@ -266,7 +266,9 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                 Is.EqualTo(
                     PackageManagerSubmoduleConfirmationRequirement.DiscardPrompt));
             Assert.That(decision.DiscardLocalWorkIfAccepted, Is.True);
-            Assert.That(decision.Message, Does.Contain("HEAD is fetchable"));
+            Assert.That(
+                decision.Message,
+                Does.Contain("branch or tag currently advertised"));
             Assert.That(decision.Message, Does.Contain("not published"));
             Assert.That(decision.Message, Does.Contain("remains untouched"));
         }

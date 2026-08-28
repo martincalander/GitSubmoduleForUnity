@@ -289,6 +289,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                     ExitCode = 0,
                     StdOut = state.Message,
                     StdErr = string.Empty,
+                    CompletionWarning = removeError ?? string.Empty,
                     TerminationConfirmed = !terminationUnconfirmed
                 };
             }

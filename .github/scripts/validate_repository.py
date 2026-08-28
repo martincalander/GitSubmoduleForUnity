@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""License-free sanity checks for the Git Submodule Manager UPM repository."""
+"""Validate the Git Submodule Manager UPM repository and release metadata."""
 
 from __future__ import annotations
 
@@ -101,8 +101,18 @@ def check_package_json() -> None:
         fail("package.json name must be com.martincalander.gitsubmodulemanager")
     if package.get("displayName") != "Git Submodule Manager":
         fail("package.json displayName must be Git Submodule Manager")
-    if not parse_semver(str(package.get("version", ""))):
+    version = str(package.get("version", ""))
+    if not parse_semver(version):
         fail("package.json version is not valid SemVer 2.0.0")
+    else:
+        changelog = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
+        release_heading = re.compile(
+            rf"(?m)^## \[{re.escape(version)}\] - [0-9]{{4}}-[0-9]{{2}}-[0-9]{{2}}$"
+        )
+        if len(release_heading.findall(changelog)) != 1:
+            fail("CHANGELOG.md must contain one dated section for package.json version")
+        if f"[{version}]:" not in changelog:
+            fail("CHANGELOG.md must define a link for package.json version")
     if package.get("unity") != "6000.3":
         fail("package.json unity must declare the exact validated 6000.3.22f1 minimum")
     if package.get("unityRelease") != "22f1":
@@ -172,6 +182,15 @@ def check_required_files() -> None:
     github_meta_files = sorted((ROOT / ".github").rglob("*.meta"))
     for meta in github_meta_files:
         fail(f"GitHub-only file must not have Unity metadata: {meta.relative_to(ROOT)}")
+
+    npmignore_lines = {
+        line.strip()
+        for line in (ROOT / ".npmignore").read_text(encoding="utf-8").splitlines()
+        if line.strip() and not line.lstrip().startswith("#")
+    }
+    for attribution_file in ("AUTHORS.md", "LICENSE.md", "NOTICE.md", "Third Party Notices.md"):
+        if attribution_file in npmignore_lines or f"/{attribution_file}" in npmignore_lines:
+            fail(f".npmignore must not exclude required attribution file: {attribution_file}")
 
 
 def ignored_by_unity(path: Path) -> bool:
@@ -298,7 +317,10 @@ def check_harmony_plugin_contract() -> None:
     notices_path = ROOT / "Third Party Notices.md"
     if notices_path.is_file():
         notices = notices_path.read_text(encoding="utf-8")
-        if "Harmony 2.4.1" not in notices or str(dll_path.relative_to(ROOT)) not in notices:
+        if (
+            "Harmony 2.4.1" not in notices
+            or dll_path.relative_to(ROOT).as_posix() not in notices
+        ):
             fail("Third Party Notices.md must attribute the bundled Harmony binary")
 
 

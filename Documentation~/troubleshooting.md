@@ -79,6 +79,14 @@ destination package name, for example:
 }
 ```
 
+Automatic GitHub catalogue discovery also requires a regular root
+`package.json.meta` containing `fileFormatVersion: 2` and exactly one nonzero
+32-hexadecimal root GUID. Unity normally creates this file when the manifest is
+tracked as an asset. The importer section may vary and is not used for
+eligibility. A direct URL can still install an otherwise valid root UPM package
+without this marker, but the installer shows a mandatory unverified-package
+warning.
+
 Monorepos that keep the UPM package below the repository root are not currently
 supported by discovery or installation.
 
@@ -91,10 +99,11 @@ repository. Organization membership or repository permissions may need to be
 updated outside Unity.
 
 Discovery publishes only repositories whose root `package.json` contains a
-valid reverse-domain `name` and SemVer 2.0 `version`. A missing, malformed,
-unavailable, or nested manifest is intentionally excluded. Correct the
-repository or access issue, then choose **Refresh** in Package Manager to rescan
-the account and organizations.
+valid reverse-domain `name` and SemVer 2.0 `version` and whose sibling
+`package.json.meta` has a valid Unity meta header and GUID. A missing, malformed,
+unavailable, symlinked, oversized, or nested manifest or marker is intentionally
+excluded. Correct the repository or access issue, then choose **Refresh** in
+Package Manager to rescan the account and organizations.
 
 ## Dependency Resolution Says GitHub Coverage Is Incomplete
 
@@ -113,10 +122,11 @@ bypassed through a registry.
 ## An Installed Manifest Did Not Match Preflight
 
 Dependency-aware installation compares the resulting root `package.json` with
-the exact name, version, and dependency map inspected before mutation. When a
-branch changes during installation or Unity resolves an unexpected direct Git
-entry, the new install is rejected and automatic rollback or removal is
-attempted only when ownership is proven.
+the exact name, version, and dependency map inspected before mutation. For a
+catalogue package, it also compares the resulting `package.json.meta` GUID with
+the verified marker. When a branch changes during installation or Unity resolves
+an unexpected direct Git entry, the new install is rejected and automatic
+rollback or removal is attempted only when ownership is proven.
 
 If the diagnostic says cleanup was incomplete, inspect `git status`, the package
 path, and `Packages/manifest.json` before retrying. The mismatched checkout or

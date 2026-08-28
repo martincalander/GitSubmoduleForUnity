@@ -43,7 +43,13 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 .ToArray() ?? Array.Empty<PackageManifestDependency>();
             Dependencies = new ReadOnlyCollection<PackageManifestDependency>(
                 dependencyCopies);
+            PackageManifestCommitOid =
+                repository?.PackageManifestCommitOid ?? string.Empty;
             PackageManifestBlobOid = repository?.PackageManifestBlobOid ?? string.Empty;
+            PackageManifestMetaBlobOid =
+                repository?.PackageManifestMetaBlobOid ?? string.Empty;
+            PackageManifestMetaGuid =
+                repository?.PackageManifestMetaGuid ?? string.Empty;
         }
 
         internal string NodeId { get; }
@@ -65,7 +71,10 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         internal string ChangelogUrl { get; }
         internal string LicensesUrl { get; }
         internal IReadOnlyList<PackageManifestDependency> Dependencies { get; }
+        internal string PackageManifestCommitOid { get; }
         internal string PackageManifestBlobOid { get; }
+        internal string PackageManifestMetaBlobOid { get; }
+        internal string PackageManifestMetaGuid { get; }
 
         internal bool HasSameContent(PackageManagerGitHubRepository other)
         {
@@ -89,8 +98,20 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 !string.Equals(ChangelogUrl, other.ChangelogUrl, StringComparison.Ordinal) ||
                 !string.Equals(LicensesUrl, other.LicensesUrl, StringComparison.Ordinal) ||
                 !string.Equals(
+                    PackageManifestCommitOid,
+                    other.PackageManifestCommitOid,
+                    StringComparison.OrdinalIgnoreCase) ||
+                !string.Equals(
                     PackageManifestBlobOid,
                     other.PackageManifestBlobOid,
+                    StringComparison.Ordinal) ||
+                !string.Equals(
+                    PackageManifestMetaBlobOid,
+                    other.PackageManifestMetaBlobOid,
+                    StringComparison.Ordinal) ||
+                !string.Equals(
+                    PackageManifestMetaGuid,
+                    other.PackageManifestMetaGuid,
                     StringComparison.Ordinal) ||
                 Dependencies.Count != other.Dependencies.Count)
             {

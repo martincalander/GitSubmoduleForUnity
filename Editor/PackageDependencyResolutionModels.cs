@@ -92,7 +92,11 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             string repositoryUrl = "",
             string repositoryBranch = "",
             string sourceIdentity = "",
-            string dependencyFingerprint = "")
+            string dependencyFingerprint = "",
+            PackageManifestMetaVerification packageManifestMetaVerification =
+                PackageManifestMetaVerification.Unverified,
+            string packageManifestMetaGuid = "",
+            string repositoryCommit = "")
         {
             Source = source;
             PackageName = packageName?.Trim() ?? string.Empty;
@@ -104,6 +108,9 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             RepositoryBranch = repositoryBranch?.Trim() ?? string.Empty;
             SourceIdentity = sourceIdentity?.Trim() ?? string.Empty;
             DependencyFingerprint = dependencyFingerprint?.Trim() ?? string.Empty;
+            PackageManifestMetaVerification = packageManifestMetaVerification;
+            PackageManifestMetaGuid = packageManifestMetaGuid?.Trim() ?? string.Empty;
+            RepositoryCommit = repositoryCommit?.Trim() ?? string.Empty;
         }
 
         internal PackageDependencyCandidateSource Source { get; }
@@ -116,6 +123,10 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         internal string RepositoryBranch { get; }
         internal string SourceIdentity { get; }
         internal string DependencyFingerprint { get; }
+        internal PackageManifestMetaVerification PackageManifestMetaVerification
+            { get; }
+        internal string PackageManifestMetaGuid { get; }
+        internal string RepositoryCommit { get; }
     }
 
     internal sealed class PackageDependencyResolutionResult

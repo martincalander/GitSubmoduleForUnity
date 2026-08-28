@@ -57,6 +57,28 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
         }
 
         [TestCase(
+            "ssh://alice@git.example.com/team/repository.git",
+            "ssh://alice@GIT.EXAMPLE.COM/team/repository.git",
+            true)]
+        [TestCase(
+            "ssh://alice@git.example.com/team/repository.git",
+            "ssh://bob@git.example.com/team/repository.git",
+            false)]
+        [TestCase(
+            "https://github.com/owner/repository.git",
+            "git@github.com:owner/repository.git",
+            true)]
+        public void RepositoryUrlEquivalence_PreservesGenericSshUserIdentity(
+            string first,
+            string second,
+            bool expected)
+        {
+            Assert.That(
+                GitUtility.AreRepositoryUrlsEquivalent(first, second),
+                Is.EqualTo(expected));
+        }
+
+        [TestCase(
             "https://github.com/owner/repository.git",
             true,
             "https://github.com/owner/repository")]
@@ -159,7 +181,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                 Assert.That(
                     GitUtility.TryReadValidPackageManifest(path, out _, out string malformedEncodingError),
                     Is.False);
-                Assert.That(malformedEncodingError, Does.Contain("could not be read safely"));
+                Assert.That(malformedEncodingError, Does.Contain("valid UTF-8"));
                 Assert.That(malformedEncodingError.Length, Is.LessThan(1024));
 
                 File.WriteAllBytes(path, new byte[(1024 * 1024) + 1]);
@@ -312,6 +334,100 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
         }
 
         [Test]
+        public void StrictUtf8Output_ReportsInvalidGitBlobBytesWithoutReplacement()
+        {
+            byte[] prefix = Encoding.UTF8.GetBytes(
+                "fileFormatVersion: 2\nguid: 0123456789abcdef0123456789abcdef\n");
+            var contents = new byte[prefix.Length + 1];
+            Buffer.BlockCopy(prefix, 0, contents, 0, prefix.Length);
+            contents[contents.Length - 1] = 0x80;
+
+            CommandResult read = ReadGitBlobWithStrictUtf8(contents);
+
+            Assert.That(read.IsSuccess, Is.True, read.StdErr);
+            Assert.That(read.StdOutInvalidUtf8, Is.True);
+            Assert.That(read.StdOut, Does.Not.Contain("\uFFFD"));
+        }
+
+        [Test]
+        public void StrictUtf8Output_RejectsUtf16LeBomEvenWhenDecodedTextWouldBeValid()
+        {
+            const string validMeta =
+                "fileFormatVersion: 2\nguid: 0123456789abcdef0123456789abcdef\n";
+            byte[] preamble = Encoding.Unicode.GetPreamble();
+            byte[] text = Encoding.Unicode.GetBytes(validMeta);
+            var contents = new byte[preamble.Length + text.Length];
+            Buffer.BlockCopy(preamble, 0, contents, 0, preamble.Length);
+            Buffer.BlockCopy(text, 0, contents, preamble.Length, text.Length);
+
+            CommandResult read = ReadGitBlobWithStrictUtf8(contents);
+
+            Assert.That(read.IsSuccess, Is.True, read.StdErr);
+            Assert.That(read.StdOutInvalidUtf8, Is.True);
+            Assert.That(read.StdOut, Does.Not.Contain(validMeta));
+        }
+
+        [Test]
+        public void StrictUtf8Output_RejectsLeadingUtf16BomWithIncompleteCodeUnit()
+        {
+            CommandResult read = ReadGitBlobWithStrictUtf8(
+                new byte[] { 0xff, 0xfe, 0xfd });
+
+            Assert.That(read.IsSuccess, Is.True, read.StdErr);
+            Assert.That(read.StdOutInvalidUtf8, Is.True);
+            Assert.That(read.StdOut, Is.Empty);
+        }
+
+        [Test]
+        public void StrictUtf8Output_RejectsIncompleteSequenceAtEndOfStream()
+        {
+            byte[] prefix = Encoding.UTF8.GetBytes("valid-prefix");
+            var contents = new byte[prefix.Length + 1];
+            Buffer.BlockCopy(prefix, 0, contents, 0, prefix.Length);
+            contents[contents.Length - 1] = 0xc3;
+
+            CommandResult read = ReadGitBlobWithStrictUtf8(contents);
+
+            Assert.That(read.IsSuccess, Is.True, read.StdErr);
+            Assert.That(read.StdOutInvalidUtf8, Is.True);
+            Assert.That(read.StdOut, Is.EqualTo("valid-prefix"));
+        }
+
+        [Test]
+        public void StrictUtf8Output_AcceptsAndStripsGenuineUtf8Bom()
+        {
+            const string validMeta =
+                "fileFormatVersion: 2\nguid: 0123456789abcdef0123456789abcdef\n";
+            byte[] preamble = new UTF8Encoding(true).GetPreamble();
+            byte[] text = Encoding.UTF8.GetBytes(validMeta);
+            var contents = new byte[preamble.Length + text.Length];
+            Buffer.BlockCopy(preamble, 0, contents, 0, preamble.Length);
+            Buffer.BlockCopy(text, 0, contents, preamble.Length, text.Length);
+
+            CommandResult read = ReadGitBlobWithStrictUtf8(contents);
+
+            Assert.That(read.IsSuccess, Is.True, read.StdErr);
+            Assert.That(read.StdOutInvalidUtf8, Is.False);
+            Assert.That(read.StdOut, Is.EqualTo(validMeta.TrimEnd('\n')));
+        }
+
+        [Test]
+        public void StrictUtf8Output_PreservesBoundedCaptureForValidText()
+        {
+            var contents = new byte[
+                CliCommandRunner.MaxCapturedCharactersPerStream + 1];
+            for (int index = 0; index < contents.Length; index++)
+                contents[index] = (byte)'a';
+
+            CommandResult read = ReadGitBlobWithStrictUtf8(contents);
+
+            Assert.That(read.IsSuccess, Is.True, read.StdErr);
+            Assert.That(read.StdOutInvalidUtf8, Is.False);
+            Assert.That(read.StdOutTruncated, Is.True);
+            Assert.That(read.StdOut, Does.Contain("output truncated"));
+        }
+
+        [Test]
         public void ResolveGit_ReturnsCanonicalAbsoluteExecutable()
         {
             if (!ProcessCommandRunner.TryResolveCommand("git", out ExecutableResolution resolution))
@@ -320,6 +436,58 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
             Assert.That(Path.IsPathRooted(resolution.ResolvedPath), Is.True);
             Assert.That(File.Exists(resolution.ResolvedPath), Is.True);
             Assert.That(Path.GetFullPath(resolution.ResolvedPath), Is.EqualTo(resolution.ResolvedPath));
+        }
+
+        private static CommandResult ReadGitBlobWithStrictUtf8(byte[] contents)
+        {
+            if (!ProcessCommandRunner.TryResolveCommand(
+                    "git",
+                    out ExecutableResolution git))
+            {
+                Assert.Ignore("Git is not installed or could not be resolved on this machine.");
+            }
+
+            string repository = Path.Combine(
+                Path.GetTempPath(),
+                "gsm-strict-utf8-" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(repository);
+            try
+            {
+                var runner = new ProcessCommandRunner();
+                CommandResult init = runner.Run(new CommandSpec
+                {
+                    FileName = git.ResolvedPath,
+                    ArgumentList = new[] { "init", "--quiet" },
+                    WorkingDirectory = repository,
+                    TimeoutMs = 5000
+                });
+                Assert.That(init.IsSuccess, Is.True, init.StdErr);
+
+                string blobPath = Path.Combine(repository, "output-blob");
+                File.WriteAllBytes(blobPath, contents);
+                CommandResult hash = runner.Run(new CommandSpec
+                {
+                    FileName = git.ResolvedPath,
+                    ArgumentList = new[] { "hash-object", "-w", "--", blobPath },
+                    WorkingDirectory = repository,
+                    TimeoutMs = 5000
+                });
+                Assert.That(hash.IsSuccess, Is.True, hash.StdErr);
+
+                return runner.Run(new CommandSpec
+                {
+                    FileName = git.ResolvedPath,
+                    ArgumentList = new[] { "cat-file", "blob", hash.StdOut.Trim() },
+                    WorkingDirectory = repository,
+                    TimeoutMs = 5000,
+                    RequireStrictUtf8StdOut = true
+                });
+            }
+            finally
+            {
+                if (Directory.Exists(repository))
+                    Directory.Delete(repository, true);
+            }
         }
 
         [Test]
@@ -425,14 +593,315 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
         public void Add_PostconditionsVerifyRegistrationGitlinkAndCleanWorktree()
         {
             var plan = new AddSubmodulePlan { Path = PackagePath };
+            string inspectedCommit = ExpectGit(
+                    Path.Combine(parentRoot, PackagePath),
+                    "rev-parse --verify HEAD")
+                .StdOut.Trim();
 
             bool verified = GitUtility.TryVerifyAddedSubmodule(
                 plan,
                 sourceRoot,
                 string.Empty,
+                inspectedCommit,
                 out string error);
 
             Assert.That(verified, Is.True, error);
+        }
+
+        [Test]
+        public void Add_PostconditionsRejectCleanGitlinkAtDifferentCommitThanInspected()
+        {
+            var plan = new AddSubmodulePlan { Path = PackagePath };
+            File.WriteAllText(
+                Path.Combine(sourceRoot, "README.md"),
+                "later remote commit\n");
+            ExpectGit(sourceRoot, "add -- README.md");
+            ExpectGit(sourceRoot, "commit -m \"Later remote commit\"");
+            string differentInspectedCommit = ExpectGit(
+                    sourceRoot,
+                    "rev-parse --verify HEAD")
+                .StdOut.Trim();
+
+            bool verified = GitUtility.TryVerifyAddedSubmodule(
+                plan,
+                sourceRoot,
+                string.Empty,
+                differentInspectedCommit,
+                out string error);
+
+            Assert.That(verified, Is.False);
+            Assert.That(error, Does.Contain("exact inspected Git commit"));
+        }
+
+        [Test]
+        public void Add_PostconditionsRejectStageOnlyGitmodulesRedirectAtTerminalBoundary()
+        {
+            var plan = new AddSubmodulePlan { Path = PackagePath };
+            string inspectedCommit = ExpectGit(
+                    Path.Combine(parentRoot, PackagePath),
+                    "rev-parse --verify HEAD")
+                .StdOut.Trim();
+            string gitModulesPath = Path.Combine(parentRoot, ".gitmodules");
+            string originalContents = File.ReadAllText(gitModulesPath);
+            const string redirectedUrl =
+                "https://example.invalid/redirected-package.git";
+            string redirectedContents = originalContents.Replace(
+                sourceRoot,
+                redirectedUrl);
+            Assert.That(
+                redirectedContents,
+                Is.Not.EqualTo(originalContents),
+                "The fixture must replace the registered source URL.");
+            string redirectedPath = Path.Combine(
+                parentRoot,
+                "redirected.gitmodules.fixture");
+            File.WriteAllText(redirectedPath, redirectedContents);
+            string redirectedBlob = ExpectGit(
+                    parentRoot,
+                    "hash-object -w --no-filters -- " +
+                    GitUtility.Quote(redirectedPath))
+                .StdOut.Trim();
+
+            using (GitUtility.OverrideBeforeAddedSubmoduleTerminalProofForTests(
+                       _ => ExpectGit(
+                           parentRoot,
+                           "update-index --cacheinfo 100644," +
+                           redirectedBlob + ",.gitmodules")))
+            {
+                bool verified = GitUtility.TryVerifyAddedSubmodule(
+                    plan,
+                    sourceRoot,
+                    string.Empty,
+                    inspectedCommit,
+                    out string error);
+
+                Assert.That(verified, Is.False);
+                Assert.That(error, Does.Contain("staged .gitmodules"));
+            }
+
+            Assert.That(
+                ExpectGit(parentRoot, "show :.gitmodules").StdOut,
+                Does.Contain(redirectedUrl),
+                "Verification must preserve the concurrent staged redirect for review.");
+            Assert.That(
+                File.ReadAllText(gitModulesPath),
+                Is.EqualTo(originalContents),
+                "The stage-only redirect must not alter the worktree fixture.");
+        }
+
+        [Test]
+        public void Add_PostconditionsRejectOriginOnlyRedirectAtTerminalBoundary()
+        {
+            var plan = new AddSubmodulePlan { Path = PackagePath };
+            string inspectedCommit = ExpectGit(
+                    Path.Combine(parentRoot, PackagePath),
+                    "rev-parse --verify HEAD")
+                .StdOut.Trim();
+            const string redirectedUrl =
+                "https://example.invalid/redirected-origin.git";
+
+            using (GitUtility.OverrideBeforeAddedSubmoduleTerminalProofForTests(
+                       path => ExpectGit(
+                           Path.Combine(parentRoot, path),
+                           "remote set-url origin " +
+                           GitUtility.Quote(redirectedUrl))))
+            {
+                bool verified = GitUtility.TryVerifyAddedSubmodule(
+                    plan,
+                    sourceRoot,
+                    string.Empty,
+                    inspectedCommit,
+                    out string error);
+
+                Assert.That(verified, Is.False);
+                Assert.That(error, Does.Contain("origin"));
+            }
+
+            Assert.That(
+                ExpectGit(
+                        Path.Combine(parentRoot, PackagePath),
+                        "remote get-url origin")
+                    .StdOut.Trim(),
+                Is.EqualTo(redirectedUrl),
+                "Verification must preserve the concurrent origin redirect for review.");
+        }
+
+        [Test]
+        public void Add_PostconditionsRejectOriginSwapAfterTerminalOrigin()
+        {
+            var plan = new AddSubmodulePlan { Path = PackagePath };
+            string inspectedCommit = ExpectGit(
+                    Path.Combine(parentRoot, PackagePath),
+                    "rev-parse --verify HEAD")
+                .StdOut.Trim();
+            const string redirectedUrl =
+                "https://example.invalid/terminal-origin.git";
+
+            using (GitUtility.OverrideBeforeAddedSubmoduleClosingProofForTests(
+                       path => ExpectGit(
+                           Path.Combine(parentRoot, path),
+                           "remote set-url origin " +
+                           GitUtility.Quote(redirectedUrl))))
+            {
+                bool verified = GitUtility.TryVerifyAddedSubmodule(
+                    plan,
+                    sourceRoot,
+                    string.Empty,
+                    inspectedCommit,
+                    out string error);
+
+                Assert.That(verified, Is.False);
+                Assert.That(error, Does.Contain("origin"));
+            }
+
+            Assert.That(
+                ExpectGit(
+                        Path.Combine(parentRoot, PackagePath),
+                        "remote get-url origin")
+                    .StdOut.Trim(),
+                Is.EqualTo(redirectedUrl));
+        }
+
+        [Test]
+        public void Add_PostconditionsRejectHeadSwapAfterTerminalOrigin()
+        {
+            var plan = new AddSubmodulePlan { Path = PackagePath };
+            string inspectedCommit = ExpectGit(
+                    Path.Combine(parentRoot, PackagePath),
+                    "rev-parse --verify HEAD")
+                .StdOut.Trim();
+            File.WriteAllText(
+                Path.Combine(sourceRoot, "terminal-change.txt"),
+                "terminal commit swap fixture\n");
+            ExpectGit(sourceRoot, "add -- terminal-change.txt");
+            ExpectGit(sourceRoot, "commit -m \"Add terminal commit fixture\"");
+            string laterCommit = ExpectGit(sourceRoot, "rev-parse --verify HEAD")
+                .StdOut.Trim();
+
+            using (GitUtility.OverrideBeforeAddedSubmoduleClosingProofForTests(
+                       path =>
+                       {
+                           string worktree = Path.Combine(parentRoot, path);
+                           ExpectGit(worktree, "fetch --no-tags origin");
+                           ExpectGit(
+                               worktree,
+                               "checkout --detach " +
+                               GitUtility.Quote(laterCommit));
+                       }))
+            {
+                bool verified = GitUtility.TryVerifyAddedSubmodule(
+                    plan,
+                    sourceRoot,
+                    string.Empty,
+                    inspectedCommit,
+                    out string error);
+
+                Assert.That(verified, Is.False);
+                Assert.That(error, Does.Contain("HEAD"));
+            }
+
+            Assert.That(
+                ExpectGit(
+                        Path.Combine(parentRoot, PackagePath),
+                        "rev-parse --verify HEAD")
+                    .StdOut.Trim(),
+                Is.EqualTo(laterCommit),
+                "Verification must preserve the concurrent commit for review.");
+            Assert.That(
+                ExpectGit(
+                        parentRoot,
+                        "ls-files --stage -- " + GitUtility.Quote(PackagePath))
+                    .StdOut,
+                Does.Contain(inspectedCommit),
+                "The staged gitlink must remain untouched by verification.");
+        }
+
+        [Test]
+        public void Add_PostconditionsRejectLateUntrackedFileAtClosingBoundary()
+        {
+            var plan = new AddSubmodulePlan { Path = PackagePath };
+            string inspectedCommit = ExpectGit(
+                    Path.Combine(parentRoot, PackagePath),
+                    "rev-parse --verify HEAD")
+                .StdOut.Trim();
+            string lateFile = Path.Combine(
+                parentRoot,
+                PackagePath,
+                "late-untracked.txt");
+
+            using (GitUtility.OverrideBeforeAddedSubmoduleClosingProofForTests(
+                       _ => File.WriteAllText(
+                           lateFile,
+                           "concurrent untracked package data\n")))
+            {
+                bool verified = GitUtility.TryVerifyAddedSubmodule(
+                    plan,
+                    sourceRoot,
+                    string.Empty,
+                    inspectedCommit,
+                    out string error);
+
+                Assert.That(verified, Is.False);
+                Assert.That(error, Does.Contain("local changes"));
+            }
+
+            Assert.That(
+                File.ReadAllText(lateFile),
+                Is.EqualTo("concurrent untracked package data\n"),
+                "Verification must preserve late package data for review.");
+        }
+
+        [Test]
+        public void Add_PostconditionsRejectGitmodulesSymlinkAtClosingBoundary()
+        {
+            if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+                Assert.Ignore("Creating an unprivileged symbolic link is not portable on Windows test hosts.");
+
+            var plan = new AddSubmodulePlan { Path = PackagePath };
+            string inspectedCommit = ExpectGit(
+                    Path.Combine(parentRoot, PackagePath),
+                    "rev-parse --verify HEAD")
+                .StdOut.Trim();
+            string gitModulesPath = Path.Combine(parentRoot, ".gitmodules");
+            string outsidePath = Path.Combine(
+                sandboxRoot,
+                "terminal-gitmodules-target");
+            byte[] originalContents = File.ReadAllBytes(gitModulesPath);
+            File.WriteAllBytes(outsidePath, originalContents);
+
+            using (GitUtility.OverrideBeforeAddedSubmoduleClosingProofForTests(
+                       _ =>
+                       {
+                           File.Delete(gitModulesPath);
+                           CommandResult linkResult = CliCommandRunner.Run(
+                               "/bin/ln",
+                               "-s -- " + GitUtility.Quote(outsidePath) +
+                               " .gitmodules",
+                               parentRoot,
+                               5000);
+                           Assert.That(
+                               linkResult.IsSuccess,
+                               Is.True,
+                               linkResult.StdErr);
+                       }))
+            {
+                bool verified = GitUtility.TryVerifyAddedSubmodule(
+                    plan,
+                    sourceRoot,
+                    string.Empty,
+                    inspectedCommit,
+                    out string error);
+
+                Assert.That(verified, Is.False);
+                Assert.That(error, Does.Contain("regular"));
+            }
+
+            Assert.That(
+                (File.GetAttributes(gitModulesPath) &
+                 FileAttributes.ReparsePoint) != 0,
+                Is.True,
+                "Verification must preserve the concurrent symlink for review.");
+            Assert.That(File.ReadAllBytes(outsidePath), Is.EqualTo(originalContents));
         }
 
         [Test]
@@ -469,7 +938,10 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                 expectedFingerprint,
                 packagePath,
                 state,
-                CancellationToken.None);
+                CancellationToken.None,
+                inspectedCommit: ExpectGit(
+                    source,
+                    "rev-parse --verify HEAD^{commit}").StdOut.Trim());
 
             Assert.That(result.IsSuccess, Is.False);
             Assert.That(state.AddedSuccessfully, Is.False);
@@ -491,6 +963,490 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
         }
 
         [Test]
+        public void AddService_VerifiedPackageManifestMetaGuidDriftIsRolledBack()
+        {
+            const string packageName = "com.example.meta-drift";
+            const string inspectedGuid =
+                "0123456789abcdef0123456789abcdef";
+            const string checkedOutGuid =
+                "fedcba9876543210fedcba9876543210";
+            string cleanParent = CreateCleanParent("meta-drift-parent");
+            string source = CreateSourceRepository(
+                "meta-drift-source",
+                packageName);
+            File.WriteAllText(
+                Path.Combine(source, "package.json.meta"),
+                "fileFormatVersion: 2\n" +
+                "guid: " + checkedOutGuid + "\n" +
+                "PackageManifestImporter:\n" +
+                "  externalObjects: {}\n");
+            ExpectGit(source, "add -- package.json.meta");
+            ExpectGit(source, "commit -m \"Add package manifest meta\"");
+            RedirectProjectRoot(cleanParent);
+
+            string packagePath = "Packages/" + packageName;
+            var state = new GitSubmoduleAddTaskState();
+            CommandResult result = GitSubmoduleAddService.RunAddSubmoduleTask(
+                source,
+                string.Empty,
+                packageName,
+                "1.0.0",
+                GitUtility.ComputePackageDependencyFingerprint(
+                    Array.Empty<PackageManifestDependency>()),
+                packagePath,
+                state,
+                CancellationToken.None,
+                PackageManifestMetaVerification.Verified,
+                inspectedGuid,
+                ExpectGit(
+                    source,
+                    "rev-parse --verify HEAD^{commit}").StdOut.Trim());
+
+            Assert.That(result.IsSuccess, Is.False);
+            Assert.That(state.AddedSuccessfully, Is.False);
+            Assert.That(
+                state.Outcome,
+                Is.EqualTo(GitOperationCompletionOutcome.FailedButRolledBack));
+            Assert.That(state.Message, Does.Contain("package.json.meta changed"));
+            Assert.That(
+                Directory.Exists(Path.Combine(cleanParent, packagePath)),
+                Is.False);
+            Assert.That(
+                Git(cleanParent, "diff --cached --name-only").StdOut.Trim(),
+                Is.Empty);
+            Assert.That(
+                Git(cleanParent, "diff --name-only").StdOut.Trim(),
+                Is.Empty);
+        }
+
+        [Test]
+        public void AddService_VerifiedSymlinkedPackageManifestMetaIsRolledBack()
+        {
+            const string packageName = "com.example.meta-symlink";
+            string cleanParent = CreateCleanParent("meta-symlink-parent");
+            string source = CreateSourceRepository(
+                "meta-symlink-source",
+                packageName);
+            string linkTarget = Path.Combine(source, "link-target.txt");
+            File.WriteAllText(linkTarget, "package.json");
+            string linkBlob = ExpectGit(
+                source,
+                "hash-object -w -- link-target.txt").StdOut.Trim();
+            ExpectGit(
+                source,
+                "update-index --add --cacheinfo 120000," + linkBlob +
+                ",package.json.meta");
+            ExpectGit(source, "commit -m \"Add symlinked package manifest meta\"");
+            RedirectProjectRoot(cleanParent);
+
+            string packagePath = "Packages/" + packageName;
+            var state = new GitSubmoduleAddTaskState();
+            CommandResult result = GitSubmoduleAddService.RunAddSubmoduleTask(
+                source,
+                string.Empty,
+                packageName,
+                "1.0.0",
+                GitUtility.ComputePackageDependencyFingerprint(
+                    Array.Empty<PackageManifestDependency>()),
+                packagePath,
+                state,
+                CancellationToken.None,
+                PackageManifestMetaVerification.Verified,
+                "0123456789abcdef0123456789abcdef",
+                ExpectGit(
+                    source,
+                    "rev-parse --verify HEAD^{commit}").StdOut.Trim());
+
+            Assert.That(result.IsSuccess, Is.False);
+            Assert.That(state.AddedSuccessfully, Is.False);
+            Assert.That(
+                state.Outcome,
+                Is.EqualTo(GitOperationCompletionOutcome.FailedButRolledBack));
+            Assert.That(state.Message, Does.Contain("symbolic-link"));
+            Assert.That(
+                Directory.Exists(Path.Combine(cleanParent, packagePath)),
+                Is.False);
+            Assert.That(
+                Git(cleanParent, "diff --cached --name-only").StdOut.Trim(),
+                Is.Empty);
+        }
+
+        [Test]
+        public void AddService_TreeModeCheckUsesImmutableInspectedCommitAcrossHeadSwap()
+        {
+            const string packageName = "com.example.tree-mode-race";
+            string cleanParent = CreateCleanParent("tree-mode-race-parent");
+            string source = CreateSourceRepository(
+                "tree-mode-race-source",
+                packageName);
+            string regularCommit = ExpectGit(
+                source,
+                "rev-parse --verify HEAD^{commit}").StdOut.Trim();
+            string manifestObjectId = ExpectGit(
+                source,
+                "hash-object -w -- package.json").StdOut.Trim();
+            ExpectGit(
+                source,
+                "update-index --add --cacheinfo 120000," +
+                manifestObjectId + ",package.json");
+            ExpectGit(source, "commit -m \"Symlink package manifest\"");
+            string inspectedCommit = ExpectGit(
+                source,
+                "rev-parse --verify HEAD^{commit}").StdOut.Trim();
+            RedirectProjectRoot(cleanParent);
+
+            string packagePath = "Packages/" + packageName;
+            var swappingRunner = new AddTreeModeHeadSwapRunner(
+                CliCommandRunner.CurrentRunner,
+                cleanParent,
+                packagePath,
+                packageName,
+                regularCommit,
+                inspectedCommit);
+            CliCommandRunner.CurrentRunner = swappingRunner;
+            var state = new GitSubmoduleAddTaskState();
+
+            CommandResult result = GitSubmoduleAddService.RunAddSubmoduleTask(
+                source,
+                string.Empty,
+                packageName,
+                "1.0.0",
+                GitUtility.ComputePackageDependencyFingerprint(
+                    Array.Empty<PackageManifestDependency>()),
+                packagePath,
+                state,
+                CancellationToken.None,
+                inspectedCommit: inspectedCommit);
+
+            Assert.That(result.IsSuccess, Is.False);
+            Assert.That(state.AddedSuccessfully, Is.False);
+            Assert.That(
+                state.Outcome,
+                Is.EqualTo(GitOperationCompletionOutcome.FailedButRolledBack));
+            Assert.That(
+                swappingRunner.MaterializedRegularManifest,
+                Is.True,
+                "The fixture must expose the symlink blob as valid regular-looking worktree JSON under core.symlinks=false.");
+            Assert.That(
+                swappingRunner.SwappedHeadDuringTreeRead,
+                Is.True,
+                "The fixture must swap HEAD only while the tree-mode command runs.");
+            Assert.That(
+                swappingRunner.TreeCommandArguments,
+                Does.Contain(inspectedCommit),
+                "The tree-mode query must bind to the immutable inspected commit rather than mutable HEAD.");
+            Assert.That(state.Message, Does.Contain("symbolic-link"));
+            Assert.That(
+                Directory.Exists(Path.Combine(cleanParent, packagePath)),
+                Is.False);
+            Assert.That(
+                Git(cleanParent, "diff --cached --name-only").StdOut.Trim(),
+                Is.Empty);
+            Assert.That(
+                Git(cleanParent, "diff --name-only").StdOut.Trim(),
+                Is.Empty);
+        }
+
+        [Test]
+        public void AddService_ExactInspectedCommitIsRequiredAndAccepted()
+        {
+            const string packageName = "com.example.commit-bound";
+            string cleanParent = CreateCleanParent("commit-bound-parent");
+            string source = CreateSourceRepository(
+                "commit-bound-source",
+                packageName);
+            string inspectedCommit = ExpectGit(
+                source,
+                "rev-parse --verify HEAD^{commit}").StdOut.Trim();
+            RedirectProjectRoot(cleanParent);
+
+            string packagePath = "Packages/" + packageName;
+            var state = new GitSubmoduleAddTaskState();
+            CommandResult result = GitSubmoduleAddService.RunAddSubmoduleTask(
+                source,
+                string.Empty,
+                packageName,
+                "1.0.0",
+                GitUtility.ComputePackageDependencyFingerprint(
+                    Array.Empty<PackageManifestDependency>()),
+                packagePath,
+                state,
+                CancellationToken.None,
+                inspectedCommit: inspectedCommit);
+
+            Assert.That(result.IsSuccess, Is.True, state.Message);
+            Assert.That(state.AddedSuccessfully, Is.True);
+            Assert.That(
+                state.Outcome,
+                Is.EqualTo(GitOperationCompletionOutcome.Succeeded));
+            Assert.That(
+                ExpectGit(
+                    cleanParent,
+                    GitUtility.BuildReadSubmoduleHeadCommitArguments(packagePath))
+                    .StdOut.Trim(),
+                Is.EqualTo(inspectedCommit).IgnoreCase);
+        }
+
+        [Test]
+        public void AddService_CleanCommitSwapAfterInitialInspectionIsRejected()
+        {
+            const string packageName = "com.example.commit-race";
+            string cleanParent = CreateCleanParent("commit-race-parent");
+            string source = CreateSourceRepository(
+                "commit-race-source",
+                packageName);
+            string inspectedCommit = ExpectGit(
+                source,
+                "rev-parse --verify HEAD^{commit}").StdOut.Trim();
+            string defaultBranch = ExpectGit(
+                source,
+                "symbolic-ref --quiet --short HEAD").StdOut.Trim();
+            ExpectGit(source, "checkout -b concurrent-clean-commit");
+            ExpectGit(
+                source,
+                "commit --allow-empty -m \"Concurrent clean commit\"");
+            string differentCommit = ExpectGit(
+                source,
+                "rev-parse --verify HEAD^{commit}").StdOut.Trim();
+            ExpectGit(source, "checkout " + GitUtility.Quote(defaultBranch));
+            RedirectProjectRoot(cleanParent);
+
+            string packagePath = "Packages/" + packageName;
+            string packageRoot = Path.Combine(cleanParent, packagePath);
+            ICommandRunner inner = CliCommandRunner.CurrentRunner;
+            CliCommandRunner.CurrentRunner = new SingleCommandMutationRunner(
+                inner,
+                spec => string.Equals(
+                    spec.Arguments,
+                    GitUtility.BuildReadSubmoduleHeadCommitArguments(packagePath),
+                    StringComparison.Ordinal),
+                (_, __) =>
+                {
+                    ExpectGit(
+                        packageRoot,
+                        "checkout --detach " + GitUtility.Quote(differentCommit));
+                    ExpectGit(
+                        cleanParent,
+                        GitUtility.BuildStageSubmoduleArguments(packagePath));
+                });
+            var state = new GitSubmoduleAddTaskState();
+
+            CommandResult result = GitSubmoduleAddService.RunAddSubmoduleTask(
+                source,
+                string.Empty,
+                packageName,
+                "1.0.0",
+                GitUtility.ComputePackageDependencyFingerprint(
+                    Array.Empty<PackageManifestDependency>()),
+                packagePath,
+                state,
+                CancellationToken.None,
+                inspectedCommit: inspectedCommit);
+
+            Assert.That(result.IsSuccess, Is.False);
+            Assert.That(state.AddedSuccessfully, Is.False);
+            Assert.That(state.Message, Does.Contain("exact inspected Git commit"));
+            Assert.That(
+                state.Outcome,
+                Is.Not.EqualTo(GitOperationCompletionOutcome.Succeeded));
+        }
+
+        [TestCase("")]
+        [TestCase("0000000000000000000000000000000000000000")]
+        [TestCase("not-a-commit")]
+        public void AddService_InvalidInspectedCommitIsRejectedBeforeMutation(
+            string inspectedCommit)
+        {
+            const string packageName = "com.example.invalid-commit";
+            string cleanParent = CreateCleanParent("invalid-commit-parent");
+            string source = CreateSourceRepository(
+                "invalid-commit-source",
+                packageName);
+            RedirectProjectRoot(cleanParent);
+
+            string packagePath = "Packages/" + packageName;
+            var state = new GitSubmoduleAddTaskState();
+            CommandResult result = GitSubmoduleAddService.RunAddSubmoduleTask(
+                source,
+                string.Empty,
+                packageName,
+                "1.0.0",
+                GitUtility.ComputePackageDependencyFingerprint(
+                    Array.Empty<PackageManifestDependency>()),
+                packagePath,
+                state,
+                CancellationToken.None,
+                inspectedCommit: inspectedCommit);
+
+            Assert.That(result.IsSuccess, Is.False);
+            Assert.That(state.AddedSuccessfully, Is.False);
+            Assert.That(
+                state.Outcome,
+                Is.EqualTo(GitOperationCompletionOutcome.FailedButRolledBack));
+            Assert.That(state.Message, Does.Contain("exact nonzero Git commit"));
+            Assert.That(
+                Directory.Exists(Path.Combine(cleanParent, packagePath)),
+                Is.False);
+            Assert.That(
+                Git(cleanParent, "diff --cached --name-only").StdOut.Trim(),
+                Is.Empty);
+        }
+
+        [Test]
+        public void AddService_BranchMovementAfterInspectionFailsUnsafeAndPreservesState()
+        {
+            const string packageName = "com.example.moved-branch";
+            string cleanParent = CreateCleanParent("moved-branch-parent");
+            string source = CreateSourceRepository(
+                "moved-branch-source",
+                packageName);
+            string inspectedCommit = ExpectGit(
+                source,
+                "rev-parse --verify HEAD^{commit}").StdOut.Trim();
+            File.WriteAllText(
+                Path.Combine(source, "after-inspection.txt"),
+                "branch advanced\n");
+            ExpectGit(source, "add -- after-inspection.txt");
+            ExpectGit(source, "commit -m \"Advance after inspection\"");
+            RedirectProjectRoot(cleanParent);
+
+            string packagePath = "Packages/" + packageName;
+            var state = new GitSubmoduleAddTaskState();
+            CommandResult result = GitSubmoduleAddService.RunAddSubmoduleTask(
+                source,
+                string.Empty,
+                packageName,
+                "1.0.0",
+                GitUtility.ComputePackageDependencyFingerprint(
+                    Array.Empty<PackageManifestDependency>()),
+                packagePath,
+                state,
+                CancellationToken.None,
+                inspectedCommit: inspectedCommit);
+
+            Assert.That(result.IsSuccess, Is.False);
+            Assert.That(state.AddedSuccessfully, Is.False);
+            Assert.That(
+                state.Outcome,
+                Is.EqualTo(GitOperationCompletionOutcome.FailedUnsafe));
+            Assert.That(state.Message, Does.Contain("rollback evidence"));
+            Assert.That(state.Message, Does.Contain("does not match"));
+            Assert.That(
+                Directory.Exists(Path.Combine(cleanParent, packagePath)),
+                Is.True,
+                "An unapproved checkout without exact cleanup ownership must be preserved for recovery.");
+            Assert.That(
+                Git(cleanParent, "diff --cached --name-only").StdOut.Trim(),
+                Does.Contain(packagePath));
+        }
+
+        [Test]
+        public void AddService_UnconfirmedCommitInspectionSkipsCleanupAndFailsUnsafe()
+        {
+            const string packageName = "com.example.unconfirmed-commit";
+            string cleanParent = CreateCleanParent("unconfirmed-commit-parent");
+            string source = CreateSourceRepository(
+                "unconfirmed-commit-source",
+                packageName);
+            string inspectedCommit = ExpectGit(
+                source,
+                "rev-parse --verify HEAD^{commit}").StdOut.Trim();
+            RedirectProjectRoot(cleanParent);
+
+            string packagePath = "Packages/" + packageName;
+            ICommandRunner inner = CliCommandRunner.CurrentRunner;
+            CliCommandRunner.CurrentRunner = new SingleCommandMutationRunner(
+                inner,
+                spec => string.Equals(
+                    spec.Arguments,
+                    GitUtility.BuildReadSubmoduleHeadCommitArguments(packagePath),
+                    StringComparison.Ordinal),
+                (_, result) => result.TerminationConfirmed = false);
+            var state = new GitSubmoduleAddTaskState();
+
+            try
+            {
+                CommandResult result = GitSubmoduleAddService.RunAddSubmoduleTask(
+                    source,
+                    string.Empty,
+                    packageName,
+                    "1.0.0",
+                    GitUtility.ComputePackageDependencyFingerprint(
+                        Array.Empty<PackageManifestDependency>()),
+                    packagePath,
+                    state,
+                    CancellationToken.None,
+                    inspectedCommit: inspectedCommit);
+
+                Assert.That(result.TerminationConfirmed, Is.False);
+                Assert.That(state.AddedSuccessfully, Is.False);
+                Assert.That(
+                    state.Outcome,
+                    Is.EqualTo(GitOperationCompletionOutcome.FailedUnsafe));
+                Assert.That(state.Message, Does.Contain("cleanup was skipped"));
+                Assert.That(
+                    Directory.Exists(Path.Combine(cleanParent, packagePath)),
+                    Is.True,
+                    "Unconfirmed process termination must never authorize cleanup.");
+            }
+            finally
+            {
+                GitUtility.ResetCommandSafetyState();
+            }
+        }
+
+        [Test]
+        public void AddService_TruncatedCommitDiagnosticsAreRolledBack()
+        {
+            const string packageName = "com.example.truncated-commit";
+            string cleanParent = CreateCleanParent("truncated-commit-parent");
+            string source = CreateSourceRepository(
+                "truncated-commit-source",
+                packageName);
+            string inspectedCommit = ExpectGit(
+                source,
+                "rev-parse --verify HEAD^{commit}").StdOut.Trim();
+            RedirectProjectRoot(cleanParent);
+
+            string packagePath = "Packages/" + packageName;
+            ICommandRunner inner = CliCommandRunner.CurrentRunner;
+            CliCommandRunner.CurrentRunner = new SingleCommandMutationRunner(
+                inner,
+                spec => string.Equals(
+                    spec.Arguments,
+                    GitUtility.BuildReadSubmoduleHeadCommitArguments(packagePath),
+                    StringComparison.Ordinal),
+                (_, result) => result.StdErrTruncated = true);
+            var state = new GitSubmoduleAddTaskState();
+
+            CommandResult result = GitSubmoduleAddService.RunAddSubmoduleTask(
+                source,
+                string.Empty,
+                packageName,
+                "1.0.0",
+                GitUtility.ComputePackageDependencyFingerprint(
+                    Array.Empty<PackageManifestDependency>()),
+                packagePath,
+                state,
+                CancellationToken.None,
+                inspectedCommit: inspectedCommit);
+
+            Assert.That(result.IsSuccess, Is.False);
+            Assert.That(state.AddedSuccessfully, Is.False);
+            Assert.That(
+                state.Outcome,
+                Is.EqualTo(GitOperationCompletionOutcome.FailedButRolledBack));
+            Assert.That(state.Message, Does.Contain("diagnostics were truncated"));
+            Assert.That(state.Message, Does.Contain("rolled back"));
+            Assert.That(
+                Directory.Exists(Path.Combine(cleanParent, packagePath)),
+                Is.False);
+            Assert.That(
+                Git(cleanParent, "diff --cached --name-only").StdOut.Trim(),
+                Is.Empty);
+        }
+
+        [Test]
         public void GetSubmodules_ReadsPackageNameFromManifest()
         {
             bool loaded = GitUtility.TryGetSubmodules(out List<GitPackageInfo> packages, out string error);
@@ -499,6 +1455,17 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
             Assert.That(loaded, Is.True, error);
             Assert.That(package, Is.Not.Null);
             Assert.That(package.PackageName, Is.EqualTo("com.example.integration-package"));
+            Assert.That(
+                GitUtility.IsValidGitObjectId(package.ResolvedCommit),
+                Is.True);
+            Assert.That(
+                package.ResolvedCommit,
+                Is.EqualTo(
+                    ExpectGit(
+                        parentRoot,
+                        $"-C {GitUtility.Quote(PackagePath)} rev-parse --verify HEAD^{{commit}}")
+                    .StdOut.Trim())
+                .IgnoreCase);
         }
 
         [Test]
@@ -545,6 +1512,39 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
             Assert.That(removed, Is.False, "An untracked file must never be removed implicitly.");
             Assert.That(error, Is.Not.Empty);
             Assert.That(File.ReadAllText(untrackedFile), Is.EqualTo("not committed and not disposable\n"));
+        }
+
+        [Test]
+        public void Remove_RejectsOversizedGitmodulesBeforeMutation()
+        {
+            string gitModulesPath = Path.Combine(parentRoot, ".gitmodules");
+            byte[] originalContents = File.ReadAllBytes(gitModulesPath);
+            byte[] oversizedContents = Encoding.UTF8.GetBytes(
+                "# " + new string('x', (128 * 1024) + 1) + "\n" +
+                Encoding.UTF8.GetString(originalContents));
+            File.WriteAllBytes(gitModulesPath, oversizedContents);
+            ExpectGit(parentRoot, "add -- .gitmodules");
+            ExpectGit(parentRoot, "commit -m \"Commit oversized gitmodules fixture\"");
+            string gitlinkBefore = ExpectGit(
+                    parentRoot,
+                    "rev-parse :" + PackagePath)
+                .StdOut.Trim();
+
+            bool removed = GitUtility.TryRemoveSubmodule(
+                PackagePath,
+                out string error,
+                out GitOperationCompletionOutcome outcome);
+
+            Assert.That(removed, Is.False);
+            Assert.That(
+                outcome,
+                Is.EqualTo(GitOperationCompletionOutcome.FailedButRolledBack));
+            Assert.That(error, Does.Contain("128 KiB safety limit"));
+            Assert.That(File.ReadAllBytes(gitModulesPath), Is.EqualTo(oversizedContents));
+            Assert.That(
+                ExpectGit(parentRoot, "rev-parse :" + PackagePath).StdOut.Trim(),
+                Is.EqualTo(gitlinkBefore));
+            Assert.That(File.Exists(Path.Combine(parentRoot, PackagePath, "package.json")), Is.True);
         }
 
         [Test]
@@ -601,6 +1601,99 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
             Assert.That(error, Is.Not.Empty);
             Assert.That(ExpectGit(packageRoot, "rev-parse HEAD").StdOut.Trim(), Is.EqualTo(localHead));
             Assert.That(Directory.Exists(packageRoot), Is.True);
+        }
+
+        [Test]
+        public void Remove_UnpublishedCommitIsBlockedDespiteLocalRemoteTrackingRef()
+        {
+            string packageRoot = Path.Combine(parentRoot, PackagePath);
+            File.AppendAllText(Path.Combine(packageRoot, "package.json"), "\n");
+            ExpectGit(packageRoot, "add -- package.json");
+            ExpectGit(packageRoot, "commit -m \"Unpublished package commit\"");
+            string unpublishedHead = ExpectGit(
+                packageRoot,
+                "rev-parse HEAD").StdOut.Trim();
+            ExpectGit(
+                packageRoot,
+                "update-ref refs/remotes/origin/fake HEAD");
+            ExpectGit(parentRoot, "add -- \"" + PackagePath + "\"");
+            ExpectGit(parentRoot, "commit -m \"Pin unpublished package commit\"");
+
+            Assert.That(
+                GitUtility.TryAssessSubmoduleRemoval(
+                    PackagePath,
+                    out SubmoduleRemovalAssessment assessment,
+                    out string assessmentError),
+                Is.True,
+                assessmentError);
+            Assert.That(
+                assessment.HasLocalOnlyCommits,
+                Is.False,
+                "The fixture must demonstrate that a local remote-tracking ref can false-allow.");
+            Assert.That(assessment.IsSafe, Is.True, assessment.BuildWarning());
+
+            bool removed = GitUtility.TryRemoveSubmodule(
+                PackagePath,
+                out string error,
+                out GitOperationCompletionOutcome outcome);
+
+            Assert.That(removed, Is.False);
+            Assert.That(
+                outcome,
+                Is.EqualTo(GitOperationCompletionOutcome.FailedButRolledBack));
+            Assert.That(error, Does.Contain("remote-tracking refs do not prove"));
+            Assert.That(error, Does.Contain("could not be proven reachable"));
+            Assert.That(
+                ExpectGit(packageRoot, "rev-parse HEAD").StdOut.Trim(),
+                Is.EqualTo(unpublishedHead));
+            Assert.That(Directory.Exists(packageRoot), Is.True);
+            Assert.That(
+                Git(parentRoot, "ls-files --error-unmatch -- \"" + PackagePath + "\"").IsSuccess,
+                Is.True);
+            Assert.That(
+                File.ReadAllText(Path.Combine(parentRoot, ".gitmodules")),
+                Does.Contain(PackagePath));
+        }
+
+        [Test]
+        public void Remove_WorktreeChangeAfterPublicationQueryIsPreservedAndBlocksRemoval()
+        {
+            string packageRoot = Path.Combine(parentRoot, PackagePath);
+            string lateFile = Path.Combine(
+                packageRoot,
+                "created-after-publication-query.txt");
+            ICommandRunner inner = CliCommandRunner.CurrentRunner;
+            CliCommandRunner.CurrentRunner = new SingleCommandMutationRunner(
+                inner,
+                spec => (spec.Arguments ?? string.Empty).IndexOf(
+                    "ls-remote --heads --tags ",
+                    StringComparison.Ordinal) >= 0,
+                (_, __) => File.WriteAllText(
+                    lateFile,
+                    "work created while the remote query was active\n"));
+
+            bool removed = GitUtility.TryRemoveSubmodule(
+                PackagePath,
+                out string error,
+                out GitOperationCompletionOutcome outcome);
+
+            Assert.That(removed, Is.False);
+            Assert.That(
+                outcome,
+                Is.EqualTo(GitOperationCompletionOutcome.FailedButRolledBack));
+            Assert.That(
+                error,
+                Does.Contain("changed during remote publication verification"));
+            Assert.That(
+                File.ReadAllText(lateFile),
+                Is.EqualTo("work created while the remote query was active\n"));
+            Assert.That(Directory.Exists(packageRoot), Is.True);
+            Assert.That(
+                Git(parentRoot, "ls-files --error-unmatch -- \"" + PackagePath + "\"").IsSuccess,
+                Is.True);
+            Assert.That(
+                File.ReadAllText(Path.Combine(parentRoot, ".gitmodules")),
+                Does.Contain(PackagePath));
         }
 
         [Test]
@@ -929,24 +2022,9 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
             File.WriteAllBytes(gitmodulesPath, source);
             ExpectGit(parentRoot, "add -- .gitmodules");
             byte[] expected = EncodeUtf8WithBom(preservedSuffix);
-            byte[] gitProducedContents = null;
-            ICommandRunner inner = CliCommandRunner.CurrentRunner;
-            CliCommandRunner.CurrentRunner = new SingleCommandMutationRunner(
-                inner,
-                spec => (spec.Arguments ?? string.Empty).StartsWith(
-                    "rm ",
-                    StringComparison.Ordinal),
-                (_, __) => gitProducedContents = File.Exists(gitmodulesPath)
-                    ? File.ReadAllBytes(gitmodulesPath)
-                    : Array.Empty<byte>());
 
             bool removed = GitUtility.TryRemoveSubmodule(PackagePath, out string error);
 
-            Assert.That(gitProducedContents, Is.Not.Null, "The post-rm capture did not run.");
-            CollectionAssert.AreEqual(
-                source,
-                gitProducedContents,
-                "Git should leave a BOM-prefixed .gitmodules unchanged after removing the gitlink.");
             Assert.That(removed, Is.True, error);
             CollectionAssert.AreEqual(expected, File.ReadAllBytes(gitmodulesPath));
             Assert.That(Git(parentRoot, "diff --quiet -- .gitmodules").IsSuccess, Is.True);
@@ -1250,6 +2328,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                 Is.True,
                 argumentError);
             Assert.That(Git(cleanParent, arguments).IsSuccess, Is.True);
+            CaptureFailedAddRollbackEvidence(cleanParent, plan);
             string marker = Path.Combine(cleanParent, PackagePath, "late-file.txt");
             File.WriteAllText(marker, "must be preserved\n");
 
@@ -1263,6 +2342,529 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
             Assert.That(recoveredMarkers, Has.Length.EqualTo(1));
             Assert.That(File.ReadAllText(recoveredMarkers[0]), Is.EqualTo("must be preserved\n"));
             Assert.That(notice, Does.Contain("preserved"));
+        }
+
+        [Test]
+        public void FailedAddRollback_WorktreeSwapAtQuarantineSeamIsPreserved()
+        {
+            string cleanParent = CreateCleanParent(
+                "failed-add-gitmodules-quarantine-race-parent");
+            RedirectProjectRoot(cleanParent);
+            Assert.That(
+                GitUtility.TryPrepareAddSubmodule(
+                    sourceRoot,
+                    PackagePath,
+                    out AddSubmodulePlan plan,
+                    out string prepareError),
+                Is.True,
+                prepareError);
+            Assert.That(
+                GitUtility.TryBuildAddSubmoduleArguments(
+                    sourceRoot,
+                    PackagePath,
+                    string.Empty,
+                    plan.ReuseExistingMetadata,
+                    out string arguments,
+                    out string argumentError),
+                Is.True,
+                argumentError);
+            Assert.That(Git(cleanParent, arguments).IsSuccess, Is.True);
+            CaptureFailedAddRollbackEvidence(cleanParent, plan);
+
+            const string concurrentContents = " \t\n";
+            using (GitUtility.OverrideBeforeGitModulesCleanupMoveForTests(path =>
+                   {
+                       if (File.Exists(path))
+                           File.Delete(path);
+                       File.WriteAllText(path, concurrentContents);
+                   }))
+            {
+                bool cleaned = GitUtility.TryCleanupFailedAdd(
+                    plan,
+                    out string warning);
+
+                Assert.That(cleaned, Is.False);
+                Assert.That(warning, Does.Contain("concurrent data was preserved"));
+            }
+
+            string recoveryDirectory = Path.Combine(
+                cleanParent,
+                "Library",
+                "GitSubmoduleManager",
+                "Recovery",
+                "GitModulesCleanup");
+            string[] preservedFiles = Directory.GetFiles(
+                recoveryDirectory,
+                "*.gitmodules",
+                SearchOption.TopDirectoryOnly);
+            Assert.That(preservedFiles, Has.Length.EqualTo(1));
+            Assert.That(
+                File.ReadAllText(preservedFiles[0]),
+                Is.EqualTo(concurrentContents));
+            Assert.That(
+                File.Exists(Path.Combine(cleanParent, ".gitmodules")),
+                Is.False,
+                "The concurrently replaced inode must be moved into recovery, never unlinked.");
+        }
+
+        [Test]
+        public void FailedAddRollback_RecoveryRootSymlinkSwapDoesNotMoveMetadataOutsideProject()
+        {
+            if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+                Assert.Ignore("Creating an unprivileged symbolic link is not portable on Windows test hosts.");
+
+            string cleanParent = CreateCleanParent(
+                "failed-add-metadata-recovery-race-parent");
+            RedirectProjectRoot(cleanParent);
+            Assert.That(
+                GitUtility.TryPrepareAddSubmodule(
+                    sourceRoot,
+                    PackagePath,
+                    out AddSubmodulePlan plan,
+                    out string prepareError),
+                Is.True,
+                prepareError);
+            Assert.That(
+                GitUtility.TryBuildAddSubmoduleArguments(
+                    sourceRoot,
+                    PackagePath,
+                    string.Empty,
+                    plan.ReuseExistingMetadata,
+                    out string arguments,
+                    out string argumentError),
+                Is.True,
+                argumentError);
+            Assert.That(Git(cleanParent, arguments).IsSuccess, Is.True);
+            CaptureFailedAddRollbackEvidence(cleanParent, plan);
+            Assert.That(
+                GitUtility.TryResolveSubmoduleGitDir(
+                    PackagePath,
+                    out string moduleGitDir,
+                    out string metadataError),
+                Is.True,
+                metadataError);
+            string outsideRecovery = Path.Combine(
+                sandboxRoot,
+                "outside-metadata-recovery");
+            Directory.CreateDirectory(outsideRecovery);
+            string preservedRecovery = string.Empty;
+
+            using (GitUtility.OverrideAfterSubmoduleMetadataRecoveryRootCreateForTests(
+                       recoveryRoot =>
+                       {
+                           preservedRecovery = recoveryRoot + "-preserved";
+                           Directory.Move(recoveryRoot, preservedRecovery);
+                           CommandResult linkResult = CliCommandRunner.Run(
+                               "/bin/ln",
+                               "-s -- " + GitUtility.Quote(outsideRecovery) +
+                               " " + GitUtility.Quote(recoveryRoot),
+                               cleanParent,
+                               5000);
+                           Assert.That(
+                               linkResult.IsSuccess,
+                               Is.True,
+                               linkResult.StdErr);
+                       }))
+            {
+                bool cleaned = GitUtility.TryCleanupFailedAdd(
+                    plan,
+                    out string warning);
+
+                Assert.That(cleaned, Is.False);
+                Assert.That(warning, Does.Contain("symbolic link"));
+            }
+
+            Assert.That(
+                Directory.Exists(moduleGitDir),
+                Is.True,
+                "The owned Git metadata must remain in Git's modules directory.");
+            Assert.That(
+                Directory.GetFileSystemEntries(outsideRecovery),
+                Is.Empty,
+                "No recovery data may be moved through the raced symbolic link.");
+            Assert.That(
+                Directory.Exists(preservedRecovery),
+                Is.True,
+                "Earlier recovery data must remain preserved inside the project.");
+        }
+
+        [Test]
+        public void FailedAddRollback_LateRecoveryRootSymlinkSwapDoesNotMoveMetadataOutsideProject()
+        {
+            if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+                Assert.Ignore("Creating an unprivileged symbolic link is not portable on Windows test hosts.");
+
+            string cleanParent = CreateCleanParent(
+                "failed-add-metadata-late-recovery-race-parent");
+            RedirectProjectRoot(cleanParent);
+            Assert.That(
+                GitUtility.TryPrepareAddSubmodule(
+                    sourceRoot,
+                    PackagePath,
+                    out AddSubmodulePlan plan,
+                    out string prepareError),
+                Is.True,
+                prepareError);
+            Assert.That(
+                GitUtility.TryBuildAddSubmoduleArguments(
+                    sourceRoot,
+                    PackagePath,
+                    string.Empty,
+                    plan.ReuseExistingMetadata,
+                    out string arguments,
+                    out string argumentError),
+                Is.True,
+                argumentError);
+            Assert.That(Git(cleanParent, arguments).IsSuccess, Is.True);
+            CaptureFailedAddRollbackEvidence(cleanParent, plan);
+            Assert.That(
+                GitUtility.TryResolveSubmoduleGitDir(
+                    PackagePath,
+                    out string moduleGitDir,
+                    out string metadataError),
+                Is.True,
+                metadataError);
+            string outsideRecovery = Path.Combine(
+                sandboxRoot,
+                "outside-metadata-late-recovery");
+            Directory.CreateDirectory(outsideRecovery);
+            string preservedRecovery = string.Empty;
+
+            using (GitUtility.OverrideBeforeSubmoduleMetadataMoveForTests(
+                       recoveryRoot =>
+                       {
+                           preservedRecovery = recoveryRoot + "-preserved";
+                           Directory.Move(recoveryRoot, preservedRecovery);
+                           CommandResult linkResult = CliCommandRunner.Run(
+                               "/bin/ln",
+                               "-s -- " + GitUtility.Quote(outsideRecovery) +
+                               " " + GitUtility.Quote(recoveryRoot),
+                               cleanParent,
+                               5000);
+                           Assert.That(
+                               linkResult.IsSuccess,
+                               Is.True,
+                               linkResult.StdErr);
+                       }))
+            {
+                bool cleaned = GitUtility.TryCleanupFailedAdd(
+                    plan,
+                    out string warning);
+
+                Assert.That(cleaned, Is.False);
+                Assert.That(warning, Does.Contain("symbolic link"));
+            }
+
+            Assert.That(
+                Directory.Exists(moduleGitDir),
+                Is.True,
+                "The owned Git metadata must remain in Git's modules directory.");
+            Assert.That(
+                Directory.GetFileSystemEntries(outsideRecovery),
+                Is.Empty,
+                "No recovery data may be moved through the late raced symbolic link.");
+            Assert.That(
+                Directory.Exists(preservedRecovery),
+                Is.True,
+                "Earlier recovery data must remain preserved inside the project.");
+        }
+
+        [Test]
+        public void FailedAddRollback_ExactIndexCasPreservesConcurrentStagedGitmodules()
+        {
+            string cleanParent = CreateCleanParent(
+                "failed-add-index-cas-race-parent");
+            RedirectProjectRoot(cleanParent);
+            Assert.That(
+                GitUtility.TryPrepareAddSubmodule(
+                    sourceRoot,
+                    PackagePath,
+                    out AddSubmodulePlan plan,
+                    out string prepareError),
+                Is.True,
+                prepareError);
+            Assert.That(
+                GitUtility.TryBuildAddSubmoduleArguments(
+                    sourceRoot,
+                    PackagePath,
+                    string.Empty,
+                    plan.ReuseExistingMetadata,
+                    out string arguments,
+                    out string argumentError),
+                Is.True,
+                argumentError);
+            Assert.That(Git(cleanParent, arguments).IsSuccess, Is.True);
+            CaptureFailedAddRollbackEvidence(cleanParent, plan);
+
+            const string concurrentContents =
+                "# concurrent staged failed-add replacement\n";
+            string concurrentSource = Path.Combine(
+                sandboxRoot,
+                "failed-add-concurrent.gitmodules");
+            File.WriteAllText(concurrentSource, concurrentContents);
+            string concurrentBlob = ExpectGit(
+                    cleanParent,
+                    "hash-object -w -- " + GitUtility.Quote(concurrentSource))
+                .StdOut.Trim();
+
+            using (GitUtility.OverrideBeforeGitModulesIndexCompareAndSwapForTests(
+                       _ => ExpectGit(
+                           cleanParent,
+                           "update-index --add --cacheinfo 100644," +
+                           concurrentBlob + ",.gitmodules")))
+            {
+                bool cleaned = GitUtility.TryCleanupFailedAdd(
+                    plan,
+                    out string warning);
+
+                Assert.That(cleaned, Is.False);
+                Assert.That(warning, Does.Contain("concurrent staged data"));
+            }
+
+            Assert.That(
+                ExpectGit(cleanParent, "rev-parse :.gitmodules").StdOut.Trim(),
+                Is.EqualTo(concurrentBlob));
+            Assert.That(
+                ExpectGit(cleanParent, "show :.gitmodules").StdOut,
+                Is.EqualTo(concurrentContents.TrimEnd('\r', '\n')));
+            Assert.That(
+                File.Exists(Path.Combine(cleanParent, ".gitmodules")),
+                Is.False,
+                "The staged replacement must not be materialized or deleted through the worktree.");
+        }
+
+        [Test]
+        public void FailedAddRollback_ExactIndexCasPreservesConcurrentGitlink()
+        {
+            string cleanParent = CreateCleanParent(
+                "failed-add-gitlink-cas-race-parent");
+            RedirectProjectRoot(cleanParent);
+            Assert.That(
+                GitUtility.TryPrepareAddSubmodule(
+                    sourceRoot,
+                    PackagePath,
+                    out AddSubmodulePlan plan,
+                    out string prepareError),
+                Is.True,
+                prepareError);
+            Assert.That(
+                GitUtility.TryBuildAddSubmoduleArguments(
+                    sourceRoot,
+                    PackagePath,
+                    string.Empty,
+                    plan.ReuseExistingMetadata,
+                    out string arguments,
+                    out string argumentError),
+                Is.True,
+                argumentError);
+            Assert.That(Git(cleanParent, arguments).IsSuccess, Is.True);
+            CaptureFailedAddRollbackEvidence(cleanParent, plan);
+
+            string concurrentGitlink = ExpectGit(cleanParent, "rev-parse HEAD")
+                .StdOut.Trim();
+            string gitModulesBlob = ExpectGit(
+                    cleanParent,
+                    "rev-parse :.gitmodules")
+                .StdOut.Trim();
+            using (GitUtility.OverrideBeforeGitModulesIndexCompareAndSwapForTests(
+                       _ => ExpectGit(
+                           cleanParent,
+                           "update-index --add --cacheinfo 160000," +
+                           concurrentGitlink + "," + PackagePath)))
+            {
+                bool cleaned = GitUtility.TryCleanupFailedAdd(
+                    plan,
+                    out string warning);
+
+                Assert.That(cleaned, Is.False);
+                Assert.That(warning, Does.Contain("concurrent staged data"));
+            }
+
+            Assert.That(
+                ExpectGit(
+                    cleanParent,
+                    "ls-files --stage -- \"" + PackagePath + "\"")
+                .StdOut,
+                Does.Contain(concurrentGitlink));
+            Assert.That(
+                ExpectGit(cleanParent, "rev-parse :.gitmodules").StdOut.Trim(),
+                Is.EqualTo(gitModulesBlob),
+                "A stale combined patch must not partially change .gitmodules.");
+        }
+
+        [Test]
+        public void FailedAddRollback_PreservesUnrelatedSectionStagedAfterEvidenceCapture()
+        {
+            string cleanParent = CreateCleanParent(
+                "failed-add-unrelated-registration-parent");
+            RedirectProjectRoot(cleanParent);
+            Assert.That(
+                GitUtility.TryPrepareAddSubmodule(
+                    sourceRoot,
+                    PackagePath,
+                    out AddSubmodulePlan plan,
+                    out string prepareError),
+                Is.True,
+                prepareError);
+            Assert.That(
+                GitUtility.TryBuildAddSubmoduleArguments(
+                    sourceRoot,
+                    PackagePath,
+                    string.Empty,
+                    plan.ReuseExistingMetadata,
+                    out string arguments,
+                    out string argumentError),
+                Is.True,
+                argumentError);
+            Assert.That(Git(cleanParent, arguments).IsSuccess, Is.True);
+            CaptureFailedAddRollbackEvidence(cleanParent, plan);
+
+            string originalGitlink = ExpectGit(
+                    cleanParent,
+                    "rev-parse :" + PackagePath)
+                .StdOut.Trim();
+            const string unrelatedPath = "Packages/com.example.unrelated";
+            const string unrelatedUrl =
+                "https://example.invalid/team/unrelated.git";
+            string gitModulesPath = Path.Combine(cleanParent, ".gitmodules");
+            File.AppendAllText(
+                gitModulesPath,
+                "\n[submodule \"unrelated\"]\n" +
+                "\tpath = " + unrelatedPath + "\n" +
+                "\turl = " + unrelatedUrl + "\n");
+            ExpectGit(cleanParent, "add -- .gitmodules");
+            string stagedGitModules = ExpectGit(cleanParent, "show :.gitmodules")
+                .StdOut;
+
+            bool cleaned = GitUtility.TryCleanupFailedAdd(
+                plan,
+                out string warning);
+
+            Assert.That(cleaned, Is.False);
+            Assert.That(warning, Does.Contain("concurrent staged data"));
+            Assert.That(
+                ExpectGit(cleanParent, "show :.gitmodules").StdOut,
+                Is.EqualTo(stagedGitModules));
+            Assert.That(File.ReadAllText(gitModulesPath), Does.Contain(unrelatedUrl));
+            Assert.That(
+                ExpectGit(cleanParent, "rev-parse :" + PackagePath).StdOut.Trim(),
+                Is.EqualTo(originalGitlink));
+            Assert.That(
+                File.Exists(Path.Combine(cleanParent, PackagePath, "package.json")),
+                Is.True);
+        }
+
+        [Test]
+        public void FailedAddRollback_PreservesSameOriginAlternateCleanCommit()
+        {
+            string cleanParent = CreateCleanParent(
+                "failed-add-alternate-commit-parent");
+            RedirectProjectRoot(cleanParent);
+            Assert.That(
+                GitUtility.TryPrepareAddSubmodule(
+                    sourceRoot,
+                    PackagePath,
+                    out AddSubmodulePlan plan,
+                    out string prepareError),
+                Is.True,
+                prepareError);
+            Assert.That(
+                GitUtility.TryBuildAddSubmoduleArguments(
+                    sourceRoot,
+                    PackagePath,
+                    string.Empty,
+                    plan.ReuseExistingMetadata,
+                    out string arguments,
+                    out string argumentError),
+                Is.True,
+                argumentError);
+            Assert.That(Git(cleanParent, arguments).IsSuccess, Is.True);
+            CaptureFailedAddRollbackEvidence(cleanParent, plan);
+            string originalGitlink = ExpectGit(
+                    cleanParent,
+                    "rev-parse :" + PackagePath)
+                .StdOut.Trim();
+
+            File.WriteAllText(
+                Path.Combine(sourceRoot, "alternate.txt"),
+                "same-origin alternate commit\n");
+            ExpectGit(sourceRoot, "add -- alternate.txt");
+            ExpectGit(sourceRoot, "commit -m \"Create alternate cleanup commit\"");
+            string alternateCommit = ExpectGit(
+                    sourceRoot,
+                    "rev-parse --verify HEAD^{commit}")
+                .StdOut.Trim();
+            string packageRoot = Path.Combine(cleanParent, PackagePath);
+            ExpectGit(packageRoot, "fetch origin");
+            ExpectGit(
+                packageRoot,
+                "checkout --detach " + GitUtility.Quote(alternateCommit));
+            ExpectGit(cleanParent, "add -- " + GitUtility.Quote(PackagePath));
+
+            bool cleaned = GitUtility.TryCleanupFailedAdd(
+                plan,
+                out string warning);
+
+            Assert.That(cleaned, Is.False);
+            Assert.That(warning, Does.Contain("gitlink changed"));
+            Assert.That(alternateCommit, Is.Not.EqualTo(originalGitlink));
+            Assert.That(
+                ExpectGit(cleanParent, "rev-parse :" + PackagePath).StdOut.Trim(),
+                Is.EqualTo(alternateCommit).IgnoreCase);
+            Assert.That(
+                ExpectGit(packageRoot, "rev-parse --verify HEAD^{commit}").StdOut.Trim(),
+                Is.EqualTo(alternateCommit).IgnoreCase);
+            Assert.That(File.Exists(Path.Combine(packageRoot, "package.json")), Is.True);
+        }
+
+        [Test]
+        public void FailedAddRollback_CancellationAfterIndexMutationCompletesRecovery()
+        {
+            string cleanParent = CreateCleanParent(
+                "failed-add-post-mutation-cancellation-parent");
+            RedirectProjectRoot(cleanParent);
+            Assert.That(
+                GitUtility.TryPrepareAddSubmodule(
+                    sourceRoot,
+                    PackagePath,
+                    out AddSubmodulePlan plan,
+                    out string prepareError),
+                Is.True,
+                prepareError);
+            Assert.That(
+                GitUtility.TryBuildAddSubmoduleArguments(
+                    sourceRoot,
+                    PackagePath,
+                    string.Empty,
+                    plan.ReuseExistingMetadata,
+                    out string arguments,
+                    out string argumentError),
+                Is.True,
+                argumentError);
+            Assert.That(Git(cleanParent, arguments).IsSuccess, Is.True);
+            CaptureFailedAddRollbackEvidence(cleanParent, plan);
+
+            using var cancellation = new CancellationTokenSource();
+            using (GitUtility.OverrideAfterExactSubmoduleIndexApplyForTests(
+                       _ => cancellation.Cancel()))
+            {
+                bool cleaned = GitUtility.TryCleanupFailedAdd(
+                    plan,
+                    out string notice,
+                    cancellation.Token);
+
+                Assert.That(cancellation.IsCancellationRequested, Is.True);
+                Assert.That(cleaned, Is.True, notice);
+                Assert.That(notice, Does.Contain("preserved at"));
+                Assert.That(notice, Does.Contain("Recovery"));
+            }
+
+            Assert.That(File.Exists(Path.Combine(cleanParent, ".gitmodules")), Is.False);
+            Assert.That(Directory.Exists(Path.Combine(cleanParent, PackagePath)), Is.False);
+            Assert.That(
+                Git(cleanParent, "ls-files --error-unmatch -- " +
+                                 GitUtility.Quote(PackagePath)).IsSuccess,
+                Is.False);
         }
 
         [Test]
@@ -1284,6 +2886,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
             ExpectGit(
                 cleanParent,
                 "-c protocol.file.allow=always submodule add \"" + differentSource + "\" \"" + destination + "\"");
+            CaptureFailedAddRollbackEvidence(cleanParent, plan);
 
             bool cleaned = GitUtility.TryCleanupFailedAdd(plan, out string warning);
 
@@ -1291,6 +2894,62 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
             Assert.That(warning, Does.Contain("does not match"));
             Assert.That(File.Exists(Path.Combine(cleanParent, destination, "package.json")), Is.True);
             Assert.That(File.ReadAllText(Path.Combine(cleanParent, ".gitmodules")), Does.Contain(differentSource));
+        }
+
+        [Test]
+        public void FailedAddCleanup_RefusesWorktreeOriginWithChangedGenericSshUser()
+        {
+            const string approvedUrl =
+                "ssh://alice@git.example.com/team/integration-package.git";
+            const string changedUserUrl =
+                "ssh://bob@git.example.com/team/integration-package.git";
+            string cleanParent = CreateCleanParent(
+                "failed-add-changed-ssh-user-parent");
+            RedirectProjectRoot(cleanParent);
+            Assert.That(
+                GitUtility.TryPrepareAddSubmodule(
+                    approvedUrl,
+                    PackagePath,
+                    out AddSubmodulePlan plan,
+                    out string prepareError),
+                Is.True,
+                prepareError);
+            plan.ExpectedBranch = string.Empty;
+            ExpectGit(
+                cleanParent,
+                "-c protocol.file.allow=always submodule add " +
+                GitUtility.Quote(sourceRoot) + " " +
+                GitUtility.Quote(PackagePath));
+            ExpectGit(
+                cleanParent,
+                "config --file .gitmodules " +
+                GitUtility.Quote("submodule." + PackagePath + ".url") + " " +
+                GitUtility.Quote(approvedUrl));
+            ExpectGit(cleanParent, "add -- .gitmodules");
+            CaptureFailedAddRollbackEvidence(cleanParent, plan);
+            ExpectGit(
+                cleanParent,
+                "-C " + GitUtility.Quote(PackagePath) +
+                " remote set-url origin " + GitUtility.Quote(changedUserUrl));
+
+            bool cleaned = GitUtility.TryCleanupFailedAdd(
+                plan,
+                out string warning);
+
+            Assert.That(cleaned, Is.False);
+            Assert.That(warning, Does.Contain("origin does not match"));
+            Assert.That(
+                File.Exists(Path.Combine(cleanParent, PackagePath, "package.json")),
+                Is.True);
+            Assert.That(
+                ExpectGit(
+                    cleanParent,
+                    "ls-files --error-unmatch -- " + GitUtility.Quote(PackagePath))
+                .IsSuccess,
+                Is.True);
+            Assert.That(
+                File.ReadAllText(Path.Combine(cleanParent, ".gitmodules")),
+                Does.Contain(approvedUrl));
         }
 
         [Test]
@@ -1545,6 +3204,69 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
         }
 
         [Test]
+        public void Add_RefusesLinkedProspectiveMetadataAndPreservesOutsideData()
+        {
+            if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+                Assert.Ignore("Creating an unprivileged symbolic link is not portable on Windows test hosts.");
+
+            const string destination = "Packages/com.example.linked-metadata";
+            string cleanParent = CreateCleanParent("linked-metadata-parent");
+            string metadataParent = Path.Combine(
+                cleanParent,
+                ".git",
+                "modules",
+                "Packages");
+            Directory.CreateDirectory(metadataParent);
+            string outsideDirectory = Path.Combine(
+                sandboxRoot,
+                "outside-metadata-target");
+            Directory.CreateDirectory(outsideDirectory);
+            string sentinel = Path.Combine(outsideDirectory, "sentinel.txt");
+            const string original = "outside metadata must not change\n";
+            File.WriteAllText(sentinel, original);
+            CommandResult linkResult = CliCommandRunner.Run(
+                "/bin/ln",
+                "-s -- " + GitUtility.Quote(outsideDirectory) + " " +
+                GitUtility.Quote(Path.Combine(metadataParent, Path.GetFileName(destination))),
+                cleanParent,
+                5000);
+            if (!linkResult.IsSuccess)
+                Assert.Ignore("The test host could not create a symbolic link: " + linkResult.StdErr);
+            RedirectProjectRoot(cleanParent);
+
+            bool prepared = GitUtility.TryPrepareAddSubmodule(
+                sourceRoot,
+                destination,
+                out AddSubmodulePlan _,
+                out string error);
+
+            Assert.That(prepared, Is.False);
+            Assert.That(error, Does.Contain("metadata"));
+            Assert.That(File.ReadAllText(sentinel), Is.EqualTo(original));
+        }
+
+        [Test]
+        public void Add_RefusesProspectiveMetadataBelowExistingFile()
+        {
+            const string destination = "Packages/com.example.file-backed-metadata";
+            string cleanParent = CreateCleanParent("file-backed-metadata-parent");
+            string modulesPath = Path.Combine(cleanParent, ".git", "modules");
+            const string original = "not a modules directory\n";
+            File.WriteAllText(modulesPath, original);
+            RedirectProjectRoot(cleanParent);
+
+            bool prepared = GitUtility.TryPrepareAddSubmodule(
+                sourceRoot,
+                destination,
+                out AddSubmodulePlan _,
+                out string error);
+
+            Assert.That(prepared, Is.False);
+            Assert.That(error, Does.Contain("metadata"));
+            Assert.That(File.ReadAllText(modulesPath), Is.EqualTo(original));
+        }
+
+        [Test]
         public void Remove_WhenParentIndexIsLocked_LeavesInitializedWorktreeIntact()
         {
             string indexLock = Path.Combine(parentRoot, ".git", "index.lock");
@@ -1728,6 +3450,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
             ExpectGit(
                 parentRoot,
                 "config --file .gitmodules submodule.\"" + PackagePath + "\".branch main");
+            ExpectGit(parentRoot, "add -- .gitmodules");
             var plan = new AddSubmodulePlan { Path = PackagePath };
 
             bool verified = GitUtility.TryVerifyAddedSubmodule(
@@ -1947,42 +3670,44 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
         public void Remove_DoesNotReportSuccessWhenWorktreeStillExists()
         {
             string worktree = Path.Combine(parentRoot, PackagePath);
-            ICommandRunner inner = CliCommandRunner.CurrentRunner;
-            CliCommandRunner.CurrentRunner = new SingleCommandMutationRunner(
-                inner,
-                spec => (spec.Arguments ?? string.Empty).StartsWith("rm ", StringComparison.Ordinal),
-                (_, __) => Directory.CreateDirectory(worktree));
-
-            bool removed = GitUtility.TryRemoveSubmodule(
-                PackagePath,
-                out string error,
-                out GitOperationCompletionOutcome outcome);
+            bool removed;
+            string error;
+            GitOperationCompletionOutcome outcome;
+            using (GitUtility.OverrideBeforeGitModulesIndexCompareAndSwapForTests(
+                       _ => Directory.CreateDirectory(worktree)))
+            {
+                removed = GitUtility.TryRemoveSubmodule(
+                    PackagePath,
+                    out error,
+                    out outcome);
+            }
 
             Assert.That(removed, Is.False);
             Assert.That(outcome, Is.EqualTo(GitOperationCompletionOutcome.FailedUnsafe));
-            Assert.That(error, Does.Contain("worktree absence could not be verified"));
+            Assert.That(error, Does.Contain("new filesystem entry"));
             Assert.That(Directory.Exists(worktree), Is.True);
         }
 
         [Test]
-        public void Remove_ConcurrentGitmodulesEditAfterGitRm_IsPreservedAndStopsRestoration()
+        public void Remove_ConcurrentGitmodulesRecreationIsPreservedAndStopsMutation()
         {
             string gitmodulesPath = Path.Combine(parentRoot, ".gitmodules");
-            const string marker = "# concurrent post-rm edit\n";
-            ICommandRunner inner = CliCommandRunner.CurrentRunner;
-            CliCommandRunner.CurrentRunner = new SingleCommandMutationRunner(
-                inner,
-                spec => (spec.Arguments ?? string.Empty).StartsWith("rm ", StringComparison.Ordinal),
-                (_, __) => File.AppendAllText(gitmodulesPath, marker));
-
-            bool removed = GitUtility.TryRemoveSubmodule(
-                PackagePath,
-                out string error,
-                out GitOperationCompletionOutcome outcome);
+            const string marker = "# concurrent recreated gitmodules\n";
+            bool removed;
+            string error;
+            GitOperationCompletionOutcome outcome;
+            using (GitUtility.OverrideBeforeGitModulesIndexCompareAndSwapForTests(
+                       _ => File.WriteAllText(gitmodulesPath, marker)))
+            {
+                removed = GitUtility.TryRemoveSubmodule(
+                    PackagePath,
+                    out error,
+                    out outcome);
+            }
 
             Assert.That(removed, Is.False);
             Assert.That(outcome, Is.EqualTo(GitOperationCompletionOutcome.FailedUnsafe));
-            Assert.That(error, Does.Contain("concurrent"));
+            Assert.That(error, Does.Contain("new .gitmodules filesystem entry"));
             Assert.That(File.ReadAllText(gitmodulesPath), Does.Contain(marker.Trim()));
         }
 
@@ -2035,6 +3760,413 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
             Assert.That(preservedFiles, Has.Length.EqualTo(1));
             Assert.That(File.ReadAllText(preservedFiles[0]), Is.EqualTo(marker));
             Assert.That(File.Exists(Path.Combine(cleanParent, ".gitmodules")), Is.False);
+        }
+
+        [Test]
+        public void Remove_LastSubmoduleExactIndexCasPreservesConcurrentStagedGitmodules()
+        {
+            string cleanParent = CreateCleanParent(
+                "last-submodule-index-cas-race-parent");
+            RedirectProjectRoot(cleanParent);
+            Assert.That(
+                GitUtility.TryAddSubmodule(
+                    sourceRoot,
+                    PackagePath,
+                    string.Empty,
+                    out string addError),
+                Is.True,
+                addError);
+            Assert.That(
+                GitUtility.TryAssessSubmoduleRemoval(
+                    PackagePath,
+                    out SubmoduleRemovalAssessment confirmed,
+                    out string assessmentError),
+                Is.True,
+                assessmentError);
+
+            const string concurrentContents =
+                "# concurrent staged last-submodule replacement\n";
+            string concurrentSource = Path.Combine(
+                sandboxRoot,
+                "last-submodule-concurrent.gitmodules");
+            File.WriteAllText(concurrentSource, concurrentContents);
+            string concurrentBlob = ExpectGit(
+                    cleanParent,
+                    "hash-object -w -- " + GitUtility.Quote(concurrentSource))
+                .StdOut.Trim();
+
+            using (GitUtility.OverrideBeforeGitModulesIndexCompareAndSwapForTests(
+                       _ => ExpectGit(
+                           cleanParent,
+                           "update-index --add --cacheinfo 100644," +
+                           concurrentBlob + ",.gitmodules")))
+            {
+                bool removed = GitUtility.TryRemoveSubmodule(
+                    PackagePath,
+                    confirmed,
+                    true,
+                    out string error,
+                    out GitOperationCompletionOutcome outcome);
+
+                Assert.That(removed, Is.False);
+                Assert.That(
+                    outcome,
+                    Is.EqualTo(GitOperationCompletionOutcome.FailedUnsafe));
+                Assert.That(error, Does.Contain("concurrent staged data"));
+            }
+
+            Assert.That(
+                ExpectGit(cleanParent, "rev-parse :.gitmodules").StdOut.Trim(),
+                Is.EqualTo(concurrentBlob));
+            Assert.That(
+                ExpectGit(cleanParent, "show :.gitmodules").StdOut,
+                Is.EqualTo(concurrentContents.TrimEnd('\r', '\n')));
+            Assert.That(
+                File.Exists(Path.Combine(cleanParent, ".gitmodules")),
+                Is.False,
+                "The staged replacement must remain index-only after the verified worktree entry was quarantined.");
+        }
+
+        [Test]
+        public void Remove_ExactIndexCasPreservesConcurrentGitlinkAtomically()
+        {
+            string originalGitModulesBlob = ExpectGit(
+                    parentRoot,
+                    "rev-parse :.gitmodules")
+                .StdOut.Trim();
+            string concurrentGitlink = ExpectGit(parentRoot, "rev-parse HEAD")
+                .StdOut.Trim();
+
+            using (GitUtility.OverrideBeforeGitModulesIndexCompareAndSwapForTests(
+                       _ => ExpectGit(
+                           parentRoot,
+                           "update-index --add --cacheinfo 160000," +
+                           concurrentGitlink + "," + PackagePath)))
+            {
+                bool removed = GitUtility.TryRemoveSubmodule(
+                    PackagePath,
+                    out string error,
+                    out GitOperationCompletionOutcome outcome);
+
+                Assert.That(removed, Is.False);
+                Assert.That(
+                    outcome,
+                    Is.EqualTo(GitOperationCompletionOutcome.FailedUnsafe));
+                Assert.That(error, Does.Contain("concurrent staged data"));
+            }
+
+            Assert.That(
+                ExpectGit(
+                    parentRoot,
+                    "ls-files --stage -- \"" + PackagePath + "\"")
+                .StdOut,
+                Does.Contain(concurrentGitlink));
+            Assert.That(
+                ExpectGit(parentRoot, "rev-parse :.gitmodules").StdOut.Trim(),
+                Is.EqualTo(originalGitModulesBlob),
+                "The one-lock patch must reject both changes atomically.");
+        }
+
+        [Test]
+        public void Remove_LatePackageWriterAfterQuarantineIsPreserved()
+        {
+            string packagePath = Path.Combine(parentRoot, PackagePath);
+            string lateFile = Path.Combine(packagePath, "late-writer.txt");
+            string originalGitlink = ExpectGit(
+                    parentRoot,
+                    "rev-parse :" + PackagePath)
+                .StdOut.Trim();
+            string originalGitModulesBlob = ExpectGit(
+                    parentRoot,
+                    "rev-parse :.gitmodules")
+                .StdOut.Trim();
+
+            using (GitUtility.OverrideBeforeGitModulesIndexCompareAndSwapForTests(
+                       _ =>
+                       {
+                           Directory.CreateDirectory(packagePath);
+                           File.WriteAllText(lateFile, "late data must survive\n");
+                       }))
+            {
+                bool removed = GitUtility.TryRemoveSubmodule(
+                    PackagePath,
+                    out string error,
+                    out GitOperationCompletionOutcome outcome);
+
+                Assert.That(removed, Is.False);
+                Assert.That(
+                    outcome,
+                    Is.EqualTo(GitOperationCompletionOutcome.FailedUnsafe));
+                Assert.That(error, Does.Contain("new filesystem entry"));
+            }
+
+            Assert.That(File.ReadAllText(lateFile), Is.EqualTo("late data must survive\n"));
+            Assert.That(
+                ExpectGit(parentRoot, "rev-parse :" + PackagePath).StdOut.Trim(),
+                Is.EqualTo(originalGitlink));
+            Assert.That(
+                ExpectGit(parentRoot, "rev-parse :.gitmodules").StdOut.Trim(),
+                Is.EqualTo(originalGitModulesBlob));
+            string recoveryRoot = Path.Combine(
+                parentRoot,
+                "Library",
+                "GitSubmoduleManager",
+                "Recovery");
+            Assert.That(
+                Directory.GetFiles(
+                    recoveryRoot,
+                    "package.json",
+                    SearchOption.AllDirectories),
+                Has.Length.EqualTo(1),
+                "The original package worktree must remain in Recovery.");
+        }
+
+        [Test]
+        public void Remove_CancellationAfterExactIndexApplyCompletesCriticalSection()
+        {
+            using var cancellation = new CancellationTokenSource();
+            using (GitUtility.OverrideAfterExactSubmoduleIndexApplyForTests(
+                       _ => cancellation.Cancel()))
+            {
+                bool removed = GitUtility.TryRemoveSubmodule(
+                    PackagePath,
+                    null,
+                    false,
+                    out string error,
+                    out GitOperationCompletionOutcome outcome,
+                    cancellation.Token);
+
+                Assert.That(cancellation.IsCancellationRequested, Is.True);
+                Assert.That(removed, Is.True, error);
+                Assert.That(
+                    outcome,
+                    Is.EqualTo(GitOperationCompletionOutcome.Succeeded));
+                Assert.That(error, Does.Contain("preserved at"));
+            }
+
+            Assert.That(
+                Git(parentRoot, "ls-files --error-unmatch -- \"" + PackagePath + "\"")
+                    .IsSuccess,
+                Is.False);
+            Assert.That(Directory.Exists(Path.Combine(parentRoot, PackagePath)), Is.False);
+        }
+
+        [Test]
+        public void Remove_LatePostconditionFailureRetainsExactRecoveryInstructions()
+        {
+            string latePath = Path.Combine(parentRoot, PackagePath, "post-apply.txt");
+            using (GitUtility.OverrideAfterExactSubmoduleRemovalForTests(path =>
+                   {
+                       Directory.CreateDirectory(path);
+                       File.WriteAllText(latePath, "post-apply data\n");
+                   }))
+            {
+                bool removed = GitUtility.TryRemoveSubmodule(
+                    PackagePath,
+                    out string error,
+                    out GitOperationCompletionOutcome outcome);
+
+                Assert.That(removed, Is.False);
+                Assert.That(
+                    outcome,
+                    Is.EqualTo(GitOperationCompletionOutcome.FailedUnsafe));
+                Assert.That(error, Does.Contain("preserved at"));
+                Assert.That(error, Does.Contain("GitModulesCleanup"));
+            }
+
+            Assert.That(
+                File.ReadAllText(latePath),
+                Is.EqualTo("post-apply data\n"));
+        }
+
+        [Test]
+        public void Remove_LateRegularGitmodulesWriterFailsClosingProofAndIsPreserved()
+        {
+            string gitModulesPath = Path.Combine(parentRoot, ".gitmodules");
+            const string lateContents = "# late post-removal writer\n";
+            using (GitUtility.OverrideAfterExactSubmoduleRemovalForTests(
+                       _ => File.WriteAllText(gitModulesPath, lateContents)))
+            {
+                bool removed = GitUtility.TryRemoveSubmodule(
+                    PackagePath,
+                    out string error,
+                    out GitOperationCompletionOutcome outcome);
+
+                Assert.That(removed, Is.False);
+                Assert.That(
+                    outcome,
+                    Is.EqualTo(GitOperationCompletionOutcome.FailedUnsafe));
+                Assert.That(error, Does.Contain("preserved at"));
+                Assert.That(error, Does.Contain("GitModulesCleanup"));
+            }
+
+            Assert.That(File.ReadAllText(gitModulesPath), Is.EqualTo(lateContents));
+        }
+
+        [Test]
+        public void Remove_LateSymlinkedGitmodulesFailsClosingProofWithoutFollowingIt()
+        {
+            if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+                Assert.Ignore("Creating an unprivileged symbolic link is not portable on Windows test hosts.");
+
+            string gitModulesPath = Path.Combine(parentRoot, ".gitmodules");
+            string externalPath = Path.Combine(
+                sandboxRoot,
+                "late-removal-external-gitmodules");
+            const string externalContents = "# external registration-free bytes\n";
+            File.WriteAllText(externalPath, externalContents);
+            using (GitUtility.OverrideAfterExactSubmoduleRemovalForTests(_ =>
+                   {
+                       if (File.Exists(gitModulesPath))
+                           File.Delete(gitModulesPath);
+                       CommandResult linkResult = CliCommandRunner.Run(
+                           "/bin/ln",
+                           "-s -- " + GitUtility.Quote(externalPath) + " .gitmodules",
+                           parentRoot,
+                           5000);
+                       Assert.That(linkResult.IsSuccess, Is.True, linkResult.StdErr);
+                   }))
+            {
+                bool removed = GitUtility.TryRemoveSubmodule(
+                    PackagePath,
+                    out string error,
+                    out GitOperationCompletionOutcome outcome);
+
+                Assert.That(removed, Is.False);
+                Assert.That(
+                    outcome,
+                    Is.EqualTo(GitOperationCompletionOutcome.FailedUnsafe));
+                Assert.That(error, Does.Contain("regular, non-symbolic-link"));
+                Assert.That(error, Does.Contain("preserved at"));
+                Assert.That(error, Does.Contain("GitModulesCleanup"));
+            }
+
+            Assert.That(File.ReadAllText(externalPath), Is.EqualTo(externalContents));
+            Assert.That(
+                (File.GetAttributes(gitModulesPath) & FileAttributes.ReparsePoint) != 0,
+                Is.True);
+        }
+
+        private sealed class AddTreeModeHeadSwapRunner : ICommandRunner
+        {
+            private readonly ICommandRunner inner;
+            private readonly string parentRoot;
+            private readonly string packagePath;
+            private readonly string expectedPackageName;
+            private readonly string regularCommit;
+            private readonly string inspectedCommit;
+            private bool inspectedAdd;
+
+            internal AddTreeModeHeadSwapRunner(
+                ICommandRunner inner,
+                string parentRoot,
+                string packagePath,
+                string expectedPackageName,
+                string regularCommit,
+                string inspectedCommit)
+            {
+                this.inner = inner;
+                this.parentRoot = parentRoot;
+                this.packagePath = packagePath;
+                this.expectedPackageName = expectedPackageName;
+                this.regularCommit = regularCommit;
+                this.inspectedCommit = inspectedCommit;
+            }
+
+            internal bool MaterializedRegularManifest { get; private set; }
+            internal bool SwappedHeadDuringTreeRead { get; private set; }
+            internal string TreeCommandArguments { get; private set; } = string.Empty;
+
+            public CommandResult Run(CommandSpec spec)
+            {
+                string arguments = spec?.Arguments ?? string.Empty;
+                if (!SwappedHeadDuringTreeRead &&
+                    arguments.IndexOf(
+                        "ls-tree -z --full-tree ",
+                        StringComparison.Ordinal) >= 0 &&
+                    arguments.IndexOf(
+                        "-- package.json package.json.meta",
+                        StringComparison.Ordinal) >= 0)
+                {
+                    CheckoutAndStage(regularCommit);
+                    TreeCommandArguments = arguments;
+                    CommandResult treeResult = inner.Run(spec);
+                    CheckoutAndStage(inspectedCommit);
+                    SwappedHeadDuringTreeRead = true;
+                    return treeResult;
+                }
+
+                CommandResult result = inner.Run(spec);
+                if (inspectedAdd || result == null || !result.IsSuccess ||
+                    arguments.IndexOf(
+                        "submodule add",
+                        StringComparison.Ordinal) < 0)
+                {
+                    return result;
+                }
+
+                inspectedAdd = true;
+                string packageRoot = Path.Combine(parentRoot, packagePath);
+                CommandResult configResult = RunInnerGit(
+                    packageRoot,
+                    "config",
+                    "core.symlinks",
+                    "false");
+                Assert.That(configResult.IsSuccess, Is.True, configResult.StdErr);
+
+                string manifestPath = Path.Combine(packageRoot, "package.json");
+                File.Delete(manifestPath);
+                CommandResult checkoutResult = RunInnerGit(
+                    packageRoot,
+                    "checkout",
+                    "--",
+                    "package.json");
+                Assert.That(checkoutResult.IsSuccess, Is.True, checkoutResult.StdErr);
+                MaterializedRegularManifest =
+                    File.Exists(manifestPath) &&
+                    (File.GetAttributes(manifestPath) &
+                     FileAttributes.ReparsePoint) == 0 &&
+                    GitUtility.TryReadValidPackageManifest(
+                        manifestPath,
+                        out string declaredName,
+                        out _) &&
+                    string.Equals(
+                        declaredName,
+                        expectedPackageName,
+                        StringComparison.Ordinal);
+                return result;
+            }
+
+            private void CheckoutAndStage(string commit)
+            {
+                string packageRoot = Path.Combine(parentRoot, packagePath);
+                CommandResult checkoutResult = RunInnerGit(
+                    packageRoot,
+                    "checkout",
+                    "--detach",
+                    commit);
+                Assert.That(checkoutResult.IsSuccess, Is.True, checkoutResult.StdErr);
+                CommandResult stageResult = RunInnerGit(
+                    parentRoot,
+                    "add",
+                    "--",
+                    packagePath);
+                Assert.That(stageResult.IsSuccess, Is.True, stageResult.StdErr);
+            }
+
+            private CommandResult RunInnerGit(
+                string workingDirectory,
+                params string[] arguments)
+            {
+                return inner.Run(new CommandSpec
+                {
+                    FileName = GitUtility.GitExecutable,
+                    ArgumentList = arguments,
+                    WorkingDirectory = workingDirectory,
+                    TimeoutMs = 30000,
+                    TerminationScope = CommandTerminationScope.CompleteProcessTree
+                });
+            }
         }
 
         private sealed class SingleCommandMutationRunner : ICommandRunner
@@ -2107,6 +4239,23 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
             ExpectGit(repository, "add -- package.json");
             ExpectGit(repository, "commit -m \"Initial package\"");
             return repository;
+        }
+
+        private static void CaptureFailedAddRollbackEvidence(
+            string repositoryRoot,
+            AddSubmodulePlan plan)
+        {
+            string expectedGitlink = ExpectGit(
+                    repositoryRoot,
+                    "rev-parse :" + GitUtility.Quote(plan.Path))
+                .StdOut.Trim();
+            Assert.That(
+                GitUtility.TryCaptureFailedAddRollbackEvidence(
+                    plan,
+                    expectedGitlink,
+                    out string evidenceError),
+                Is.True,
+                evidenceError);
         }
 
         private void RedirectProjectRoot(string root)

@@ -21,10 +21,10 @@ scope.
 
 ## Development Prerequisites
 
-- exact Unity 6000.3.22f1 or a Unity 6000.5.x final release;
+- exact Unity `6000.3.22f1` or a Unity `6000.5.*f1` final release;
 - Git CLI;
 - GitHub CLI for discovery testing;
-- Python 3 for repository sanity checks.
+- Python 3 for repository validation.
 
 ## Set Up a Test Project
 
@@ -131,10 +131,9 @@ the `PackageManagerCompatibility` category. After it passes, run the complete
 state-transition coverage intentionally lives outside the compatibility subset.
 
 Maintainers can also dispatch **Sanity Checks** with a reviewed full commit SHA
-and an exact `unity_version` such as `6000.3.22f1`, `6000.5.0f1`, or
-`6000.5.9f1`. Manual
-dispatch stages the same package revision and runs the full EditMode assembly
-in that Editor; normal protected push runs remain pinned to the minimum
+and an exact `unity_version` of `6000.3.22f1` or a `6000.5.*f1` final release.
+Manual dispatch stages the same package revision and runs the full EditMode
+assembly in that Editor; normal protected push runs remain pinned to the minimum
 `6000.3.22f1` eligibility baseline. Unity 6000.4 is not a validated target.
 
 CI runs license-free structure, Markdown, archive, and portability checks on
@@ -142,6 +141,10 @@ every pull request. Unity credentials are never exposed to pull-request code.
 After reviewing a contribution, a maintainer can manually dispatch the
 **Sanity Checks** workflow with the reviewed commit as its `ref` to run the
 protected Unity compile and EditMode-test gate.
+
+Branch protection requires the workflow's stable **Required sanity gate**,
+which aggregates package validation and the complete Linux, macOS, and Windows
+portability matrix. A green package job alone is not sufficient.
 
 ## Pull Request Checklist
 

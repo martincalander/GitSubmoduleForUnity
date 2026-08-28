@@ -1,5 +1,7 @@
 using System;
+using System.ComponentModel;
 using System.IO;
+using System.Runtime.InteropServices;
 using System.Text;
 using System.Threading;
 using UnityEditor;
@@ -58,6 +60,35 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             "MartinCalander.GitSubmoduleManager.RecoveryOwnsAutoRefresh";
         private const string LegacyAutoRefreshSessionKey =
             "MartinCalander.GitPackageManager.RecoveryOwnsAutoRefresh";
+
+        private static readonly UTF8Encoding StrictUtf8Encoding =
+            new UTF8Encoding(false, true);
+
+        private sealed class JournalFileSnapshot
+        {
+            internal byte[] Contents = Array.Empty<byte>();
+            internal GitOperationJournal Journal;
+        }
+
+        [DllImport("libc", EntryPoint = "open", SetLastError = true)]
+        private static extern int OpenUnixFileNoFollow(
+            string path,
+            int flags);
+
+        [DllImport("libc", EntryPoint = "read", SetLastError = true)]
+        private static extern IntPtr ReadUnixFile(
+            int descriptor,
+            byte[] buffer,
+            UIntPtr count);
+
+        [DllImport("libc", EntryPoint = "lseek", SetLastError = true)]
+        private static extern long SeekUnixFile(
+            int descriptor,
+            long offset,
+            int origin);
+
+        [DllImport("libc", EntryPoint = "close", SetLastError = true)]
+        private static extern int CloseUnixFile(int descriptor);
 
         private static readonly object Gate = new object();
         private static readonly string CurrentJournalPath = Path.Combine(
@@ -148,6 +179,17 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             {
                 lock (Gate)
                     return activeLabel;
+            }
+        }
+
+        internal static string ActivePackageName
+        {
+            get
+            {
+                lock (Gate)
+                    return reserved
+                        ? packageResolutionPackageName
+                        : string.Empty;
             }
         }
 
@@ -689,6 +731,72 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 : GitOperationCompletionOutcome.FailedUnsafe;
         }
 
+        internal static void GetAutoRefreshFinalizationPlan(
+            bool ownsSuppression,
+            GitOperationCompletionOutcome outcome,
+            out bool shouldRestoreAutoRefresh,
+            out bool shouldRefreshAssets)
+        {
+            shouldRestoreAutoRefresh = ownsSuppression;
+            shouldRefreshAssets = ownsSuppression &&
+                                  (outcome == GitOperationCompletionOutcome.Succeeded ||
+                                   outcome == GitOperationCompletionOutcome.FailedButRolledBack);
+        }
+
+        internal static bool TryFinalizeAutoRefreshSuppression(
+            Action allowAutoRefresh,
+            Action<bool> setSessionMarker,
+            Action<bool> updateJournal,
+            out bool autoRefreshRestored,
+            out string error)
+        {
+            if (allowAutoRefresh == null)
+                throw new ArgumentNullException(nameof(allowAutoRefresh));
+            if (setSessionMarker == null)
+                throw new ArgumentNullException(nameof(setSessionMarker));
+            if (updateJournal == null)
+                throw new ArgumentNullException(nameof(updateJournal));
+
+            error = string.Empty;
+            try
+            {
+                // This delegate is intentionally invoked exactly once. Retrying
+                // an unknown native suppression count could over-balance Unity.
+                allowAutoRefresh();
+                autoRefreshRestored = true;
+            }
+            catch (Exception exception)
+            {
+                autoRefreshRestored = false;
+                error = exception.Message;
+            }
+
+            bool suppressionMayRemain = !autoRefreshRestored;
+            try
+            {
+                setSessionMarker(suppressionMayRemain);
+            }
+            catch (Exception exception)
+            {
+                error = string.IsNullOrWhiteSpace(error)
+                    ? exception.Message
+                    : error + " " + exception.Message;
+            }
+
+            try
+            {
+                updateJournal(suppressionMayRemain);
+            }
+            catch (Exception exception)
+            {
+                error = string.IsNullOrWhiteSpace(error)
+                    ? exception.Message
+                    : error + " " + exception.Message;
+            }
+
+            return autoRefreshRestored && string.IsNullOrWhiteSpace(error);
+        }
+
         internal static CommandResult BuildEffectiveCompletionResult(
             CommandResult result,
             GitOperationCompletionOutcome effectiveOutcome)
@@ -742,6 +850,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             bool stateIsSafe =
                 outcome == GitOperationCompletionOutcome.Succeeded ||
                 outcome == GitOperationCompletionOutcome.FailedButRolledBack;
+            bool shouldRestoreAutoRefresh;
             bool shouldRefreshAssets;
             bool journalDeleted = false;
             bool packageResolutionPrepared = false;
@@ -755,7 +864,11 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 if (!reserved)
                     return outcome;
                 finalizing = true;
-                shouldRefreshAssets = controlsAutoRefresh && stateIsSafe;
+                GetAutoRefreshFinalizationPlan(
+                    controlsAutoRefresh,
+                    outcome,
+                    out shouldRestoreAutoRefresh,
+                    out shouldRefreshAssets);
                 cancellationSourceToDispose = taskCancellationSource;
                 packageResolutionOperationId = activeJournal?.operationId ??
                                                string.Empty;
@@ -777,23 +890,43 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                     TryUpdateActiveJournalState("failed-unsafe");
                 }
 
-                if (controlsAutoRefresh && stateIsSafe)
+            }
+            finally
+            {
+                // Each cleanup stage is independent, and the reload lock remains
+                // held through journal handling and the final refresh. Unlock it
+                // only after all other Unity-facing finalization has completed.
+                if (shouldRestoreAutoRefresh)
                 {
-                    try
+                    bool finalizationSafe =
+                        TryFinalizeAutoRefreshSuppression(
+                            AssetDatabase.AllowAutoRefresh,
+                            SetAutoRefreshSessionMarker,
+                            UpdateActiveJournalAutoRefreshState,
+                            out bool autoRefreshRestored,
+                            out string restoreError);
+                    if (autoRefreshRestored)
                     {
-                        AssetDatabase.AllowAutoRefresh();
                         controlsAutoRefresh = false;
                         lock (Gate)
                             recoveryOwnsAutoRefresh = false;
-                        TrySetAutoRefreshSessionMarker(false);
-                        TryUpdateActiveJournalAutoRefreshState(false);
                     }
-                    catch (Exception ex)
+                    else
+                    {
+                        lock (Gate)
+                        {
+                            recoveryOwnsAutoRefresh = true;
+                            recoveryRequiresEditorRestart = true;
+                        }
+                    }
+
+                    if (!finalizationSafe)
                     {
                         stateIsSafe = false;
                         shouldRefreshAssets = false;
                         Debug.LogWarning(
-                            $"[Git Submodule Manager] Failed to restore AssetDatabase auto-refresh: {ex.Message}");
+                            "[Git Submodule Manager] Failed to restore AssetDatabase auto-refresh safely: " +
+                            restoreError);
                     }
                 }
 
@@ -822,14 +955,6 @@ namespace MartinCalander.GitSubmoduleManager.Editor
 
                 if (!stateIsSafe)
                 {
-                    if (controlsAutoRefresh)
-                    {
-                        lock (Gate)
-                            recoveryOwnsAutoRefresh = true;
-                        TrySetAutoRefreshSessionMarker(true);
-                        TryUpdateActiveJournalAutoRefreshState(true);
-                    }
-
                     TryUpdateActiveJournalState("failed-unsafe");
                     LoadRecoveryWarning();
                     if (string.IsNullOrWhiteSpace(RecoveryWarning))
@@ -848,12 +973,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                     }
                     SetRecoveryWarning(string.Empty);
                 }
-            }
-            finally
-            {
-                // Each cleanup stage is independent, and the reload lock remains
-                // held through journal handling and the final refresh. Unlock it
-                // only after all other Unity-facing finalization has completed.
+
                 try
                 {
                     UnregisterPolling();
@@ -1131,18 +1251,48 @@ namespace MartinCalander.GitSubmoduleManager.Editor
 
         private static void TryUpdateActiveJournalAutoRefreshState(bool isSuppressed)
         {
+            try
+            {
+                UpdateActiveJournalAutoRefreshState(isSuppressed);
+            }
+            catch (Exception ex)
+            {
+                Debug.LogWarning(
+                    $"[Git Submodule Manager] Failed to update operation journal: {ex.Message}");
+            }
+        }
+
+        private static void UpdateActiveJournalAutoRefreshState(bool isSuppressed)
+        {
             GitOperationJournal snapshot;
             lock (Gate)
             {
                 if (activeJournal == null || !journalOwnedByReservation)
-                    return;
+                {
+                    throw new InvalidOperationException(
+                        "The active operation journal is no longer owned by this reservation.");
+                }
 
                 activeJournal.autoRefreshSuppressed = isSuppressed;
                 activeJournal.updatedUtc = DateTime.UtcNow.ToString("O");
                 snapshot = CloneJournal(activeJournal);
             }
 
-            TryWriteJournalUpdate(snapshot, true);
+            lock (Gate)
+            {
+                if (!journalOwnedByReservation ||
+                    activeJournal == null ||
+                    !string.Equals(
+                        activeJournal.operationId,
+                        snapshot.operationId,
+                        StringComparison.Ordinal))
+                {
+                    throw new InvalidOperationException(
+                        "The active operation journal changed ownership before its update.");
+                }
+            }
+
+            WriteJournal(snapshot, true, snapshot.operationId);
         }
 
         private static void TryUpdateRecoveryJournalAutoRefreshState(
@@ -1221,7 +1371,8 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             string journalPath,
             GitOperationJournal journal,
             bool replaceExisting,
-            string expectedOperationId)
+            string expectedOperationId,
+            Action beforeReplaceForTests = null)
         {
             if (journal == null)
                 throw new InvalidOperationException("The operation journal was not initialized.");
@@ -1234,47 +1385,104 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 throw new InvalidOperationException("The operation journal directory could not be resolved.");
 
             Directory.CreateDirectory(directory);
+            if (!GitUtility.TryValidateProjectOwnedPath(journalPath, out pathError))
+                throw new IOException(pathError);
+
             string temporaryPath = Path.Combine(
                 directory,
                 Path.GetFileName(journalPath) + "." + Guid.NewGuid().ToString("N") + ".tmp");
+            string recoveryPath = string.Empty;
 
             try
             {
                 string json = JsonUtility.ToJson(journal, true);
+                byte[] desiredContents = StrictUtf8Encoding.GetBytes(json);
+                if (desiredContents.Length == 0 ||
+                    desiredContents.LongLength > MaximumJournalBytes)
+                {
+                    throw new InvalidDataException(
+                        "The operation journal exceeds the safety size limit.");
+                }
+
+                if (!GitUtility.TryValidateProjectOwnedPath(temporaryPath, out pathError))
+                    throw new IOException(pathError);
                 using (var stream = new FileStream(
                            temporaryPath,
                            FileMode.CreateNew,
                            FileAccess.Write,
                            FileShare.None))
-                using (var writer = new StreamWriter(stream, new UTF8Encoding(false, true)))
                 {
-                    writer.Write(json);
-                    writer.Flush();
+                    stream.Write(desiredContents, 0, desiredContents.Length);
                     stream.Flush(true);
                 }
 
                 if (replaceExisting)
                 {
-                    if (!File.Exists(journalPath))
-                        throw new IOException("The operation journal disappeared before its atomic update.");
-
-                    if (!string.IsNullOrWhiteSpace(expectedOperationId))
+                    if (!IsValidJournalOperationId(expectedOperationId))
                     {
-                        if (!TryReadJournal(
-                                journalPath,
-                                out GitOperationJournal existingJournal,
-                                out string readError) ||
-                            !string.Equals(
-                                existingJournal.operationId,
-                                expectedOperationId,
-                                StringComparison.Ordinal))
-                        {
-                            throw new IOException(
-                                "The operation journal is no longer owned by this reservation. " + readError);
-                        }
+                        throw new IOException(
+                            "An exact operation identity is required to replace the recovery journal.");
                     }
 
-                    File.Replace(temporaryPath, journalPath, null);
+                    if (!TryReadJournalSnapshot(
+                            journalPath,
+                            out JournalFileSnapshot expectedSnapshot,
+                            out string readError) ||
+                        !string.Equals(
+                            expectedSnapshot.Journal.operationId,
+                            expectedOperationId,
+                            StringComparison.Ordinal))
+                    {
+                        throw new IOException(
+                            "The operation journal is no longer owned by this reservation. " + readError);
+                    }
+
+                    beforeReplaceForTests?.Invoke();
+
+                    recoveryPath = BuildJournalRecoveryPath(journalPath, "replaced");
+                    if (!GitUtility.TryValidateProjectOwnedPath(recoveryPath, out pathError))
+                        throw new IOException(pathError);
+
+                    // File.Replace is the atomic publication boundary. Its backup
+                    // captures the exact inode displaced at that boundary, so a
+                    // writer that races the precondition is preserved instead of
+                    // being silently overwritten.
+                    File.Replace(temporaryPath, journalPath, recoveryPath);
+                    temporaryPath = string.Empty;
+
+                    if (!TryReadJournalSnapshot(
+                            recoveryPath,
+                            out JournalFileSnapshot displacedSnapshot,
+                            out string displacedError) ||
+                        !JournalSnapshotsEqual(expectedSnapshot, displacedSnapshot))
+                    {
+                        throw new IOException(
+                            "The operation journal changed at its atomic replacement boundary. " +
+                            "The displaced data was preserved at " + recoveryPath + ". " +
+                            displacedError);
+                    }
+
+                    if (!TryReadJournalSnapshot(
+                            journalPath,
+                            out JournalFileSnapshot publishedSnapshot,
+                            out string publishedError) ||
+                        !ByteArraysEqual(desiredContents, publishedSnapshot.Contents) ||
+                        !string.Equals(
+                            publishedSnapshot.Journal.operationId,
+                            journal.operationId,
+                            StringComparison.Ordinal))
+                    {
+                        throw new IOException(
+                            "The replacement recovery journal could not be verified exactly. " +
+                            "The prior journal was preserved at " + recoveryPath + ". " +
+                            publishedError);
+                    }
+
+                    // Keep the exact displaced snapshot in Library. A writer
+                    // may still hold the moved inode after our verification;
+                    // unlinking it here could discard bytes written at the last
+                    // instant. Retention is recovery-safe and bounded per file.
+                    recoveryPath = string.Empty;
                 }
                 else
                 {
@@ -1282,20 +1490,25 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                     // fails rather than overwriting a recovery marker that raced
                     // with reservation.
                     File.Move(temporaryPath, journalPath);
+                    temporaryPath = string.Empty;
+                    if (!TryReadJournalSnapshot(
+                            journalPath,
+                            out JournalFileSnapshot createdSnapshot,
+                            out string createdError) ||
+                        !ByteArraysEqual(desiredContents, createdSnapshot.Contents))
+                    {
+                        throw new IOException(
+                            "The newly created operation journal could not be verified exactly. " +
+                            createdError);
+                    }
                 }
             }
             finally
             {
-                try
-                {
-                    if (File.Exists(temporaryPath))
-                        File.Delete(temporaryPath);
-                }
-                catch
-                {
-                    // A same-directory temporary journal is harmless and must not
-                    // mask the original write/replace error.
-                }
+                // File.Move/File.Replace consumes the generated temporary file
+                // on success. On failure, retain it: even a unique operation path
+                // could have been replaced or written through an already-open
+                // handle, so a best-effort unlink would reopen a data-loss race.
             }
         }
 
@@ -1486,19 +1699,6 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             }
         }
 
-        private static void TrySetAutoRefreshSessionMarker(bool value)
-        {
-            try
-            {
-                SetAutoRefreshSessionMarker(value);
-            }
-            catch (Exception ex)
-            {
-                Debug.LogWarning(
-                    $"[Git Submodule Manager] Failed to update the auto-refresh session marker: {ex.Message}");
-            }
-        }
-
         private static void SetAutoRefreshSessionMarker(bool value)
         {
             SessionState.SetBool(AutoRefreshSessionKey, value);
@@ -1511,23 +1711,136 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             out GitOperationJournal journal,
             out string error)
         {
+            if (TryReadJournalSnapshot(
+                    journalPath,
+                    out JournalFileSnapshot snapshot,
+                    out error))
+            {
+                journal = snapshot.Journal;
+                return true;
+            }
+
             journal = null;
+            return false;
+        }
+
+        private static bool TryReadJournalSnapshot(
+            string journalPath,
+            out JournalFileSnapshot snapshot,
+            out string error)
+        {
+            snapshot = null;
             try
             {
                 if (!GitUtility.TryValidateProjectOwnedPath(journalPath, out error))
                     return false;
 
-                if (!File.Exists(journalPath))
+                if (!TryInspectJournalEntry(
+                        journalPath,
+                        out bool exists,
+                        out FileAttributes initialAttributes,
+                        out error))
+                {
+                    return false;
+                }
+
+                if (!exists)
                 {
                     error = "The operation journal does not exist.";
                     return false;
                 }
 
-                var journalFile = new FileInfo(journalPath);
-                if (journalFile.Length > MaximumJournalBytes)
-                    throw new InvalidDataException("The operation journal exceeds the safety size limit.");
+                if ((initialAttributes &
+                     (FileAttributes.Directory | FileAttributes.ReparsePoint)) != 0)
+                {
+                    error =
+                        "The operation journal must be one regular, non-symbolic-link file.";
+                    return false;
+                }
 
-                journal = JsonUtility.FromJson<GitOperationJournal>(File.ReadAllText(journalPath));
+                var initialFile = new FileInfo(journalPath);
+                initialFile.Refresh();
+                if (!initialFile.Exists)
+                {
+                    error = "The operation journal disappeared before it could be read.";
+                    return false;
+                }
+
+                long initialLength = initialFile.Length;
+                long initialLastWriteTicks = initialFile.LastWriteTimeUtc.Ticks;
+                long initialCreationTicks = initialFile.CreationTimeUtc.Ticks;
+                if (initialLength > MaximumJournalBytes)
+                {
+                    error = "The operation journal exceeds the safety size limit.";
+                    return false;
+                }
+
+                var buffer = new byte[(int)MaximumJournalBytes + 1];
+                if (!TryReadRegularJournalBytes(
+                        journalPath,
+                        buffer,
+                        out int count,
+                        out error))
+                {
+                    return false;
+                }
+
+                if (count > MaximumJournalBytes)
+                {
+                    error =
+                        "The operation journal grew beyond the safety size limit while it was being read.";
+                    return false;
+                }
+
+                if (!GitUtility.TryValidateProjectOwnedPath(journalPath, out error))
+                    return false;
+                if (!TryInspectJournalEntry(
+                        journalPath,
+                        out exists,
+                        out FileAttributes finalAttributes,
+                        out error) ||
+                    !exists ||
+                    (finalAttributes &
+                     (FileAttributes.Directory | FileAttributes.ReparsePoint)) != 0)
+                {
+                    if (string.IsNullOrWhiteSpace(error))
+                    {
+                        error =
+                            "The operation journal changed type while it was being read.";
+                    }
+                    return false;
+                }
+
+                var finalFile = new FileInfo(journalPath);
+                finalFile.Refresh();
+                if (!finalFile.Exists ||
+                    finalFile.Length != count ||
+                    finalFile.Length != initialLength ||
+                    finalFile.LastWriteTimeUtc.Ticks != initialLastWriteTicks ||
+                    finalFile.CreationTimeUtc.Ticks != initialCreationTicks)
+                {
+                    error =
+                        "The operation journal changed identity or length while it was being read.";
+                    return false;
+                }
+
+                var contents = new byte[count];
+                Buffer.BlockCopy(buffer, 0, contents, 0, count);
+                string json;
+                try
+                {
+                    json = StrictUtf8Encoding.GetString(contents);
+                }
+                catch (DecoderFallbackException exception)
+                {
+                    error =
+                        "The operation journal must contain valid UTF-8 text: " +
+                        exception.Message;
+                    return false;
+                }
+
+                GitOperationJournal journal =
+                    JsonUtility.FromJson<GitOperationJournal>(json);
                 if (journal == null)
                     throw new InvalidDataException("The operation journal is empty or invalid.");
                 if (!IsValidJournalOperationId(journal.operationId))
@@ -1536,55 +1849,487 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                         "The operation journal has no valid operation identity.");
                 }
 
+                snapshot = new JournalFileSnapshot
+                {
+                    Contents = contents,
+                    Journal = journal
+                };
                 error = string.Empty;
                 return true;
             }
             catch (Exception ex)
             {
                 error = ex.Message;
-                journal = null;
+                snapshot = null;
                 return false;
             }
+        }
+
+        private static bool TryReadRegularJournalBytes(
+            string journalPath,
+            byte[] buffer,
+            out int count,
+            out string error)
+        {
+            count = 0;
+            error = string.Empty;
+            try
+            {
+                if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+                {
+                    using (var stream = new FileStream(
+                               journalPath,
+                               FileMode.Open,
+                               FileAccess.Read,
+                               FileShare.Read))
+                    {
+                        if (!stream.CanSeek || stream.Length > MaximumJournalBytes)
+                        {
+                            error = !stream.CanSeek
+                                ? "The operation journal must be one seekable regular file."
+                                : "The operation journal exceeds the safety size limit.";
+                            return false;
+                        }
+
+                        long openedLength = stream.Length;
+                        while (count < buffer.Length)
+                        {
+                            int read = stream.Read(
+                                buffer,
+                                count,
+                                buffer.Length - count);
+                            if (read <= 0)
+                                break;
+                            count += read;
+                        }
+
+                        if (openedLength != count || stream.Length != count)
+                        {
+                            error =
+                                "The operation journal changed length while it was being read.";
+                            return false;
+                        }
+                    }
+                    return true;
+                }
+
+                int flags;
+                if (RuntimeInformation.IsOSPlatform(OSPlatform.OSX))
+                {
+                    const int darwinNonBlock = 0x0004;
+                    const int darwinNoFollow = 0x0100;
+                    const int darwinCloseOnExec = 0x01000000;
+                    flags = darwinNonBlock | darwinNoFollow | darwinCloseOnExec;
+                }
+                else
+                {
+                    const int linuxNonBlock = 0x00000800;
+                    const int linuxNoFollow = 0x00020000;
+                    const int linuxCloseOnExec = 0x00080000;
+                    flags = linuxNonBlock | linuxNoFollow | linuxCloseOnExec;
+                }
+
+                int descriptor = OpenUnixFileNoFollow(journalPath, flags);
+                if (descriptor < 0)
+                {
+                    throw new IOException(
+                        "The operation journal could not be opened without following links: " +
+                        new Win32Exception(Marshal.GetLastWin32Error()).Message);
+                }
+
+                try
+                {
+                    const int seekCurrent = 1;
+                    const int seekEnd = 2;
+                    if (SeekUnixFile(descriptor, 0, seekCurrent) < 0)
+                    {
+                        throw new IOException(
+                            "The operation journal must be one seekable regular file: " +
+                            new Win32Exception(Marshal.GetLastWin32Error()).Message);
+                    }
+
+                    var chunk = new byte[8192];
+                    while (count < buffer.Length)
+                    {
+                        int requested = Math.Min(
+                            chunk.Length,
+                            buffer.Length - count);
+                        long read;
+                        do
+                        {
+                            read = ReadUnixFile(
+                                    descriptor,
+                                    chunk,
+                                    new UIntPtr((uint)requested))
+                                .ToInt64();
+                        }
+                        while (read < 0 && Marshal.GetLastWin32Error() == 4);
+
+                        if (read < 0)
+                        {
+                            throw new IOException(
+                                "The operation journal could not be read safely: " +
+                                new Win32Exception(Marshal.GetLastWin32Error()).Message);
+                        }
+                        if (read == 0)
+                            break;
+
+                        Buffer.BlockCopy(
+                            chunk,
+                            0,
+                            buffer,
+                            count,
+                            (int)read);
+                        count += (int)read;
+                    }
+
+                    long openedLength = SeekUnixFile(descriptor, 0, seekEnd);
+                    if (openedLength < 0)
+                    {
+                        throw new IOException(
+                            "The operation journal must be one seekable regular file: " +
+                            new Win32Exception(Marshal.GetLastWin32Error()).Message);
+                    }
+                    if (openedLength != count)
+                    {
+                        error =
+                            "The operation journal changed length while it was being read.";
+                        return false;
+                    }
+
+                    return true;
+                }
+                finally
+                {
+                    CloseUnixFile(descriptor);
+                }
+            }
+            catch (Exception exception)
+            {
+                error =
+                    "The operation journal is not a safely readable regular file: " +
+                    exception.Message;
+                return false;
+            }
+        }
+
+        private static bool TryInspectJournalEntry(
+            string journalPath,
+            out bool exists,
+            out FileAttributes attributes,
+            out string error)
+        {
+            exists = false;
+            attributes = 0;
+            error = string.Empty;
+            try
+            {
+                attributes = File.GetAttributes(journalPath);
+                exists = true;
+                return true;
+            }
+            catch (FileNotFoundException)
+            {
+                return true;
+            }
+            catch (DirectoryNotFoundException)
+            {
+                return true;
+            }
+            catch (Exception exception)
+            {
+                error =
+                    "The operation journal filesystem entry could not be inspected: " +
+                    exception.Message;
+                return false;
+            }
+        }
+
+        private static bool JournalSnapshotsEqual(
+            JournalFileSnapshot expected,
+            JournalFileSnapshot actual)
+        {
+            return expected != null &&
+                   actual != null &&
+                   ByteArraysEqual(expected.Contents, actual.Contents);
+        }
+
+        private static bool ByteArraysEqual(byte[] first, byte[] second)
+        {
+            if (ReferenceEquals(first, second))
+                return true;
+            if (first == null || second == null || first.Length != second.Length)
+                return false;
+
+            for (int index = 0; index < first.Length; index++)
+            {
+                if (first[index] != second[index])
+                    return false;
+            }
+
+            return true;
+        }
+
+        private static string BuildJournalRecoveryPath(
+            string journalPath,
+            string reason)
+        {
+            string directory = Path.GetDirectoryName(journalPath) ?? string.Empty;
+            return Path.Combine(
+                directory,
+                Path.GetFileName(journalPath) + "." +
+                DateTime.UtcNow.ToString("yyyyMMdd-HHmmssfff") + "-" +
+                Guid.NewGuid().ToString("N") + "." + reason + ".recovery");
+        }
+
+        private static bool TryRestoreQuarantinedJournal(
+            string recoveryPath,
+            string journalPath,
+            out string notice)
+        {
+            notice = string.Empty;
+            try
+            {
+                if (!TryInspectJournalEntry(
+                        journalPath,
+                        out bool journalExists,
+                        out _,
+                        out string inspectError))
+                {
+                    notice = inspectError +
+                             " The raced journal remains preserved at " +
+                             recoveryPath + ".";
+                    return false;
+                }
+
+                if (journalExists)
+                {
+                    notice =
+                        "A new journal already occupies the canonical path. " +
+                        "The raced journal remains preserved at " + recoveryPath + ".";
+                    return false;
+                }
+
+                File.Move(recoveryPath, journalPath);
+                notice =
+                    "The raced journal was restored at its canonical path and preserved for review.";
+                return true;
+            }
+            catch (Exception exception)
+            {
+                notice =
+                    "The raced journal remains preserved at " + recoveryPath +
+                    " because it could not be restored automatically: " +
+                    exception.Message;
+                return false;
+            }
+        }
+
+        internal static bool TryReadJournalForTests(
+            string journalPath,
+            out GitOperationJournal journal,
+            out string error)
+        {
+            return TryReadJournal(journalPath, out journal, out error);
+        }
+
+        internal static bool TryReplaceJournalForTests(
+            string journalPath,
+            GitOperationJournal journal,
+            string expectedOperationId,
+            Action beforeReplace,
+            out string error)
+        {
+            try
+            {
+                WriteJournal(
+                    journalPath,
+                    journal,
+                    true,
+                    expectedOperationId,
+                    beforeReplace);
+                error = string.Empty;
+                return true;
+            }
+            catch (Exception exception)
+            {
+                error = exception.Message;
+                return false;
+            }
+        }
+
+        internal static bool TryDeleteJournalForTests(
+            string journalPath,
+            string expectedOperationId,
+            Action beforeDelete,
+            out string error)
+        {
+            return TryDeleteJournal(
+                journalPath,
+                expectedOperationId,
+                out error,
+                beforeDelete);
+        }
+
+        internal static bool TryDeleteJournalAtClosingBoundaryForTests(
+            string journalPath,
+            string expectedOperationId,
+            Action<string> afterQuarantineVerified,
+            out string error)
+        {
+            return TryDeleteJournal(
+                journalPath,
+                expectedOperationId,
+                out error,
+                null,
+                afterQuarantineVerified);
         }
 
         private static bool TryDeleteJournal(
             string journalPath,
             string expectedOperationId,
-            out string error)
+            out string error,
+            Action beforeDeleteForTests = null,
+            Action<string> afterQuarantineVerifiedForTests = null)
         {
+            string recoveryPath = string.Empty;
+            bool movedToRecovery = false;
             try
             {
                 if (!GitUtility.TryValidateProjectOwnedPath(journalPath, out error))
                     return false;
 
-                if (File.Exists(journalPath))
+                if (!TryInspectJournalEntry(
+                        journalPath,
+                        out bool exists,
+                        out _,
+                        out error))
                 {
-                    if (!string.IsNullOrWhiteSpace(expectedOperationId))
-                    {
-                        if (!TryReadJournal(
-                                journalPath,
-                                out GitOperationJournal journal,
-                                out string readError) ||
-                            !string.Equals(
-                                journal.operationId,
-                                expectedOperationId,
-                                StringComparison.Ordinal))
-                        {
-                            error =
-                                "The recovery journal changed ownership and was preserved for review. " +
-                                readError;
-                            return false;
-                        }
-                    }
-
-                    File.Delete(journalPath);
+                    return false;
                 }
+
+                if (!exists)
+                {
+                    error = string.Empty;
+                    return true;
+                }
+
+                if (!IsValidJournalOperationId(expectedOperationId))
+                {
+                    error =
+                        "An exact operation identity is required to remove the recovery journal.";
+                    return false;
+                }
+
+                if (!TryReadJournalSnapshot(
+                        journalPath,
+                        out JournalFileSnapshot expectedSnapshot,
+                        out string readError) ||
+                    !string.Equals(
+                        expectedSnapshot.Journal.operationId,
+                        expectedOperationId,
+                        StringComparison.Ordinal))
+                {
+                    error =
+                        "The recovery journal changed ownership and was preserved for review. " +
+                        readError;
+                    return false;
+                }
+
+                beforeDeleteForTests?.Invoke();
+
+                recoveryPath = BuildJournalRecoveryPath(journalPath, "deleted");
+                if (!GitUtility.TryValidateProjectOwnedPath(recoveryPath, out error))
+                    return false;
+
+                // Move first: unlike File.Delete, this preserves whatever inode
+                // actually occupied the path at the atomic mutation boundary.
+                File.Move(journalPath, recoveryPath);
+                movedToRecovery = true;
+
+                if (!TryReadJournalSnapshot(
+                        recoveryPath,
+                        out JournalFileSnapshot movedSnapshot,
+                        out string movedError) ||
+                    !JournalSnapshotsEqual(expectedSnapshot, movedSnapshot))
+                {
+                    TryRestoreQuarantinedJournal(
+                        recoveryPath,
+                        journalPath,
+                        out string restoreNotice);
+                    movedToRecovery = File.Exists(recoveryPath);
+                    error =
+                        "The recovery journal changed at its atomic removal boundary. " +
+                        "No raced data was deleted. " + movedError + " " +
+                        restoreNotice;
+                    return false;
+                }
+
+                if (!TryInspectJournalEntry(
+                        journalPath,
+                        out bool replacementExists,
+                        out _,
+                        out string closingError))
+                {
+                    error = closingError +
+                            " The removed journal remains preserved at " +
+                            recoveryPath + ".";
+                    return false;
+                }
+                if (replacementExists)
+                {
+                    error =
+                        "A new recovery journal appeared during removal. Both it and the removed journal at " +
+                        recoveryPath + " were preserved for review.";
+                    return false;
+                }
+
+                afterQuarantineVerifiedForTests?.Invoke(recoveryPath);
+                if (!TryReadJournalSnapshot(
+                        recoveryPath,
+                        out JournalFileSnapshot closingSnapshot,
+                        out string recoveryClosingError) ||
+                    !JournalSnapshotsEqual(expectedSnapshot, closingSnapshot))
+                {
+                    error =
+                        "The quarantined recovery journal changed at the closing removal boundary. " +
+                        "The late data remains preserved at " + recoveryPath + ". " +
+                        recoveryClosingError;
+                    return false;
+                }
+
+                if (!TryInspectJournalEntry(
+                        journalPath,
+                        out replacementExists,
+                        out _,
+                        out closingError) ||
+                    replacementExists)
+                {
+                    error = string.IsNullOrWhiteSpace(closingError)
+                        ? "A new recovery journal appeared at the closing removal boundary. " +
+                          "Both it and the quarantined journal at " + recoveryPath +
+                          " were preserved for review."
+                        : closingError + " The quarantined journal remains preserved at " +
+                          recoveryPath + ".";
+                    return false;
+                }
+
+                // Keep the exact removed snapshot in Library. A writer may
+                // still hold the moved inode after verification, so deleting it
+                // here would reopen the late-writer data-loss seam that the
+                // quarantine move is intended to close.
+                movedToRecovery = false;
                 error = string.Empty;
                 return true;
             }
             catch (Exception ex)
             {
                 error = $"Failed to remove operation journal: {ex.Message}";
+                if (movedToRecovery && File.Exists(recoveryPath))
+                {
+                    error += " The journal remains preserved at " +
+                             recoveryPath + ".";
+                }
                 return false;
             }
         }

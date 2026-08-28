@@ -19,6 +19,31 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
     [Category(CategoryName)]
     public sealed class PackageManagerCompatibilityContractTests
     {
+        [TestCase("6000.3.22f1", true)]
+        [TestCase("6000.5.0f1", true)]
+        [TestCase("6000.5.10f1", true)]
+        [TestCase("6000.3.21f1", false)]
+        [TestCase("6000.3.23f1", false)]
+        [TestCase("6000.4.0f1", false)]
+        [TestCase("6000.6.0f1", false)]
+        [TestCase("6000.5.0f2", false)]
+        [TestCase("6000.5.0f01", false)]
+        [TestCase("06000.5.0f1", false)]
+        [TestCase("6000.5.0b1", false)]
+        [TestCase("6000.5.0f1c1", false)]
+        [TestCase(" 6000.5.0f1", false)]
+        [TestCase("6000.5f1", false)]
+        [TestCase("", false)]
+        [TestCase(null, false)]
+        public void RuntimeSupportGate_AcceptsOnlyValidatedFinalEditors(
+            string unityVersion,
+            bool expected)
+        {
+            Assert.That(
+                PackageManagerUnityVersionSupport.IsSupported(unityVersion),
+                Is.EqualTo(expected));
+        }
+
         public const string CategoryName = "PackageManagerCompatibility";
 
         private const string ConcreteMenuTypeName =
@@ -204,9 +229,9 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                     .GetPackageToolbarTargetMethods();
             report.Observe("PackageToolbar hooks", DescribeMethods(toolbarTargets));
             report.Require(
-                !IsUnityVersionAtLeast(2023, 2) ||
+                !PackageManagerUnityVersionSupport.IsCurrentVersionSupported ||
                 toolbarType != null && toolbarTargets.Count > 0,
-                "This Editor supports the native GitHub extension page, but no " +
+                "This validated Editor supports the native GitHub extension page, but no " +
                 "PackageToolbar.Refresh(IPackage[, IPackageVersion]) method " +
                 "resolves. GitHub install controls would not follow selection " +
                 "changes.");
@@ -228,7 +253,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                 "Manage dropdown",
                 manageType == null ? "unresolved" : manageType.FullName);
             report.Require(
-                !IsUnityVersionAtLeast(2023, 2) ||
+                !PackageManagerUnityVersionSupport.IsCurrentVersionSupported ||
                 PackageManagerSubmoduleManageMenu.IsSupportedContract(),
                 "The native Manage dropdown or its GenericDropdownMenu storage " +
                 "could not be resolved. Submodule uninstall and conversion " +
@@ -531,7 +556,8 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
         public void NativeGitHubPageContract_IsCompleteOnSupportingEditors()
         {
             var report = new CompatibilityReport("native Sources/GitHub seams");
-            bool expectsNativePage = IsUnityVersionAtLeast(2023, 2);
+            bool expectsNativePage =
+                PackageManagerUnityVersionSupport.IsCurrentVersionSupported;
             bool nativePageSupported =
                 PackageManagerSubmoduleNativePage.IsSupportedContract();
             report.Observe("Native page expected", expectsNativePage.ToString());
@@ -541,8 +567,8 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
             {
                 report.Require(
                     nativePageSupported,
-                    "Unity 2023.2 and newer expose the extension-page generation " +
-                    "used by Sources/GitHub, but the complete reflected contract " +
+                    "The validated Unity version should expose the extension-page " +
+                    "generation used by Sources/GitHub, but the complete contract " +
                     "did not resolve. Inspect the observations below for drift.");
                 report.Require(
                     PackageManagerGitHubPackageProjection.IsSupportedContract(),

@@ -9,6 +9,8 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
             "https://github.com/example/root-package.git";
         private const string Branch = "main";
         private const string PackageName = "com.example.root";
+        private const string InspectedCommit =
+            "1111111111111111111111111111111111111111";
 
         [Test]
         public void ExactReadySnapshot_CreatesBranchBoundRequest()
@@ -33,6 +35,10 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
             Assert.That(request.Revision, Is.EqualTo(Branch));
             Assert.That(request.RootPackageName, Is.EqualTo(PackageName));
             Assert.That(request.RootVersion, Is.EqualTo("1.2.3"));
+            Assert.That(request.InspectedCommit, Is.EqualTo(InspectedCommit));
+            Assert.That(
+                request.PackageManifestMetaVerification,
+                Is.EqualTo(PackageManifestMetaVerification.Unverified));
             Assert.That(request.Dependencies, Has.Count.EqualTo(1));
             Assert.That(
                 request.Dependencies[0].Name,
@@ -88,6 +94,75 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
             AssertRejected(Snapshot(version: version));
         }
 
+        [Test]
+        public void CataloguePolicy_RejectsUnverifiedPackageManifestMeta()
+        {
+            Assert.That(
+                PackageDependencyInstallRequestFactory.TryCreateFromProbe(
+                    Snapshot(
+                        packageManifestMetaMessage:
+                            "Unity package intent is unverified."),
+                    Url,
+                    Branch,
+                    PackageName,
+                    PackageManagerGitInstallMode.GitSubmodule,
+                    out PackageDependencyInstallRequest request,
+                    out string error,
+                    PackageManifestMetaPolicy.RequireVerified),
+                Is.False);
+            Assert.That(request, Is.Null);
+            Assert.That(error, Does.Contain("unverified"));
+        }
+
+        [Test]
+        public void VerifiedPackageManifestMeta_IsCarriedIntoRequest()
+        {
+            const string guid = "0123456789abcdef0123456789abcdef";
+            Assert.That(
+                PackageDependencyInstallRequestFactory.TryCreateFromProbe(
+                    Snapshot(
+                        packageManifestMetaVerification:
+                            PackageManifestMetaVerification.Verified,
+                        packageManifestMetaGuid: guid),
+                    Url,
+                    Branch,
+                    PackageName,
+                    PackageManagerGitInstallMode.GitSubmodule,
+                    out PackageDependencyInstallRequest request,
+                    out string error,
+                    PackageManifestMetaPolicy.RequireVerified),
+                Is.True,
+                error);
+            Assert.That(
+                request.PackageManifestMetaVerification,
+                Is.EqualTo(PackageManifestMetaVerification.Verified));
+            Assert.That(request.PackageManifestMetaGuid, Is.EqualTo(guid));
+        }
+
+        [TestCase((int)PackageManagerGitInstallMode.GitSubmodule)]
+        [TestCase((int)PackageManagerGitInstallMode.ReadOnlyPackage)]
+        public void GitInstall_RejectsMissingInspectedCommit(int modeValue)
+        {
+            Assert.That(
+                PackageDependencyInstallRequestFactory.TryCreateFromProbe(
+                    Snapshot(
+                        packageManifestMetaVerification:
+                            PackageManifestMetaVerification.Verified,
+                        packageManifestMetaGuid:
+                            "0123456789abcdef0123456789abcdef",
+                        inspectedCommit: string.Empty),
+                    Url,
+                    Branch,
+                    PackageName,
+                    (PackageManagerGitInstallMode)modeValue,
+                    out PackageDependencyInstallRequest request,
+                    out string error,
+                    PackageManifestMetaPolicy.RequireVerified),
+                Is.False);
+            Assert.That(request, Is.Null);
+            Assert.That(error, Does.Contain("exact inspected Git commit"));
+        }
+
         private static void AssertRejected(
             GitSubmoduleInstallProbeSnapshot snapshot)
         {
@@ -114,7 +189,12 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
             string packageName = PackageName,
             string version = "1.2.3",
             string manifestMessage = "",
-            PackageManifestDependency[] dependencies = null)
+            PackageManifestDependency[] dependencies = null,
+            PackageManifestMetaVerification packageManifestMetaVerification =
+                PackageManifestMetaVerification.Unverified,
+            string packageManifestMetaGuid = "",
+            string packageManifestMetaMessage = "",
+            string inspectedCommit = InspectedCommit)
         {
             return new GitSubmoduleInstallProbeSnapshot(
                 1,
@@ -129,7 +209,12 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                 requestedBranch: requestedBranch,
                 inspectedBranch: inspectedBranch,
                 dependencies: dependencies ??
-                              Array.Empty<PackageManifestDependency>());
+                              Array.Empty<PackageManifestDependency>(),
+                packageManifestMetaVerification:
+                    packageManifestMetaVerification,
+                packageManifestMetaGuid: packageManifestMetaGuid,
+                packageManifestMetaMessage: packageManifestMetaMessage,
+                inspectedCommit: inspectedCommit);
         }
     }
 }

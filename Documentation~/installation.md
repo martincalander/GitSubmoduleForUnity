@@ -55,6 +55,13 @@ If GitHub CLI is missing or authentication fails, installed GitHub submodules
 remain visible, and direct URL installation remains available from Package
 Manager's **+ > Install package as Git Submodule...** command.
 
+Direct URL installation accepts a valid root UPM `package.json` even when the
+selected branch has no valid root `package.json.meta`. Because npm also uses
+`package.json`, that state is shown as an unavoidable Unity-intent warning in
+the final trust confirmation. When the probe does validate `package.json.meta`,
+the installer binds its GUID to the selected branch and requires the checked-out
+file to match before completing the submodule installation.
+
 The first activation of **Sources > GitHub** shows a small standalone Welcome
 window that checks Git, GitHub CLI, and GitHub authentication for the current
 user. Its shown flag is stored per user and project under Unity's ignored
@@ -83,13 +90,15 @@ Use **Window > Package Management > Package Manager > + > Install package from
 git URL...**:
 
 ```text
-https://github.com/martincalander/GitSubmoduleManager.git
+https://github.com/martincalander/GitSubmoduleManager.git#v2.0.0
 ```
 
-To install a specific released version, append a Git tag:
+Replace `v2.0.0` with another published release tag when upgrading. An
+unqualified repository URL follows the mutable `main` branch and should be used
+only for development or pre-release testing:
 
 ```text
-https://github.com/martincalander/GitSubmoduleManager.git#<version-tag>
+https://github.com/martincalander/GitSubmoduleManager.git
 ```
 
 ## Team Clone Setup
@@ -159,8 +168,8 @@ sufficient:
 
 Remove the old `com.martincalander.gitpackagemanager` key and let Unity
 regenerate `Packages/packages-lock.json`. Replace `<renamed-release-tag>` with a
-published tag that includes the Git Submodule Manager identity; the older
-`v1.0.0` release predates this rename.
+published tag that includes the Git Submodule Manager identity. The renamed
+package begins at `v2.0.0`; the historical `v1.0.0` package predates this rename.
 
 For a submodule installation, also coordinate the parent repository's gitlink
 and `.gitmodules` path from

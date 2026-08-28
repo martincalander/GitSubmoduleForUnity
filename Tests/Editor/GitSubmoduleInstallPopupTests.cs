@@ -247,7 +247,9 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                         "Example Package",
                         "1.0.0",
                         requestedBranch: "main",
-                        inspectedBranch: "main"));
+                        inspectedBranch: "main",
+                        inspectedCommit:
+                            "0123456789abcdef0123456789abcdef01234567"));
                 Assert.That(GitOperationService.IsBusy, Is.False);
 
                 SendNavigationSubmit(submit);
@@ -444,6 +446,30 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
             Assert.That(message, Does.Contain("Branch: the repository default"));
             Assert.That(message, Does.Contain("Destination: Packages/com.example.package"));
             Assert.That(message, Does.Contain("Only install repositories you trust"));
+            Assert.That(message, Does.Contain("Unity package intent warning"));
+            Assert.That(message, Does.Contain("npm"));
+        }
+
+        [Test]
+        public void TrustConfirmation_VerifiedMetaOmitsUnityIntentWarning()
+        {
+            var snapshot = new GitSubmoduleInstallProbeSnapshot(
+                1,
+                "https://github.com/example/package.git",
+                GitSubmoduleInstallProbeStatus.Ready,
+                packageManifestMetaVerification:
+                    PackageManifestMetaVerification.Verified,
+                packageManifestMetaGuid:
+                    "0123456789abcdef0123456789abcdef");
+
+            string message = GitSubmoduleInstallPopup.BuildTrustConfirmationMessage(
+                "https://github.com/example/package.git",
+                "com.example.package",
+                "main",
+                snapshot);
+
+            Assert.That(message, Does.Not.Contain("Unity package intent warning"));
+            Assert.That(message, Does.Not.Contain("package.json is also used by npm"));
         }
 
         [Test]
@@ -462,6 +488,60 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
             Assert.That(first, Is.Not.EqualTo(second));
             Assert.That(first, Does.Not.Contain("github.com"));
             Assert.That(first, Does.Not.Contain("git@"));
+        }
+
+        [Test]
+        public void SubmissionIdentity_ChangesWithExactProbeEvidence()
+        {
+            var firstSnapshot = new GitSubmoduleInstallProbeSnapshot(
+                7,
+                "https://github.com/example/package.git",
+                GitSubmoduleInstallProbeStatus.Ready,
+                packageName: "com.example.package",
+                version: "1.0.0",
+                requestedBranch: "main",
+                inspectedBranch: "main",
+                dependencies: new[]
+                {
+                    new PackageManifestDependency(
+                        "com.example.dependency",
+                        "1.0.0")
+                },
+                packageManifestMetaMessage: "Meta is missing.");
+            var changedSnapshot = new GitSubmoduleInstallProbeSnapshot(
+                8,
+                "https://github.com/example/package.git",
+                GitSubmoduleInstallProbeStatus.Ready,
+                packageName: "com.example.package",
+                version: "1.0.1",
+                requestedBranch: "main",
+                inspectedBranch: "main",
+                dependencies: new[]
+                {
+                    new PackageManifestDependency(
+                        "com.example.dependency",
+                        "2.0.0")
+                },
+                packageManifestMetaMessage: "Meta is invalid.");
+
+            string first = GitSubmoduleInstallPopup.BuildSubmissionIdentity(
+                "https://github.com/example/package.git",
+                "com.example.package",
+                "main",
+                firstSnapshot);
+            string changed = GitSubmoduleInstallPopup.BuildSubmissionIdentity(
+                "https://github.com/example/package.git",
+                "com.example.package",
+                "main",
+                changedSnapshot);
+
+            Assert.That(first, Is.Not.Empty);
+            Assert.That(changed, Is.Not.Empty);
+            Assert.That(changed, Is.Not.EqualTo(first));
+            Assert.That(first, Does.Contain("snapshot-revision:7"));
+            Assert.That(changed, Does.Contain("snapshot-revision:8"));
+            Assert.That(first, Does.Not.Contain("Meta is missing"));
+            Assert.That(changed, Does.Not.Contain("Meta is invalid"));
         }
 
         [TestCase("", true, true)]

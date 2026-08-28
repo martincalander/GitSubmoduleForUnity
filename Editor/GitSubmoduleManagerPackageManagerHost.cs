@@ -56,6 +56,9 @@ namespace MartinCalander.GitSubmoduleManager.Editor
 
         static GitSubmoduleManagerPackageManagerHost()
         {
+            if (!PackageManagerUnityVersionSupport.IsCurrentVersionSupported)
+                return;
+
             RegisterEditorLifecycleCallbacks();
 
             if (!TryPatch(out _))
@@ -70,6 +73,9 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         [DidReloadScripts]
         private static void AfterScriptsReloaded()
         {
+            if (!PackageManagerUnityVersionSupport.IsCurrentVersionSupported)
+                return;
+
             // A normal domain reload resets this static state before this
             // callback runs. Unity's in-place script reload path can preserve
             // the old domain after BeforeAssemblyReload retired the sessions,
@@ -105,7 +111,8 @@ namespace MartinCalander.GitSubmoduleManager.Editor
 
         internal static void OpenGitHubSource()
         {
-            if (isShuttingDown)
+            if (isShuttingDown ||
+                !PackageManagerUnityVersionSupport.IsCurrentVersionSupported)
                 return;
 
             if (!isPatched && !TryPatch(out _))
@@ -127,6 +134,13 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         internal static bool TryPatch(out string error)
         {
             error = string.Empty;
+            if (!PackageManagerUnityVersionSupport.IsCurrentVersionSupported)
+            {
+                error = "The native Package Manager integration supports only " +
+                        "Unity 6000.3.22f1 and Unity 6000.5.*f1 final releases.";
+                return false;
+            }
+
             if (isPatched)
                 return true;
 

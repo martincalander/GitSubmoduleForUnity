@@ -84,6 +84,9 @@ namespace MartinCalander.GitSubmoduleManager.Editor
 
         static PackageManagerSubmoduleHarmonyPatch()
         {
+            if (!PackageManagerUnityVersionSupport.IsCurrentVersionSupported)
+                return;
+
             PackageManagerSubmoduleSnapshot.SnapshotChanged += OnSnapshotChanged;
             AssemblyReloadEvents.beforeAssemblyReload += OnBeforeAssemblyReload;
             EditorApplication.delayCall += TryPatchAndRefresh;
@@ -93,7 +96,8 @@ namespace MartinCalander.GitSubmoduleManager.Editor
 
         internal static bool TryPatch()
         {
-            if (shuttingDown)
+            if (shuttingDown ||
+                !PackageManagerUnityVersionSupport.IsCurrentVersionSupported)
                 return false;
 
             try

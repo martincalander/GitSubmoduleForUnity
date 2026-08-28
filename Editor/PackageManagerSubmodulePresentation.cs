@@ -19,13 +19,17 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             string packagePath,
             string fullPackagePath,
             string repositoryUrl,
-            bool isGitHub)
+            bool isGitHub,
+            string resolvedCommit = "")
         {
             PackageName = packageName ?? string.Empty;
             PackagePath = packagePath ?? string.Empty;
             FullPackagePath = fullPackagePath ?? string.Empty;
             RepositoryUrl = repositoryUrl ?? string.Empty;
             IsGitHub = isGitHub;
+            ResolvedCommit = GitUtility.IsValidGitObjectId(resolvedCommit)
+                ? resolvedCommit.Trim().ToLowerInvariant()
+                : string.Empty;
         }
 
         internal string PackageName { get; }
@@ -33,6 +37,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         internal string FullPackagePath { get; }
         internal string RepositoryUrl { get; }
         internal bool IsGitHub { get; }
+        internal string ResolvedCommit { get; }
         internal string SourceLabel => IsGitHub ? GitHubSourceLabel : GitSourceLabel;
         internal string SourceTooltip => GitUtility.FormatRepositoryUrlForDisplay(RepositoryUrl);
     }
@@ -105,7 +110,8 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                     normalizedPackagePath,
                     fullPackagePath,
                     repositoryUrl,
-                    isGitHub);
+                    isGitHub,
+                    package.ResolvedCommit);
 
                 nameMap[packageName] = info;
                 if (!string.IsNullOrEmpty(fullPackagePath))
@@ -182,6 +188,10 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                        left.RepositoryUrl,
                        right.RepositoryUrl,
                        StringComparison.Ordinal) &&
+                   string.Equals(
+                       left.ResolvedCommit,
+                       right.ResolvedCommit,
+                       StringComparison.OrdinalIgnoreCase) &&
                    left.IsGitHub == right.IsGitHub;
         }
 

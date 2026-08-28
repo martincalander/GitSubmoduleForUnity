@@ -29,6 +29,8 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
         {
             PackageManagerGitHubPackageProjection
                 .ProjectedPackageCreationGateForTests = null;
+            PackageManagerGitHubPackageProjection
+                .PackageEnumerationGateForTests = null;
             retainedHosts.Clear();
             reflectionContract = null;
             packageDatabase = null;
@@ -40,6 +42,8 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
         {
             PackageManagerGitHubPackageProjection
                 .ProjectedPackageCreationGateForTests = null;
+            PackageManagerGitHubPackageProjection
+                .PackageEnumerationGateForTests = null;
             for (int index = retainedHosts.Count - 1; index >= 0; index--)
             {
                 PackageManagerGitHubPackageProjection.ReleaseHost(
@@ -352,6 +356,52 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
         }
 
         [Test]
+        public void RemoveOwnedPackages_EnumerationFailureRetainsProjectionAndSidecar()
+        {
+            RetainIsolatedHostOrIgnore();
+
+            PackageManagerGitHubRepository repository = CreateRepository(
+                nodeId: "NODE-ENUMERATION-FAILURE",
+                owner: "projection-tests",
+                repositoryName: "enumeration-failure",
+                packageName: "com.example.enumerationfailure",
+                displayName: "Enumeration Failure",
+                version: "1.0.0");
+            PackageManagerGitHubDiscoverySnapshot snapshot =
+                CreateSnapshot(repository);
+            string packageId = BuildPackageId(repository);
+            Assert.That(
+                PackageManagerGitHubPackageProjection.Reconcile(
+                    packageDatabase,
+                    snapshot),
+                Is.True);
+            object projectedPackage = FindPackage(packageId);
+            Assert.That(projectedPackage, Is.Not.Null);
+            Assert.That(
+                PackageManagerGitHubPackageProjection.TryGetRepository(
+                    projectedPackage,
+                    out PackageManagerGitHubRepository beforeFailure),
+                Is.True);
+            Assert.That(beforeFailure, Is.SameAs(repository));
+
+            PackageManagerGitHubPackageProjection
+                .PackageEnumerationGateForTests = () => false;
+
+            Assert.That(
+                PackageManagerGitHubPackageProjection.RemoveOwnedPackages(
+                    packageDatabase),
+                Is.False,
+                "An unreadable database is not proof that no owned packages exist.");
+            Assert.That(FindPackage(packageId), Is.SameAs(projectedPackage));
+            Assert.That(
+                PackageManagerGitHubPackageProjection.TryGetRepository(
+                    projectedPackage,
+                    out PackageManagerGitHubRepository retained),
+                Is.True);
+            Assert.That(retained, Is.SameAs(repository));
+        }
+
+        [Test]
         public void Reconcile_ProjectsImmutableRepositoryAndPackageMetadata()
         {
             RetainIsolatedHostOrIgnore();
@@ -386,6 +436,8 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                         "2.0.0")
                 },
                 PackageManifestBlobOid = "BLOB-METADATA",
+                PackageManifestMetaBlobOid = "META-BLOB-METADATA",
+                PackageManifestMetaGuid = "0123456789abcdef0123456789abcdef",
                 ManifestState = PackageManifestState.Valid
             };
             var immutableRepository = new PackageManagerGitHubRepository(source);
@@ -1010,6 +1062,12 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
             Assert.That(repository.Dependencies[0].Name, Is.EqualTo("com.example.alpha"));
             Assert.That(repository.Dependencies[1].Name, Is.EqualTo("com.example.beta"));
             Assert.That(repository.PackageManifestBlobOid, Is.EqualTo("BLOB-METADATA"));
+            Assert.That(
+                repository.PackageManifestMetaBlobOid,
+                Is.EqualTo("META-BLOB-METADATA"));
+            Assert.That(
+                repository.PackageManifestMetaGuid,
+                Is.EqualTo("0123456789abcdef0123456789abcdef"));
         }
 
         private sealed class MutablePackageLink

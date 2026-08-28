@@ -100,6 +100,28 @@ jobs:
       - name: Verify package contents on this platform
         run: npm pack --ignore-scripts --dry-run
 
+  required:
+    name: Required sanity gate
+    if: ${{ always() }}
+    needs:
+      - package
+      - portability
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    permissions: {}
+
+    steps:
+      - name: Require all non-secret checks
+        env:
+          PACKAGE_RESULT: ${{ needs.package.result }}
+          PORTABILITY_RESULT: ${{ needs.portability.result }}
+        run: |
+          if [[ "$PACKAGE_RESULT" != "success" || "$PORTABILITY_RESULT" != "success" ]]; then
+            printf 'Required checks failed: package=%s portability=%s\n' \
+              "$PACKAGE_RESULT" "$PORTABILITY_RESULT" >&2
+            exit 1
+          fi
+
   unity:
     name: Unity ${{ inputs.unity_version || '6000.3.22f1' }} compile and EditMode tests
     # Never expose Unity credentials to pull-request-controlled C#. Enable the
@@ -137,8 +159,8 @@ jobs:
         env:
           REQUESTED_UNITY_VERSION: ${{ inputs.unity_version || '6000.3.22f1' }}
         run: |
-          if [[ ! "$REQUESTED_UNITY_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+[abfp][0-9]+$ ]]; then
-            echo "Unity version must be exact, such as 6000.3.22f1, 6000.5.0f1, or 6000.5.9f1." >&2
+          if [[ ! "$REQUESTED_UNITY_VERSION" =~ ^(6000\.3\.22f1|6000\.5\.[0-9]+f1)$ ]]; then
+            echo "Unity version must be 6000.3.22f1 or a 6000.5.*f1 final release." >&2
             exit 1
           fi
 
@@ -155,11 +177,11 @@ jobs:
           UNITY_SERIAL: ${{ secrets.UNITY_SERIAL }}
         run: |
           if [[ -z "$UNITY_EMAIL" || -z "$UNITY_PASSWORD" ]]; then
-            echo "UNITY_EMAIL and UNITY_PASSWORD repository secrets are required." >&2
+            echo "UNITY_EMAIL and UNITY_PASSWORD environment secrets are required." >&2
             exit 1
           fi
           if [[ -z "$UNITY_LICENSE" && -z "$UNITY_SERIAL" ]]; then
-            echo "Set UNITY_LICENSE (Personal) or UNITY_SERIAL (Pro) as a repository secret." >&2
+            echo "Set UNITY_LICENSE (Personal) or UNITY_SERIAL (Pro) as an environment secret." >&2
             exit 1
           fi
 

@@ -215,9 +215,10 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             }
 
             string remoteProofNotice = assessment.HasLocalOnlyCommits
-                ? "Conversion will verify that the current HEAD is fetchable " +
-                  "from the repository; if it is not published, conversion is " +
-                  "blocked and the submodule remains untouched. "
+                ? "Conversion will verify that the current HEAD is reachable " +
+                  "from a branch or tag currently advertised by the repository; " +
+                  "if it is not published, conversion is blocked and the " +
+                  "submodule remains untouched. "
                 : string.Empty;
             return new PackageManagerSubmoduleConfirmationDecision(
                 action,

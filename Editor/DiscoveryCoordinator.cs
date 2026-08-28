@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Text;
 using UnityEngine;
 
 namespace MartinCalander.GitSubmoduleManager.Editor
@@ -10,14 +11,17 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         private const int InitialPackageManifestBatchSize = PageSize;
         internal const int MaximumPackageManifestRequestsPerValidation = 32;
         private const int MaximumPackageManifestBytes = 64 * 1024;
+        private const int MaximumPackageManifestMetaBytes = 16 * 1024;
         private const int MaximumManifestCacheEntries = 2048;
+        private static readonly UTF8Encoding StrictUtf8Encoding =
+            new(false, true);
         private const string PackageManifestRequestBudgetExhaustedMessage =
             "Package validation stopped after reaching the bounded GitHub request limit " +
             "for this page. Refresh the page to retry.";
         private const string RepositoryListProjection =
             "[.[] | {node_id, name, owner: {login: .owner.login}, clone_url, html_url, default_branch, private, description, updated_at}]";
         private const string PackageManifestQuery =
-            "query($ids: [ID!]!) { nodes(ids: $ids) { ... on Repository { id packageManifest: object(expression: \"HEAD:package.json\") { __typename oid ... on Blob { byteSize isBinary isTruncated text } } } } rateLimit { remaining resetAt } }";
+            "query($ids: [ID!]!) { nodes(ids: $ids) { ... on Repository { id defaultBranchRef { target { __typename oid ... on Commit { packageManifest: file(path: \"package.json\") { name mode type object { __typename oid ... on Blob { byteSize isBinary isTruncated text } } } packageManifestMeta: file(path: \"package.json.meta\") { name mode type object { __typename oid ... on Blob { byteSize isBinary isTruncated text } } } } } } } } rateLimit { remaining resetAt } }";
 
         [Serializable]
         private sealed class PackageManifestGraphQlResponse
@@ -37,7 +41,31 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         private sealed class PackageManifestNode
         {
             public string id;
-            public PackageManifestBlob packageManifest;
+            public PackageManifestDefaultBranchRef defaultBranchRef;
+        }
+
+        [Serializable]
+        private sealed class PackageManifestDefaultBranchRef
+        {
+            public PackageManifestCommit target;
+        }
+
+        [Serializable]
+        private sealed class PackageManifestCommit
+        {
+            public string __typename;
+            public string oid;
+            public PackageManifestTreeEntry packageManifest;
+            public PackageManifestTreeEntry packageManifestMeta;
+        }
+
+        [Serializable]
+        private sealed class PackageManifestTreeEntry
+        {
+            public string name;
+            public int mode;
+            public string type;
+            public PackageManifestBlob @object;
         }
 
         [Serializable]
@@ -85,6 +113,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             public string LicensesUrl;
             public PackageManifestDependency[] Dependencies;
             public string Message;
+            public string PackageManifestMetaGuid;
         }
 
         private sealed class PageRequest
@@ -631,69 +660,71 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             PackageManifestNode node,
             bool responseHasErrors)
         {
-            PackageManifestBlob blob = node.packageManifest;
-            // JsonUtility materializes a default nested object for a JSON null
-            // on some Unity versions, so an absent typename is also a missing
-            // Git object when GraphQL reported no error.
-            if (blob == null || string.IsNullOrEmpty(blob.__typename))
+            PackageManifestCommit commit = node.defaultBranchRef?.target;
+            // JsonUtility materializes default nested objects for JSON null on
+            // some Unity versions. An absent typename therefore also means the
+            // repository has no default-branch commit when GraphQL reported no
+            // error.
+            if (commit == null || string.IsNullOrEmpty(commit.__typename))
             {
                 SetManifestState(
                     repo,
                     responseHasErrors ? PackageManifestState.Unavailable : PackageManifestState.Missing,
                     responseHasErrors
-                        ? "GitHub could not determine whether package.json exists. Refresh to retry."
-                        : "No package.json was found at the repository root.");
+                        ? "GitHub could not inspect the repository's default branch. Refresh to retry."
+                        : "The repository has no default-branch commit to inspect.");
                 return;
             }
 
-            if (!string.Equals(blob.__typename, "Blob", StringComparison.Ordinal))
-            {
-                SetManifestState(
-                    repo,
-                    PackageManifestState.Invalid,
-                    "The root package.json path is not a regular file.");
-                return;
-            }
-
-            if (blob.isBinary)
-            {
-                SetManifestState(repo, PackageManifestState.Invalid, "package.json is not a UTF-8 text file.");
-                return;
-            }
-
-            if (blob.isTruncated)
-            {
-                SetManifestState(repo, PackageManifestState.Invalid, "package.json could not be read completely.");
-                return;
-            }
-
-            if (blob.byteSize < 0 || blob.byteSize > MaximumPackageManifestBytes)
-            {
-                SetManifestState(
-                    repo,
-                    PackageManifestState.Invalid,
-                    $"package.json exceeds the {MaximumPackageManifestBytes / 1024} KiB validation limit.");
-                return;
-            }
-
-            if (!IsValidGitObjectId(blob.oid))
+            if (!string.Equals(commit.__typename, "Commit", StringComparison.Ordinal) ||
+                !IsValidGitObjectId(commit.oid))
             {
                 SetManifestState(
                     repo,
                     PackageManifestState.Unavailable,
-                    "GitHub returned an invalid package manifest identity. Refresh to retry.");
+                    "GitHub returned an invalid default-branch commit identity. Refresh to retry.");
                 return;
             }
 
-            repo.PackageManifestBlobOid = blob.oid;
-            if (packageManifestCache.TryGetValue(blob.oid, out PackageManifestCacheEntry cached))
+            repo.PackageManifestCommitOid = commit.oid.ToLowerInvariant();
+
+            if (!TryGetValidatedManifestBlob(
+                    repo,
+                    commit.packageManifest,
+                    "package.json",
+                    MaximumPackageManifestBytes,
+                    responseHasErrors,
+                    out PackageManifestBlob manifestBlob))
+            {
+                return;
+            }
+
+            if (!TryGetValidatedManifestBlob(
+                    repo,
+                    commit.packageManifestMeta,
+                    "package.json.meta",
+                    MaximumPackageManifestMetaBytes,
+                    responseHasErrors,
+                    out PackageManifestBlob metaBlob))
+            {
+                return;
+            }
+
+            repo.PackageManifestBlobOid = manifestBlob.oid;
+            repo.PackageManifestMetaBlobOid = metaBlob.oid;
+            string cacheIdentity = BuildManifestCacheIdentity(
+                manifestBlob.oid,
+                metaBlob.oid);
+            if (packageManifestCache.TryGetValue(
+                    cacheIdentity,
+                    out PackageManifestCacheEntry cached))
             {
                 SetManifestState(
                     repo,
                     cached.State,
                     cached.Message,
                     cached.PackageName,
-                    blob.oid,
+                    manifestBlob.oid,
                     cached.DisplayName,
                     cached.Version,
                     cached.Description,
@@ -703,11 +734,13 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                     cached.DocumentationUrl,
                     cached.ChangelogUrl,
                     cached.LicensesUrl,
-                    cached.Dependencies);
+                    cached.Dependencies,
+                    metaBlob.oid,
+                    cached.PackageManifestMetaGuid);
                 return;
             }
 
-            if (blob.text == null)
+            if (manifestBlob.text == null)
             {
                 SetManifestState(
                     repo,
@@ -716,8 +749,32 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 return;
             }
 
+            if (metaBlob.text == null)
+            {
+                SetManifestState(
+                    repo,
+                    PackageManifestState.Unavailable,
+                    "GitHub did not return readable package.json.meta content. Refresh to retry.");
+                return;
+            }
+
+            if (!GitUtility.TryReadValidPackageManifestMetaFromText(
+                    metaBlob.text,
+                    out string metaGuid,
+                    out string metaValidationError))
+            {
+                SetManifestState(
+                    repo,
+                    PackageManifestState.Invalid,
+                    GitHubUtility.SanitizeUiDiagnostic(metaValidationError),
+                    blobOid: manifestBlob.oid,
+                    metaBlobOid: metaBlob.oid);
+                CacheManifestResult(cacheIdentity, repo);
+                return;
+            }
+
             if (GitUtility.TryReadPackageManifestMetadataFromJson(
-                    blob.text,
+                    manifestBlob.text,
                     out PackageManifestMetadata metadata,
                     out string validationError))
             {
@@ -726,7 +783,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                     PackageManifestState.Valid,
                     string.Empty,
                     metadata.PackageName,
-                    blob.oid,
+                    manifestBlob.oid,
                     metadata.DisplayName,
                     metadata.Version,
                     metadata.Description,
@@ -736,24 +793,162 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                     metadata.DocumentationUrl,
                     metadata.ChangelogUrl,
                     metadata.LicensesUrl,
-                    metadata.Dependencies);
-                CacheManifestResult(blob.oid, repo);
+                    metadata.Dependencies,
+                    metaBlob.oid,
+                    metaGuid);
+                CacheManifestResult(cacheIdentity, repo);
                 return;
             }
 
-            SetManifestState(repo, PackageManifestState.Invalid, validationError, string.Empty, blob.oid);
-            CacheManifestResult(blob.oid, repo);
+            SetManifestState(
+                repo,
+                PackageManifestState.Invalid,
+                GitHubUtility.SanitizeUiDiagnostic(validationError),
+                blobOid: manifestBlob.oid,
+                metaBlobOid: metaBlob.oid);
+            CacheManifestResult(cacheIdentity, repo);
         }
 
-        private void CacheManifestResult(string oid, GitHubRepo repo)
+        private static bool TryGetValidatedManifestBlob(
+            GitHubRepo repo,
+            PackageManifestTreeEntry entry,
+            string fileName,
+            int maximumBytes,
+            bool responseHasErrors,
+            out PackageManifestBlob blob)
         {
-            if (string.IsNullOrEmpty(oid) || repo == null)
+            blob = null;
+            // JsonUtility can materialize a default object for a JSON null. All
+            // entry identity fields being absent is therefore treated as the
+            // queried root path being absent.
+            if (entry == null ||
+                string.IsNullOrEmpty(entry.name) &&
+                string.IsNullOrEmpty(entry.type) &&
+                entry.mode == 0 &&
+                (entry.@object == null || string.IsNullOrEmpty(entry.@object.__typename)))
+            {
+                SetManifestState(
+                    repo,
+                    responseHasErrors ? PackageManifestState.Unavailable : PackageManifestState.Missing,
+                    responseHasErrors
+                        ? $"GitHub could not determine whether {fileName} exists. Refresh to retry."
+                        : $"No {fileName} was found at the repository root.");
+                return false;
+            }
+
+            if (!string.Equals(entry.name, fileName, StringComparison.Ordinal) ||
+                entry.mode == 0 ||
+                string.IsNullOrEmpty(entry.type))
+            {
+                SetManifestState(
+                    repo,
+                    PackageManifestState.Unavailable,
+                    $"GitHub returned incomplete {fileName} file identity. Refresh to retry.");
+                return false;
+            }
+
+            blob = entry.@object;
+            if (!string.Equals(entry.type, "blob", StringComparison.Ordinal) ||
+                !IsRegularGitFileMode(entry.mode) ||
+                blob == null ||
+                !string.Equals(blob.__typename, "Blob", StringComparison.Ordinal))
+            {
+                SetManifestState(
+                    repo,
+                    PackageManifestState.Invalid,
+                    $"The root {fileName} path is not a regular file.");
+                return false;
+            }
+
+            if (blob.isBinary)
+            {
+                SetManifestState(
+                    repo,
+                    PackageManifestState.Invalid,
+                    $"{fileName} is not a UTF-8 text file.");
+                return false;
+            }
+
+            if (blob.isTruncated)
+            {
+                SetManifestState(
+                    repo,
+                    PackageManifestState.Invalid,
+                    $"{fileName} could not be read completely.");
+                return false;
+            }
+
+            if (blob.text != null)
+            {
+                int actualByteSize;
+                try
+                {
+                    actualByteSize = StrictUtf8Encoding.GetByteCount(blob.text);
+                }
+                catch (EncoderFallbackException)
+                {
+                    SetManifestState(
+                        repo,
+                        PackageManifestState.Invalid,
+                        $"{fileName} is not valid UTF-8 text.");
+                    return false;
+                }
+
+                if (actualByteSize > maximumBytes)
+                {
+                    SetManifestState(
+                        repo,
+                        PackageManifestState.Invalid,
+                        $"{fileName} exceeds the {maximumBytes / 1024} KiB validation limit.");
+                    return false;
+                }
+            }
+
+            if (blob.byteSize < 0 || blob.byteSize > maximumBytes)
+            {
+                SetManifestState(
+                    repo,
+                    PackageManifestState.Invalid,
+                    $"{fileName} exceeds the {maximumBytes / 1024} KiB validation limit.");
+                return false;
+            }
+
+            if (!IsValidGitObjectId(blob.oid))
+            {
+                SetManifestState(
+                    repo,
+                    PackageManifestState.Unavailable,
+                    $"GitHub returned an invalid {fileName} identity. Refresh to retry.");
+                return false;
+            }
+
+            return true;
+        }
+
+        private static bool IsRegularGitFileMode(int mode)
+        {
+            const int regularFileMode = 33188; // 0100644
+            const int executableFileMode = 33261; // 0100755
+            return mode == regularFileMode || mode == executableFileMode;
+        }
+
+        private static string BuildManifestCacheIdentity(
+            string manifestOid,
+            string metaOid)
+        {
+            return (manifestOid ?? string.Empty).ToLowerInvariant() + ":" +
+                   (metaOid ?? string.Empty).ToLowerInvariant();
+        }
+
+        private void CacheManifestResult(string cacheIdentity, GitHubRepo repo)
+        {
+            if (string.IsNullOrEmpty(cacheIdentity) || repo == null)
                 return;
 
             if (packageManifestCache.Count >= MaximumManifestCacheEntries)
                 packageManifestCache.Clear();
 
-            packageManifestCache[oid] = new PackageManifestCacheEntry
+            packageManifestCache[cacheIdentity] = new PackageManifestCacheEntry
             {
                 State = repo.ManifestState,
                 PackageName = repo.DeclaredPackageName,
@@ -767,7 +962,8 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 ChangelogUrl = repo.DeclaredChangelogUrl,
                 LicensesUrl = repo.DeclaredLicensesUrl,
                 Dependencies = CloneDependencies(repo.DeclaredDependencies),
-                Message = repo.PackageManifestMessage
+                Message = repo.PackageManifestMessage,
+                PackageManifestMetaGuid = repo.PackageManifestMetaGuid
             };
         }
 
@@ -786,7 +982,9 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             string documentationUrl = "",
             string changelogUrl = "",
             string licensesUrl = "",
-            IEnumerable<PackageManifestDependency> dependencies = null)
+            IEnumerable<PackageManifestDependency> dependencies = null,
+            string metaBlobOid = "",
+            string metaGuid = "")
         {
             if (repo == null)
                 return;
@@ -806,6 +1004,10 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             repo.DeclaredDependencies = CloneDependencies(dependencies);
             if (!string.IsNullOrEmpty(blobOid))
                 repo.PackageManifestBlobOid = blobOid;
+            if (!string.IsNullOrEmpty(metaBlobOid))
+                repo.PackageManifestMetaBlobOid = metaBlobOid;
+            if (!string.IsNullOrEmpty(metaGuid))
+                repo.PackageManifestMetaGuid = metaGuid;
         }
 
         private static PackageManifestDependency[] CloneDependencies(
@@ -850,6 +1052,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 return false;
             }
 
+            bool hasNonZero = false;
             foreach (char character in objectId)
             {
                 bool isHex = character >= '0' && character <= '9' ||
@@ -857,9 +1060,11 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                              character >= 'A' && character <= 'F';
                 if (!isHex)
                     return false;
+                if (character != '0')
+                    hasNonZero = true;
             }
 
-            return true;
+            return hasNonZero;
         }
 
         private void MarkManifestBatchUnavailable(PackageManifestBatch batch, string message)

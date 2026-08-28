@@ -1,6 +1,5 @@
 using System;
 using System.Collections.Generic;
-using System.Text.RegularExpressions;
 using System.Threading;
 
 namespace MartinCalander.GitSubmoduleManager.Editor
@@ -43,10 +42,6 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         internal const string LocalOnlyCommitReadOnlyMessage =
             "A submodule with commits that are not present on any remote cannot be converted to a read-only Git package. Push or otherwise publish those commits first.";
 
-        private static readonly Regex CommitRegex = new Regex(
-            "^[0-9a-fA-F]{40,64}$",
-            RegexOptions.Compiled | RegexOptions.CultureInvariant);
-
         internal static bool CanStart =>
             !GitOperationService.IsBusy &&
             !PackageManagerProjectResolutionService.IsBusy &&
@@ -68,9 +63,9 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             if (!info.IsRepositoryRootPackage)
                 return RootPackageRequiredMessage;
             if (!GitUtility.IsValidRepositoryUrl(info.RepositoryUrl) ||
-                info.RepositoryUrl.IndexOf('#') >= 0)
+                HasGitDependencyDelimiter(info.RepositoryUrl))
             {
-                return "Conversion requires a secure root Git repository URL without an embedded revision.";
+                return "Conversion requires a secure root Git repository URL without an embedded query or revision.";
             }
             if (string.IsNullOrWhiteSpace(info.ManifestSpec))
                 return "The exact direct Git dependency is missing from Packages/manifest.json.";
@@ -92,9 +87,9 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             if (IsSelfConversion(info.PackageName))
                 return BuildSelfConversionMessage();
             if (!GitUtility.IsValidRepositoryUrl(info.RepositoryUrl) ||
-                info.RepositoryUrl.IndexOf('#') >= 0)
+                HasGitDependencyDelimiter(info.RepositoryUrl))
             {
-                return "Conversion requires a secure root Git repository URL without an embedded revision.";
+                return "Conversion requires a secure root Git repository URL without an embedded query or revision.";
             }
 
             if (PackageManifestGitDependencyStore.TryGetProjectDependency(
@@ -344,6 +339,68 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                     cancellationToken);
             }
 
+            if (!TryVerifySubmoduleHead(
+                    path,
+                    info.ResolvedHash,
+                    out string stagedHeadError,
+                    CancellationToken.None))
+            {
+                return RollBackFailedAdd(
+                    plan,
+                    stagedHeadError,
+                    checkoutResult,
+                    state,
+                    CancellationToken.None);
+            }
+
+            CommandResult stageResolvedResult = GitUtility.RunGit(
+                GitUtility.BuildStageSubmoduleArguments(path),
+                GitUtility.ProjectRoot,
+                10000,
+                CancellationToken.None);
+            if (stageResolvedResult == null || !stageResolvedResult.IsSuccess)
+            {
+                return RollBackFailedAdd(
+                    plan,
+                    GitUtility.BuildCommandError(
+                        "The exact converted commit could not be staged for rollback ownership",
+                        stageResolvedResult),
+                    stageResolvedResult,
+                    state,
+                    CancellationToken.None);
+            }
+
+            if (!GitUtility.TryCaptureFailedAddRollbackEvidence(
+                    plan,
+                    info.ResolvedHash,
+                    out string rollbackEvidenceError,
+                    CancellationToken.None))
+            {
+                return RollBackFailedAdd(
+                    plan,
+                    "The exact converted target could not be bound to safe rollback evidence: " +
+                    rollbackEvidenceError,
+                    stageResolvedResult,
+                    state,
+                    CancellationToken.None);
+            }
+
+            if (!TryValidateResolvedRootPackageManifest(
+                    path,
+                    info.ResolvedHash,
+                    info.PackageName,
+                    out string committedManifestError,
+                    out CommandResult unconfirmedValidationCommand,
+                    cancellationToken))
+            {
+                return RollBackFailedAdd(
+                    plan,
+                    committedManifestError,
+                    unconfirmedValidationCommand ?? checkoutResult,
+                    state,
+                    cancellationToken);
+            }
+
             string packageJsonPath = System.IO.Path.Combine(
                 GitUtility.ProjectRoot,
                 path,
@@ -367,11 +424,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                     cancellationToken);
             }
 
-            CommandResult stageResult = GitUtility.RunGit(
-                GitUtility.BuildStageSubmoduleArguments(path),
-                GitUtility.ProjectRoot,
-                10000,
-                cancellationToken);
+            CommandResult stageResult = stageResolvedResult;
             string verifyError = string.Empty;
             string headError = string.Empty;
             bool targetVerified =
@@ -381,6 +434,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                     plan,
                     info.RepositoryUrl,
                     string.Empty,
+                    info.ResolvedHash,
                     out verifyError,
                     cancellationToken) &&
                 TryVerifySubmoduleHead(
@@ -531,14 +585,32 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 return Failure(state.Message);
             }
 
-            if (!GitUtility.TryVerifyRepositoryCommitFetchable(
+            if (!TryValidatePinnedRootPackageManifest(
+                    assessment.Path,
+                    assessment.HeadCommit,
+                    info.PackageName,
+                    out string committedManifestError,
+                    out CommandResult unconfirmedValidationCommand,
+                    cancellationToken))
+            {
+                state.Outcome = unconfirmedValidationCommand == null
+                    ? GitOperationCompletionOutcome.FailedButRolledBack
+                    : GitOperationCompletionOutcome.FailedUnsafe;
+                state.Message = committedManifestError;
+                return unconfirmedValidationCommand ?? Failure(state.Message);
+            }
+
+            if (!GitUtility.TryVerifyRepositoryCommitPublished(
+                    assessment.Path,
                     resolvedRepositoryUrl,
                     assessment.HeadCommit,
-                    out string fetchError,
+                    out GitUtility.RepositoryCommitPublicationProof publicationProof,
+                    out string publicationError,
                     cancellationToken))
             {
                 state.Outcome = GitOperationCompletionOutcome.FailedButRolledBack;
-                state.Message = LocalOnlyCommitReadOnlyMessage + " " + fetchError;
+                state.Message =
+                    LocalOnlyCommitReadOnlyMessage + " " + publicationError;
                 return Failure(state.Message);
             }
 
@@ -587,6 +659,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 info.PackagePath,
                 assessment,
                 discardLocalWork,
+                publicationProof,
                 out string removeError,
                 out GitOperationCompletionOutcome removeOutcome,
                 cancellationToken);
@@ -658,7 +731,10 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 $"Converted {info.PackageName} to a read-only Git package pinned to {assessment.HeadCommit}." +
                 (repairedTarget
                     ? " The missing manifest target was safely restored after removal."
-                    : string.Empty);
+                    : string.Empty) +
+                (string.IsNullOrWhiteSpace(removeError)
+                    ? string.Empty
+                    : " " + removeError.Trim());
             return Success(state.Message);
         }
 
@@ -680,7 +756,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             bool rolledBack = GitUtility.TryCleanupFailedAdd(
                 plan,
                 out string cleanupMessage,
-                cancellationToken);
+                CancellationToken.None);
             state.Outcome = rolledBack
                 ? GitOperationCompletionOutcome.FailedButRolledBack
                 : GitOperationCompletionOutcome.FailedUnsafe;
@@ -796,6 +872,359 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             return true;
         }
 
+        private static bool TryValidateResolvedRootPackageManifest(
+            string repositoryPath,
+            string commit,
+            string expectedPackageName,
+            out string error,
+            out CommandResult unconfirmedCommand,
+            CancellationToken cancellationToken)
+        {
+            const string sourceState =
+                "The original read-only dependency has not been removed.";
+            error = string.Empty;
+            unconfirmedCommand = null;
+
+            string treeArguments =
+                "-C " + GitUtility.Quote(repositoryPath) +
+                " -c core.quotepath=false --no-pager ls-tree -z --full-tree " +
+                GitUtility.Quote(commit) +
+                " -- package.json";
+            CommandResult treeResult = RunStrictGitCommand(
+                treeArguments,
+                cancellationToken);
+            if (!TryRequireCompletedValidationCommand(
+                    treeResult,
+                    "Could not inspect the exact resolved commit's root package.json tree entry",
+                    out error,
+                    out unconfirmedCommand,
+                    sourceState))
+            {
+                return false;
+            }
+
+            if (treeResult.StdOutTruncated)
+            {
+                error =
+                    "The exact resolved commit's root package.json tree entry exceeded the command output inspection limit. " +
+                    sourceState;
+                return false;
+            }
+
+            if (treeResult.StdOutInvalidUtf8)
+            {
+                error =
+                    "Git returned invalid UTF-8 while inspecting the exact resolved commit's root package.json tree entry. " +
+                    sourceState;
+                return false;
+            }
+
+            if (!GitSubmoduleInstallProbe.TryParseRootPackageTree(
+                    treeResult.StdOut,
+                    out string manifestObjectId,
+                    out _,
+                    out _,
+                    out string treeError))
+            {
+                error =
+                    "The exact resolved commit does not contain a valid regular root package.json. " +
+                    treeError + " " + sourceState;
+                return false;
+            }
+
+            if (!GitUtility.IsValidGitObjectId(manifestObjectId))
+            {
+                error =
+                    "The exact resolved commit's root package.json tree entry did not provide a verifiable blob identity. " +
+                    sourceState;
+                return false;
+            }
+
+            string blobArguments =
+                "-C " + GitUtility.Quote(repositoryPath) +
+                " -c credential.interactive=false --no-pager cat-file blob " +
+                GitUtility.Quote(manifestObjectId);
+            CommandResult blobResult = RunStrictGitCommand(
+                blobArguments,
+                cancellationToken);
+            if (!TryRequireCompletedValidationCommand(
+                    blobResult,
+                    "Could not read the exact resolved commit's root package.json object",
+                    out error,
+                    out unconfirmedCommand,
+                    sourceState))
+            {
+                return false;
+            }
+
+            if (blobResult.StdOutTruncated)
+            {
+                error =
+                    "The exact resolved commit's root package.json exceeds the command output inspection limit. " +
+                    sourceState;
+                return false;
+            }
+
+            if (blobResult.StdOutInvalidUtf8)
+            {
+                error =
+                    "The exact resolved commit's root package.json must contain valid UTF-8 text. " +
+                    sourceState;
+                return false;
+            }
+
+            if (!GitUtility.TryReadPackageManifestMetadataFromJson(
+                    blobResult.StdOut,
+                    out PackageManifestMetadata metadata,
+                    out string manifestError))
+            {
+                error =
+                    "The exact resolved commit's root package.json is not a valid UPM manifest: " +
+                    manifestError + " " + sourceState;
+                return false;
+            }
+
+            if (!string.Equals(
+                    metadata.PackageName,
+                    expectedPackageName,
+                    StringComparison.Ordinal))
+            {
+                error =
+                    $"The exact resolved commit's root package.json declares {metadata.PackageName}, " +
+                    $"but the selected package is {expectedPackageName}. " +
+                    sourceState;
+                return false;
+            }
+
+            return true;
+        }
+
+        private static bool TryValidatePinnedRootPackageManifest(
+            string repositoryPath,
+            string commit,
+            string expectedPackageName,
+            out string error,
+            out CommandResult unconfirmedCommand,
+            CancellationToken cancellationToken)
+        {
+            error = string.Empty;
+            unconfirmedCommand = null;
+
+            string treeArguments =
+                "-C " + GitUtility.Quote(repositoryPath) +
+                " -c core.quotepath=false --no-pager ls-tree -z --full-tree " +
+                GitUtility.Quote(commit) +
+                " -- package.json package.json.meta";
+            CommandResult treeResult = RunStrictGitCommand(
+                treeArguments,
+                cancellationToken);
+            if (!TryRequireCompletedValidationCommand(
+                    treeResult,
+                    "Could not inspect the exact pinned commit's root package metadata tree entries",
+                    out error,
+                    out unconfirmedCommand))
+            {
+                return false;
+            }
+
+            if (treeResult.StdOutTruncated)
+            {
+                error =
+                    "The exact pinned commit's root package metadata tree entries exceeded the command output inspection limit. Nothing was changed.";
+                return false;
+            }
+
+            if (treeResult.StdOutInvalidUtf8)
+            {
+                error =
+                    "Git returned invalid UTF-8 while inspecting the exact pinned commit's root package metadata tree entries. Nothing was changed.";
+                return false;
+            }
+
+            if (!GitSubmoduleInstallProbe.TryParseRootPackageTree(
+                    treeResult.StdOut,
+                    out string manifestObjectId,
+                    out string manifestMetaObjectId,
+                    out string manifestMetaTreeMessage,
+                    out string treeError))
+            {
+                error =
+                    "The exact pinned commit does not contain a valid regular root package.json. " +
+                    treeError + " Nothing was changed.";
+                return false;
+            }
+
+            if (!GitUtility.IsValidGitObjectId(manifestObjectId))
+            {
+                error =
+                    "The exact pinned commit's root package.json tree entry did not provide a verifiable blob identity. Nothing was changed.";
+                return false;
+            }
+
+            if (!GitUtility.IsValidGitObjectId(manifestMetaObjectId))
+            {
+                error =
+                    "The exact pinned commit does not contain a valid regular root package.json.meta required for a read-only package. " +
+                    manifestMetaTreeMessage + " Nothing was changed.";
+                return false;
+            }
+
+            string blobArguments =
+                "-C " + GitUtility.Quote(repositoryPath) +
+                " -c credential.interactive=false --no-pager cat-file blob " +
+                GitUtility.Quote(manifestObjectId);
+            CommandResult blobResult = RunStrictGitCommand(
+                blobArguments,
+                cancellationToken);
+            if (!TryRequireCompletedValidationCommand(
+                    blobResult,
+                    "Could not read the exact pinned commit's root package.json object",
+                    out error,
+                    out unconfirmedCommand))
+            {
+                return false;
+            }
+
+            if (blobResult.StdOutTruncated)
+            {
+                error =
+                    "The exact pinned commit's root package.json exceeds the command output inspection limit. Nothing was changed.";
+                return false;
+            }
+
+            if (blobResult.StdOutInvalidUtf8)
+            {
+                error =
+                    "The exact pinned commit's root package.json must contain valid UTF-8 text. Nothing was changed.";
+                return false;
+            }
+
+            if (!GitUtility.TryReadPackageManifestMetadataFromJson(
+                    blobResult.StdOut,
+                    out PackageManifestMetadata metadata,
+                    out string manifestError))
+            {
+                error =
+                    "The exact pinned commit's root package.json is not a valid UPM manifest: " +
+                    manifestError + " Nothing was changed.";
+                return false;
+            }
+
+            if (!string.Equals(
+                    metadata.PackageName,
+                    expectedPackageName,
+                    StringComparison.Ordinal))
+            {
+                error =
+                    $"The exact pinned commit's root package.json declares {metadata.PackageName}, " +
+                    $"but the selected package is {expectedPackageName}. Nothing was changed.";
+                return false;
+            }
+
+            string metaBlobArguments =
+                "-C " + GitUtility.Quote(repositoryPath) +
+                " -c credential.interactive=false --no-pager cat-file blob " +
+                GitUtility.Quote(manifestMetaObjectId);
+            CommandResult metaBlobResult = RunStrictGitCommand(
+                metaBlobArguments,
+                cancellationToken);
+            if (!TryRequireCompletedValidationCommand(
+                    metaBlobResult,
+                    "Could not read the exact pinned commit's root package.json.meta object",
+                    out error,
+                    out unconfirmedCommand))
+            {
+                return false;
+            }
+
+            if (metaBlobResult.StdOutTruncated)
+            {
+                error =
+                    "The exact pinned commit's root package.json.meta exceeds the command output inspection limit. Nothing was changed.";
+                return false;
+            }
+
+            if (metaBlobResult.StdOutInvalidUtf8)
+            {
+                error =
+                    "The exact pinned commit's root package.json.meta must contain valid UTF-8 text. Nothing was changed.";
+                return false;
+            }
+
+            if (!GitUtility.TryReadValidPackageManifestMetaFromText(
+                    metaBlobResult.StdOut,
+                    out string manifestMetaGuid,
+                    out string manifestMetaError) ||
+                string.IsNullOrWhiteSpace(manifestMetaGuid))
+            {
+                error =
+                    "The exact pinned commit's root package.json.meta is not a valid Unity package marker: " +
+                    manifestMetaError + " Nothing was changed.";
+                return false;
+            }
+
+            return true;
+        }
+
+        private static CommandResult RunStrictGitCommand(
+            string arguments,
+            CancellationToken cancellationToken)
+        {
+            return CliCommandRunner.CurrentRunner.Run(new CommandSpec
+            {
+                FileName = GitUtility.GitExecutable,
+                Arguments = arguments,
+                WorkingDirectory = GitUtility.ProjectRoot,
+                TimeoutMs = 10000,
+                CancellationToken = cancellationToken,
+                TerminationScope = CommandTerminationScope.CompleteProcessTree,
+                RequireStrictUtf8StdOut = true
+            });
+        }
+
+        private static bool TryRequireCompletedValidationCommand(
+            CommandResult result,
+            string summary,
+            out string error,
+            out CommandResult unconfirmedCommand,
+            string safeStateMessage = "Nothing was changed.")
+        {
+            unconfirmedCommand = null;
+            if (result == null)
+            {
+                error = summary +
+                    ". No command result was returned, so process termination could not be confirmed. " +
+                    safeStateMessage;
+                unconfirmedCommand = new CommandResult
+                {
+                    ExitCode = -1,
+                    StdOut = string.Empty,
+                    StdErr = error,
+                    TerminationConfirmed = false
+                };
+                return false;
+            }
+
+            if (!result.TerminationConfirmed)
+            {
+                error = GitUtility.BuildCommandError(summary, result) +
+                    " Process-tree termination could not be confirmed. " +
+                    safeStateMessage;
+                unconfirmedCommand = result;
+                return false;
+            }
+
+            if (!result.IsSuccess)
+            {
+                error = GitUtility.BuildCommandError(summary, result) +
+                    " " + safeStateMessage;
+                return false;
+            }
+
+            error = string.Empty;
+            return true;
+        }
+
         private static bool TryVerifySubmoduleHead(
             string path,
             string expectedCommit,
@@ -888,6 +1317,13 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 StringComparison.Ordinal);
         }
 
+        private static bool HasGitDependencyDelimiter(string repositoryUrl)
+        {
+            return !string.IsNullOrEmpty(repositoryUrl) &&
+                   (repositoryUrl.IndexOf('?') >= 0 ||
+                    repositoryUrl.IndexOf('#') >= 0);
+        }
+
         private static string BuildSelfConversionMessage()
         {
             return "This package cannot convert itself while its Editor code owns " +
@@ -896,8 +1332,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
 
         private static bool IsValidCommit(string commit)
         {
-            return !string.IsNullOrWhiteSpace(commit) &&
-                   CommitRegex.IsMatch(commit.Trim());
+            return GitUtility.IsValidGitObjectId(commit);
         }
 
         private static CommandResult Success(string message)

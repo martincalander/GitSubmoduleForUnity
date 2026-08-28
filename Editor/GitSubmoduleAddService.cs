@@ -74,6 +74,9 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             string packageName,
             string expectedVersion,
             string expectedDependencyFingerprint,
+            PackageManifestMetaVerification packageManifestMetaVerification,
+            string expectedPackageManifestMetaGuid,
+            string inspectedCommit,
             Action<GitSubmoduleAddCompletion> onComplete,
             out string error)
         {
@@ -96,6 +99,21 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 error = "The expected package dependency fingerprint is invalid.";
                 return false;
             }
+            string metaGuid = expectedPackageManifestMetaGuid?.Trim() ?? string.Empty;
+            if (!TryValidatePackageManifestMetaEvidence(
+                    packageManifestMetaVerification,
+                    metaGuid,
+                    out error))
+            {
+                return false;
+            }
+            string expectedCommit = inspectedCommit?.Trim() ?? string.Empty;
+            if (!GitUtility.IsValidGitObjectId(expectedCommit))
+            {
+                error =
+                    "Submodule installs require the exact nonzero Git commit whose root package metadata was inspected.";
+                return false;
+            }
 
             string path = GetPackagePath(packageName);
             var state = new GitSubmoduleAddTaskState();
@@ -109,7 +127,10 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                     dependencyFingerprint,
                     path,
                     state,
-                    cancellationToken),
+                    cancellationToken,
+                    packageManifestMetaVerification,
+                    metaGuid,
+                    expectedCommit),
                 true,
                 _ => state.Outcome,
                 (result, effectiveOutcome) =>
@@ -166,9 +187,33 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             string expectedDependencyFingerprint,
             string path,
             GitSubmoduleAddTaskState state,
-            CancellationToken cancellationToken)
+            CancellationToken cancellationToken,
+            PackageManifestMetaVerification packageManifestMetaVerification =
+                PackageManifestMetaVerification.Unverified,
+            string expectedPackageManifestMetaGuid = "",
+            string inspectedCommit = "")
         {
             cancellationToken.ThrowIfCancellationRequested();
+            string metaGuid = expectedPackageManifestMetaGuid?.Trim() ?? string.Empty;
+            if (!TryValidatePackageManifestMetaEvidence(
+                    packageManifestMetaVerification,
+                    metaGuid,
+                    out string metaEvidenceError))
+            {
+                state.Outcome = GitOperationCompletionOutcome.FailedButRolledBack;
+                state.Message = metaEvidenceError;
+                return SafeTaskFailure(metaEvidenceError);
+            }
+            string expectedCommit = inspectedCommit?.Trim() ?? string.Empty;
+            if (!GitUtility.IsValidGitObjectId(expectedCommit))
+            {
+                const string commitEvidenceError =
+                    "Submodule installs require the exact nonzero Git commit whose root package metadata was inspected.";
+                state.Outcome = GitOperationCompletionOutcome.FailedButRolledBack;
+                state.Message = commitEvidenceError;
+                return SafeTaskFailure(commitEvidenceError);
+            }
+
             if (!GitUtility.TryPrepareAddSubmodule(
                     url,
                     path,
@@ -202,6 +247,16 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 GitUtility.ProjectRoot,
                 120000,
                 cancellationToken);
+            CancellationToken postAddToken = CancellationToken.None;
+            string rollbackEvidenceError = string.Empty;
+            bool rollbackEvidenceCaptured =
+                addResult != null &&
+                addResult.TerminationConfirmed &&
+                GitUtility.TryCaptureFailedAddRollbackEvidence(
+                    plan,
+                    expectedCommit,
+                    out rollbackEvidenceError,
+                    postAddToken);
             if (addResult == null || !addResult.IsSuccess)
             {
                 string message = GitUtility.BuildCommandError(
@@ -217,11 +272,10 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                     return addResult;
                 }
 
-                cancellationToken.ThrowIfCancellationRequested();
                 bool cleanupSucceeded = GitUtility.TryCleanupFailedAdd(
                     plan,
                     out string cleanupWarning,
-                    cancellationToken);
+                    postAddToken);
                 if (!string.IsNullOrWhiteSpace(cleanupWarning))
                 {
                     message += cleanupSucceeded
@@ -236,21 +290,95 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 return addResult;
             }
 
+            if (!rollbackEvidenceCaptured)
+            {
+                string evidenceMessage =
+                    "Git reported success, but exact add-produced rollback evidence could not be captured: " +
+                    rollbackEvidenceError;
+                bool cleanupSucceeded = GitUtility.TryCleanupFailedAdd(
+                    plan,
+                    out string cleanupWarning,
+                    postAddToken);
+                state.Outcome = cleanupSucceeded
+                    ? GitOperationCompletionOutcome.FailedButRolledBack
+                    : GitOperationCompletionOutcome.FailedUnsafe;
+                state.Message = evidenceMessage +
+                    (string.IsNullOrWhiteSpace(cleanupWarning)
+                        ? string.Empty
+                        : " " + cleanupWarning);
+                return new CommandResult
+                {
+                    ExitCode = -1,
+                    StdOut = addResult.StdOut,
+                    StdErr = state.Message,
+                    TerminationConfirmed = true
+                };
+            }
+
+            CommandResult headResult = GitUtility.RunGit(
+                GitUtility.BuildReadSubmoduleHeadCommitArguments(path),
+                GitUtility.ProjectRoot,
+                5000,
+                postAddToken);
+            if (headResult == null || !headResult.TerminationConfirmed)
+            {
+                state.Outcome = GitOperationCompletionOutcome.FailedUnsafe;
+                state.Message =
+                    GitUtility.BuildCommandError(
+                        "Could not verify the checked-out submodule commit",
+                        headResult) +
+                    " Process-tree termination could not be confirmed, so automatic cleanup was skipped. Inspect the new submodule and running Git processes before acknowledging recovery.";
+                return headResult ?? new CommandResult
+                {
+                    ExitCode = -1,
+                    StdErr = state.Message,
+                    TerminationConfirmed = false
+                };
+            }
+
+            string validationError = string.Empty;
+            string actualCommit = headResult.StdOut?.Trim() ?? string.Empty;
+            if (!headResult.IsSuccess)
+            {
+                validationError = GitUtility.BuildCommandError(
+                    "Could not verify the checked-out submodule commit",
+                    headResult);
+            }
+            else if (headResult.StdOutTruncated || headResult.StdErrTruncated)
+            {
+                validationError =
+                    "Checked-out submodule commit output or diagnostics were truncated; exact commit verification was blocked.";
+            }
+            else if (!GitUtility.IsValidGitObjectId(actualCommit))
+            {
+                validationError =
+                    "Git returned an invalid checked-out submodule commit during exact verification.";
+            }
+            else if (!string.Equals(
+                         actualCommit,
+                         expectedCommit,
+                         StringComparison.OrdinalIgnoreCase))
+            {
+                validationError =
+                    "The selected branch changed after package inspection; the checked-out submodule commit does not match the exact inspected commit.";
+            }
+
             string packageJsonPath = Path.Combine(
                 GitUtility.ProjectRoot,
                 path,
                 "package.json");
-            string validationError = string.Empty;
-            if (!GitUtility.TryReadPackageManifestMetadata(
+            PackageManifestMetadata metadata = null;
+            if (string.IsNullOrEmpty(validationError) &&
+                !GitUtility.TryReadPackageManifestMetadata(
                     packageJsonPath,
-                    out PackageManifestMetadata metadata,
+                    out metadata,
                     out string manifestError,
-                    cancellationToken))
+                    postAddToken))
             {
                 validationError =
                     "Added submodule package.json is invalid: " + manifestError;
             }
-            else
+            else if (string.IsNullOrEmpty(validationError))
             {
                 validationError = GitUtility.ValidateExpectedPackageManifest(
                     packageName,
@@ -259,13 +387,108 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                     metadata);
             }
 
+            if (string.IsNullOrEmpty(validationError))
+            {
+                string packageRoot = Path.Combine(
+                    GitUtility.ProjectRoot,
+                    path);
+                CommandResult treeResult = GitUtility.RunGit(
+                    "--no-pager ls-tree -z --full-tree " +
+                    GitUtility.Quote(expectedCommit) +
+                    " -- package.json package.json.meta",
+                    packageRoot,
+                    10000,
+                    postAddToken);
+                if (treeResult == null || !treeResult.TerminationConfirmed)
+                {
+                    state.Outcome = GitOperationCompletionOutcome.FailedUnsafe;
+                    state.Message =
+                        GitUtility.BuildCommandError(
+                            "Could not verify exact inspected package tree modes",
+                            treeResult) +
+                        " Process-tree termination could not be confirmed, so automatic cleanup was skipped. Inspect the new submodule and running Git processes before acknowledging recovery.";
+                    return treeResult ?? new CommandResult
+                    {
+                        ExitCode = -1,
+                        StdErr = state.Message,
+                        TerminationConfirmed = false
+                    };
+                }
+
+                if (!treeResult.IsSuccess)
+                {
+                    validationError = GitUtility.BuildCommandError(
+                        "Could not verify exact inspected package tree modes",
+                        treeResult);
+                }
+                else if (treeResult.StdOutTruncated)
+                {
+                    validationError =
+                        "Checked-out package tree mode output was truncated; package.json.meta verification was blocked.";
+                }
+                else if (!GitSubmoduleInstallProbe.TryParseRootPackageTree(
+                             treeResult.StdOut,
+                             out string packageManifestObjectId,
+                             out string packageManifestMetaObjectId,
+                             out string packageManifestMetaTreeMessage,
+                             out string treeError))
+                {
+                    validationError =
+                        "Checked-out package tree verification failed: " + treeError;
+                }
+                else if (!GitUtility.IsValidGitObjectId(
+                             packageManifestObjectId))
+                {
+                    validationError =
+                        "The exact inspected package.json is not a regular Git blob with a verifiable identity.";
+                }
+                else if (packageManifestMetaVerification ==
+                             PackageManifestMetaVerification.Verified &&
+                         !GitUtility.IsValidGitObjectId(
+                             packageManifestMetaObjectId))
+                {
+                    validationError = string.IsNullOrWhiteSpace(
+                        packageManifestMetaTreeMessage)
+                        ? "The exact inspected package.json.meta is not a regular Git blob with a verifiable identity."
+                        : packageManifestMetaTreeMessage;
+                }
+
+                if (string.IsNullOrEmpty(validationError) &&
+                    packageManifestMetaVerification ==
+                        PackageManifestMetaVerification.Verified)
+                {
+                    string packageManifestMetaPath = Path.Combine(
+                        packageRoot,
+                        "package.json.meta");
+                    string actualMetaGuid = string.Empty;
+                    if (!GitUtility.TryReadValidPackageManifestMeta(
+                            packageManifestMetaPath,
+                            out actualMetaGuid,
+                            out string metaError,
+                            postAddToken))
+                    {
+                        validationError =
+                            "Added submodule package.json.meta is invalid: " + metaError;
+                    }
+                    else if (!string.Equals(
+                                 actualMetaGuid,
+                                 metaGuid,
+                                 StringComparison.OrdinalIgnoreCase))
+                    {
+                        validationError =
+                            "Added submodule package.json.meta changed after repository inspection.";
+                    }
+                }
+            }
+
             if (string.IsNullOrEmpty(validationError) &&
                 !GitUtility.TryVerifyAddedSubmodule(
                          plan,
                          url,
                          branch,
+                         expectedCommit,
                          out string postconditionError,
-                         cancellationToken))
+                         postAddToken))
             {
                 validationError =
                     "Git reported success, but add verification failed: " +
@@ -274,11 +497,10 @@ namespace MartinCalander.GitSubmoduleManager.Editor
 
             if (!string.IsNullOrEmpty(validationError))
             {
-                cancellationToken.ThrowIfCancellationRequested();
                 bool cleanupSucceeded = GitUtility.TryCleanupFailedAdd(
                     plan,
                     out string cleanupNotice,
-                    cancellationToken);
+                    postAddToken);
                 state.Message = cleanupSucceeded
                     ? string.IsNullOrWhiteSpace(cleanupNotice)
                         ? validationError + " The incomplete submodule was rolled back."
@@ -307,6 +529,33 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         internal static string GetPackagePath(string packageName)
         {
             return $"Packages/{packageName}";
+        }
+
+        private static bool TryValidatePackageManifestMetaEvidence(
+            PackageManifestMetaVerification verification,
+            string guid,
+            out string error)
+        {
+            error = string.Empty;
+            if (verification == PackageManifestMetaVerification.Unverified)
+            {
+                if (string.IsNullOrWhiteSpace(guid))
+                    return true;
+
+                error =
+                    "Unverified package.json.meta evidence cannot carry a trusted GUID.";
+                return false;
+            }
+
+            if (verification != PackageManifestMetaVerification.Verified ||
+                !GitSubmoduleInstallProbeSnapshot.IsValidMetaGuid(guid))
+            {
+                error =
+                    "Verified package.json.meta evidence requires a valid nonzero Unity GUID.";
+                return false;
+            }
+
+            return true;
         }
 
         private static CommandResult SafeTaskFailure(string error)

@@ -5,5 +5,6 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         internal string Path;
         internal string Url;
         internal string PackageName;
+        internal string ResolvedCommit;
     }
 }

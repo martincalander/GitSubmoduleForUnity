@@ -97,6 +97,9 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 PackageManagerGitHubDiscovery.Current.Repositories;
         static PackageManagerGitHubNativePresentationPatch()
         {
+            if (!PackageManagerUnityVersionSupport.IsCurrentVersionSupported)
+                return;
+
             PackageManagerGitHubDiscovery.SnapshotChanged +=
                 OnDiscoverySnapshotChanged;
             PackageManagerSubmoduleSnapshot.SnapshotChanged +=
@@ -107,7 +110,8 @@ namespace MartinCalander.GitSubmoduleManager.Editor
 
         internal static bool TryPatch()
         {
-            if (shuttingDown)
+            if (shuttingDown ||
+                !PackageManagerUnityVersionSupport.IsCurrentVersionSupported)
                 return false;
 
             try
@@ -1446,6 +1450,13 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 if (!ShouldForwardDiscoveryRefresh(
                         PackageManagerGitHubPackageProjection.IsUpdatingPackageDatabase))
                     return;
+
+                // A failed branch lookup is intentionally sticky so transient
+                // failures cannot create an automatic network retry loop. The
+                // native Refresh action is the explicit user gesture that clears
+                // and retries only each live details host's selected repository.
+                PackageManagerGitHubNativeActions
+                    .RetryFailedBranchDiscoveryForSelectedRepositories();
 
                 // Refreshing the remote catalogue must not invalidate or start a
                 // reader for the last known-good installed-submodule snapshot.

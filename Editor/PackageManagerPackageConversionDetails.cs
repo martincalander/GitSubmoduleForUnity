@@ -48,9 +48,10 @@ namespace MartinCalander.GitSubmoduleManager.Editor
     }
 
     /// <summary>
-    /// Adds one conversion action to Unity's native Package Manager details
-    /// toolbar. The coordinator owns destructive modal confirmation while this
-    /// view stores the exact assessed state and keeps progress selection-bound.
+    /// Stores selection-bound conversion assessment and feedback state. Primary
+    /// conversion commands live exclusively in Unity's native Manage menu; the
+    /// legacy toolbar controls remain hidden so recycled views cannot expose a
+    /// second conversion entry point.
     /// </summary>
     internal sealed class PackageManagerPackageConversionDetails : IDisposable
     {
@@ -93,7 +94,6 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         private string availabilityTooltip = string.Empty;
         private bool actionEnabled;
         private bool discardLocalWork;
-        private bool hasTarget;
         private bool isDisposed;
         private ConversionUiState state;
 
@@ -535,14 +535,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             if (isDisposed)
                 return;
 
-            bool isReadOnlyToSubmodule = currentTarget?.Direction ==
-                                         GitPackageConversionDirection
-                                             .ReadOnlyToSubmodule;
-            controls.style.display = hasTarget &&
-                                     (isReadOnlyToSubmodule ||
-                                      state == ConversionUiState.Confirming)
-                ? DisplayStyle.Flex
-                : DisplayStyle.None;
+            controls.style.display = DisplayStyle.None;
 
             cancelButton.style.display = state == ConversionUiState.Confirming
                 ? DisplayStyle.Flex
@@ -651,7 +644,6 @@ namespace MartinCalander.GitSubmoduleManager.Editor
 
         private void SetVisible(bool visible)
         {
-            hasTarget = visible;
             ApplyState();
             if (!visible)
                 HideFeedback();

@@ -1,11 +1,9 @@
 using System;
-using System.Collections.Generic;
 using System.IO;
 using System.Text;
 using System.Threading;
 using UnityEditor;
 using UnityEditor.PackageManager;
-using UnityEditor.PackageManager.Requests;
 using UnityEngine;
 using UpmPackageInfo = UnityEditor.PackageManager.PackageInfo;
 
@@ -41,11 +39,14 @@ namespace MartinCalander.GitSubmoduleManager.Editor
     }
 
     /// <summary>
-    /// Starts ordinary Unity Package Manager Git installs through Client.Add.
-    /// Intent is retained in SessionState across script reloads. A completed add
-    /// is accepted only when Unity reports the expected direct Git package and
-    /// the exact requested manifest entry. A newly-added mismatched package is
-    /// removed with Client.Remove before terminal failure is reported.
+    /// Starts ordinary Unity Package Manager Git installs by compare-and-swap
+    /// insertion into the project manifest followed by Client.Resolve. Intent
+    /// is retained in SessionState across script reloads. A completed install
+    /// is accepted only when Unity reports the expected direct Git package, the
+    /// exact commit whose package metadata was inspected, and the exact pinned
+    /// manifest entry. A newly-added mismatched package is removed only by an
+    /// exact manifest compare-and-swap, then handed to Unity Package Manager
+    /// resolution before terminal failure is reported.
     /// </summary>
     [InitializeOnLoad]
     internal static class PackageManagerReadOnlyGitInstallService
@@ -54,15 +55,18 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             "MartinCalander.GitSubmoduleManager.ReadOnlyGitInstall.Active.v1";
         private const string CompletionStateKey =
             "MartinCalander.GitSubmoduleManager.ReadOnlyGitInstall.Completion.v1";
+        private const string RecoveryNotificationStateKey =
+            "MartinCalander.GitSubmoduleManager.ReadOnlyGitInstall.RecoveryNotification.v1";
+        private const int CurrentActiveStateSchemaVersion = 4;
+        private const string StageAddPrepared = "add-prepared";
         private const string StageAdd = "add";
+        private const string StageCleanupPrepared = "cleanup-prepared";
         private const string StageCleanup = "cleanup";
+        private const string StageRecoveryBlocked = "recovery-blocked";
         private const double RecoveryTimeoutMinutes = 10d;
 
         private static PersistedInstallState activeState;
-        private static AddRequest activeAddRequest;
-        private static RemoveRequest activeRemoveRequest;
         private static Action<ReadOnlyGitPackageInstallCompletion> activeCallback;
-        private static bool registeredPackagesChanged;
         private static bool activeEventsSubscribed;
 
         internal static event Action<ReadOnlyGitPackageInstallCompletion> Completed;
@@ -74,6 +78,11 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         }
 
         internal static bool IsBusy => activeState != null;
+        internal static bool IsRecoveryBlocked =>
+            string.Equals(
+                activeState?.Stage,
+                StageRecoveryBlocked,
+                StringComparison.Ordinal);
         internal static string ActivePackageName =>
             activeState?.ExpectedPackageName ?? string.Empty;
         internal static string ActiveRepositoryUrl =>
@@ -83,6 +92,8 @@ namespace MartinCalander.GitSubmoduleManager.Editor
 
         internal static string BuildUnavailableMessage()
         {
+            if (IsRecoveryBlocked)
+                return activeState.FailureMessage;
             if (IsBusy)
                 return $"Installing {ActivePackageName} as a read-only package...";
             if (PackageManagerProjectResolutionService.IsBusy)
@@ -234,6 +245,59 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             Action<ReadOnlyGitPackageInstallCompletion> onComplete,
             out string error)
         {
+            return TryStart(
+                repositoryUrl,
+                revision,
+                expectedPackageName,
+                expectedVersion,
+                expectedDependencyFingerprint,
+                PackageManifestMetaVerification.Unverified,
+                string.Empty,
+                string.Empty,
+                dependencyInstallOperationId,
+                onComplete,
+                out error);
+        }
+
+        internal static bool TryStart(
+            string repositoryUrl,
+            string revision,
+            string expectedPackageName,
+            string expectedVersion,
+            string expectedDependencyFingerprint,
+            PackageManifestMetaVerification packageManifestMetaVerification,
+            string expectedPackageManifestMetaGuid,
+            string dependencyInstallOperationId,
+            Action<ReadOnlyGitPackageInstallCompletion> onComplete,
+            out string error)
+        {
+            return TryStart(
+                repositoryUrl,
+                revision,
+                expectedPackageName,
+                expectedVersion,
+                expectedDependencyFingerprint,
+                packageManifestMetaVerification,
+                expectedPackageManifestMetaGuid,
+                string.Empty,
+                dependencyInstallOperationId,
+                onComplete,
+                out error);
+        }
+
+        internal static bool TryStart(
+            string repositoryUrl,
+            string revision,
+            string expectedPackageName,
+            string expectedVersion,
+            string expectedDependencyFingerprint,
+            PackageManifestMetaVerification packageManifestMetaVerification,
+            string expectedPackageManifestMetaGuid,
+            string expectedInspectedCommit,
+            string dependencyInstallOperationId,
+            Action<ReadOnlyGitPackageInstallCompletion> onComplete,
+            out string error)
+        {
             error = ValidateInput(repositoryUrl, revision, expectedPackageName);
             if (!string.IsNullOrEmpty(error))
                 return false;
@@ -253,6 +317,23 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 error = "The expected package dependency fingerprint is invalid.";
                 return false;
             }
+            string metaGuid = expectedPackageManifestMetaGuid?.Trim() ??
+                              string.Empty;
+            if (!TryValidatePackageManifestMetaEvidence(
+                    packageManifestMetaVerification,
+                    metaGuid,
+                    out error))
+            {
+                return false;
+            }
+            string inspectedCommit = expectedInspectedCommit?.Trim() ??
+                                     string.Empty;
+            if (!GitUtility.IsValidGitObjectId(inspectedCommit))
+            {
+                error =
+                    "Read-only Git installs require the exact inspected Git commit.";
+                return false;
+            }
             string operationId =
                 dependencyInstallOperationId?.Trim() ?? string.Empty;
             if (!string.IsNullOrEmpty(operationId) &&
@@ -261,64 +342,164 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 error = "The dependency install operation identity is invalid.";
                 return false;
             }
+            if (!string.IsNullOrEmpty(operationId) &&
+                packageManifestMetaVerification !=
+                    PackageManifestMetaVerification.Verified)
+            {
+                error =
+                    "Coordinated read-only Git installs require verified package.json.meta evidence.";
+                return false;
+            }
 
             if (!PackageManifestGitDependencyStore.TryBuildGitSpec(
                     repositoryUrl,
-                    revision,
+                    inspectedCommit,
                     out string spec,
                     out error))
             {
                 return false;
             }
 
-            string[] directPackageNames;
-            try
-            {
-                directPackageNames = ReadDirectPackageNames();
-            }
-            catch (Exception exception)
-            {
-                error = SanitizeMessage(
-                    "Unity's direct package list could not be captured before installation: " +
-                    exception.Message);
-                return false;
-            }
+            string installResolutionOperationId =
+                Guid.NewGuid().ToString("N");
 
             activeState = new PersistedInstallState
             {
-                Stage = StageAdd,
+                SchemaVersion = CurrentActiveStateSchemaVersion,
+                Stage = StageAddPrepared,
                 RepositoryUrl = repositoryUrl.Trim(),
                 Revision = revision?.Trim() ?? string.Empty,
                 ExpectedPackageName = expectedPackageName,
                 ExpectedVersion = version,
                 ExpectedDependencyFingerprint = dependencyFingerprint,
+                PackageManifestMetaVerification =
+                    packageManifestMetaVerification,
+                ExpectedPackageManifestMetaGuid = metaGuid,
+                ExpectedInspectedCommit = inspectedCommit.ToLowerInvariant(),
                 DependencyInstallOperationId = operationId,
+                InstallResolutionOperationId =
+                    installResolutionOperationId,
                 Spec = spec,
-                DirectPackageNamesBefore = directPackageNames,
                 StartedUtcTicks = DateTime.UtcNow.Ticks
             };
             activeCallback = onComplete;
 
+            PackageManifestDependencyMutation addMutation = null;
+            bool resolutionPrepared = false;
+            bool manifestEntryOwned = false;
             try
             {
+                SessionState.SetBool(RecoveryNotificationStateKey, false);
                 SubscribeActiveEvents();
+
+                // Persist write-ahead intent before the manifest CAS. A reload
+                // of this stage is recovery-blocked and never repeats insertion.
                 SaveActiveState();
-                activeAddRequest = Client.Add(spec);
-                if (activeAddRequest == null)
-                    throw new InvalidOperationException("Unity did not create an add request.");
+
+                if (!PackageManagerProjectResolutionService.TryPrepare(
+                        installResolutionOperationId,
+                        expectedPackageName,
+                        PackageManagerResolutionExpectation.Git,
+                        out error))
+                {
+                    ClearActiveState();
+                    return false;
+                }
+                resolutionPrepared = true;
+
+                if (!TryAcquireExactManifestDependencyAtPath(
+                        PackageManifestGitDependencyStore.ManifestPath,
+                        expectedPackageName,
+                        spec,
+                        out addMutation,
+                        out error))
+                {
+                    PackageManagerProjectResolutionService.CancelPrepared(
+                        installResolutionOperationId);
+                    ClearActiveState();
+                    return false;
+                }
+
+                manifestEntryOwned = true;
+                activeState.OwnsManifestEntry = true;
+                activeState.Stage = StageAdd;
+                SaveActiveState();
                 return true;
             }
             catch (Exception exception)
             {
+                string rollbackError = string.Empty;
+                bool rolledBack = !manifestEntryOwned ||
+                                  addMutation?.TryRollback(
+                                      out rollbackError) == true;
+                if (rolledBack)
+                {
+                    if (resolutionPrepared)
+                    {
+                        PackageManagerProjectResolutionService.CancelPrepared(
+                            installResolutionOperationId);
+                    }
+                    ClearActiveState();
+                    error = SanitizeMessage(
+                        "The read-only Git package manifest entry could not be retained safely: " +
+                        exception.Message);
+                    return false;
+                }
+
+                // A concurrent edit prevented exact rollback. Preserve it and
+                // retain in-memory ownership/reconciliation. The persisted
+                // write-ahead stage blocks safely if a reload occurs.
+                activeState.Stage = StageAdd;
+                activeState.OwnsManifestEntry = true;
+                Debug.LogWarning(SanitizeMessage(
+                    "The read-only Git package manifest entry was added, but its final recovery marker could not be persisted: " +
+                    exception.Message + " " + rollbackError));
                 error = SanitizeMessage(
-                    "Unity Package Manager could not start the read-only Git install: " +
-                    exception.Message);
-                ClearActiveState();
-                return false;
+                    string.Empty);
+                return true;
             }
         }
 
+        internal static bool TryAcquireExactManifestDependencyAtPath(
+            string manifestPath,
+            string packageName,
+            string spec,
+            out PackageManifestDependencyMutation mutation,
+            out string error)
+        {
+            if (!PackageManifestGitDependencyStore.TryAddDependencyAtPath(
+                    manifestPath,
+                    packageName,
+                    spec,
+                    out mutation,
+                    out error))
+            {
+                return false;
+            }
+
+            if (mutation?.Changed == true)
+                return true;
+
+            mutation = null;
+            error =
+                $"Packages/manifest.json already declares {packageName}; the existing entry was not claimed or changed.";
+            return false;
+        }
+
         internal static bool TryConsumeLastCompletion(
+            out ReadOnlyGitPackageInstallCompletion completion)
+        {
+            return TryReadLastCompletion(true, out completion);
+        }
+
+        internal static bool TryGetLastCompletion(
+            out ReadOnlyGitPackageInstallCompletion completion)
+        {
+            return TryReadLastCompletion(false, out completion);
+        }
+
+        private static bool TryReadLastCompletion(
+            bool consume,
             out ReadOnlyGitPackageInstallCompletion completion)
         {
             completion = null;
@@ -326,7 +507,6 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             if (string.IsNullOrWhiteSpace(json))
                 return false;
 
-            SessionState.EraseString(CompletionStateKey);
             try
             {
                 PersistedCompletion persisted =
@@ -341,12 +521,24 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 {
                     return false;
                 }
+                if (persisted.IsRecovery &&
+                    !SessionState.GetBool(
+                        RecoveryNotificationStateKey,
+                        false))
+                {
+                    // The retained value is the first half of recovery
+                    // publication. It is not presentation-owned until the
+                    // once-only marker commits successfully.
+                    return false;
+                }
                 completion = new ReadOnlyGitPackageInstallCompletion(
                     persisted.Success,
                     persisted.Message,
                     persisted.PackageName,
                     FindRegisteredPackage(persisted.PackageName),
                     persisted.DependencyInstallOperationId);
+                if (consume)
+                    SessionState.EraseString(CompletionStateKey);
                 return true;
             }
             catch
@@ -360,81 +552,42 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             if (activeState == null)
                 return;
 
+            if (string.Equals(
+                    activeState.Stage,
+                    StageRecoveryBlocked,
+                    StringComparison.Ordinal))
+            {
+                PublishRecoveryFailureOnce();
+                if (activeState?.RecoveryFailurePublished == true)
+                    UnsubscribeActiveEvents();
+                return;
+            }
+
             if (string.Equals(activeState.Stage, StageCleanup, StringComparison.Ordinal))
             {
                 UpdateCleanup();
                 return;
             }
 
-            if (activeAddRequest != null)
-            {
-                if (!activeAddRequest.IsCompleted)
-                    return;
-                CompleteAddRequest();
-                return;
-            }
-
-            // A public UPM request object does not survive a domain reload. The
-            // native operation does, so recover from authoritative registered
-            // package state without issuing the add a second time.
-            RecoverAddAfterReload();
+            UpdateAddResolution();
         }
 
-        private static void CompleteAddRequest()
+        private static void UpdateAddResolution()
         {
-            AddRequest request = activeAddRequest;
-            activeAddRequest = null;
-            if (request.Status != StatusCode.Success)
-            {
-                string detail = request.Error?.message;
-                Finish(false, activeState.ExpectedPackageName, null,
-                    string.IsNullOrWhiteSpace(detail)
-                        ? "Unity Package Manager could not install the read-only Git package."
-                        : "Unity Package Manager could not install the read-only Git package: " + detail);
+            // The manifest CAS owns installation. Wait until its Git resolution
+            // intent reaches a terminal state before verification or cleanup so
+            // Git and Absent expectations never overlap.
+            if (PackageManagerProjectResolutionService.IsBusy)
                 return;
-            }
 
-            UpmPackageInfo result = request.Result;
-            if (TryVerifyExpectedResult(result, out PackageManagerReadOnlyGitInfo info, out string error))
-            {
-                Finish(
-                    true,
-                    info.PackageName,
-                    info.PackageInfo,
-                    $"Installed {info.PackageName} as a read-only Git package.");
-                return;
-            }
-
-            if (!TryStartMismatchCleanup(
-                    result,
-                    error,
-                    out string cleanupFailureMessage))
-            {
-                Finish(
-                    false,
-                    activeState.ExpectedPackageName,
-                    result,
-                    cleanupFailureMessage);
-            }
-        }
-
-        private static void RecoverAddAfterReload()
-        {
-            if (!registeredPackagesChanged && !HasRecoveryTimedOut())
-            {
-                // Polling once per Editor update is still necessary because a
-                // package registration event can occur before this static class
-                // is reinitialized. The flag only avoids special event ordering.
-            }
-
-            registeredPackagesChanged = false;
-            UpmPackageInfo exactSpecPackage = FindRegisteredPackageByExactSpec(activeState.Spec);
-            if (exactSpecPackage != null)
+            UpmPackageInfo result =
+                FindRegisteredPackage(activeState.ExpectedPackageName);
+            if (result != null)
             {
                 if (TryVerifyExpectedResult(
-                        exactSpecPackage,
+                        result,
                         out PackageManagerReadOnlyGitInfo info,
-                        out string error))
+                        out string verificationError))
                 {
                     Finish(
                         true,
@@ -445,14 +598,13 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 }
 
                 if (!TryStartMismatchCleanup(
-                        exactSpecPackage,
-                        error,
+                        verificationError,
                         out string cleanupFailureMessage))
                 {
                     Finish(
                         false,
                         activeState.ExpectedPackageName,
-                        exactSpecPackage,
+                        result,
                         cleanupFailureMessage);
                 }
                 return;
@@ -460,11 +612,32 @@ namespace MartinCalander.GitSubmoduleManager.Editor
 
             if (HasRecoveryTimedOut())
             {
-                Finish(
-                    false,
+                const string timeoutMessage =
+                    "Unity Package Manager did not publish the expected read-only Git package before the recovery timeout.";
+                if (!TryStartMismatchCleanup(
+                        timeoutMessage,
+                        out string cleanupFailureMessage))
+                {
+                    Finish(
+                        false,
+                        activeState.ExpectedPackageName,
+                        null,
+                        cleanupFailureMessage);
+                }
+                return;
+            }
+
+            // Restore a missing/damaged resolution handoff after reload without
+            // repeating the manifest insertion.
+            if (!PackageManagerProjectResolutionService.TryPrepare(
+                    activeState.InstallResolutionOperationId,
                     activeState.ExpectedPackageName,
-                    null,
-                    "Unity Package Manager did not publish a terminal install result before the recovery timeout. Inspect the project manifest before retrying.");
+                    PackageManagerResolutionExpectation.Git,
+                    out string resolutionError))
+            {
+                Debug.LogWarning(SanitizeMessage(
+                    "The read-only Git install is waiting to restore Unity package resolution: " +
+                    resolutionError));
             }
         }
 
@@ -508,6 +681,15 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 return false;
             }
 
+            string resolvedCommit = result.git?.hash?.Trim() ?? string.Empty;
+            if (!TryValidateResolvedCommit(
+                    activeState.ExpectedInspectedCommit,
+                    resolvedCommit,
+                    out error))
+            {
+                return false;
+            }
+
             string packageJsonPath;
             try
             {
@@ -546,6 +728,46 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 return false;
             }
 
+            if (activeState.PackageManifestMetaVerification ==
+                    PackageManifestMetaVerification.Verified)
+            {
+                string packageManifestMetaPath;
+                try
+                {
+                    packageManifestMetaPath = Path.Combine(
+                        result.resolvedPath ?? string.Empty,
+                        "package.json.meta");
+                }
+                catch (Exception exception)
+                {
+                    error = SanitizeMessage(
+                        "The installed package.json.meta path could not be inspected: " +
+                        exception.Message);
+                    return false;
+                }
+
+                if (!GitUtility.TryReadValidPackageManifestMeta(
+                        packageManifestMetaPath,
+                        out string actualMetaGuid,
+                        out string metaError))
+                {
+                    error = SanitizeMessage(
+                        "The installed package.json.meta could not be validated: " +
+                        metaError);
+                    return false;
+                }
+
+                if (!string.Equals(
+                        actualMetaGuid,
+                        activeState.ExpectedPackageManifestMetaGuid,
+                        StringComparison.OrdinalIgnoreCase))
+                {
+                    error =
+                        "The installed package.json.meta changed after repository inspection.";
+                    return false;
+                }
+            }
+
             return PackageManagerReadOnlyGitPackage.TryCreateInfo(
                 result,
                 out info,
@@ -553,18 +775,13 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         }
 
         private static bool TryStartMismatchCleanup(
-            UpmPackageInfo result,
             string verificationError,
             out string cleanupFailureMessage)
         {
             cleanupFailureMessage = string.Empty;
-            if (result == null ||
-                !GitUtility.IsValidUpmPackageName(result.name) ||
-                !result.isDirectDependency ||
-                WasDirectPackageBefore(result.name) ||
-                !PackageManagerReadOnlyGitPackage.HasExactManifestSpec(
-                    result,
-                    activeState.Spec))
+            if (activeState?.OwnsManifestEntry != true ||
+                !GitUtility.IsValidUpmPackageName(
+                    activeState.ExpectedPackageName))
             {
                 cleanupFailureMessage = BuildMismatchCleanupFailureMessage(
                     verificationError,
@@ -572,27 +789,99 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 return false;
             }
 
-            activeState.Stage = StageCleanup;
-            activeState.CleanupPackageName = result.name;
+            string cleanupResolutionOperationId =
+                Guid.NewGuid().ToString("N");
+            activeState.Stage = StageCleanupPrepared;
+            activeState.CleanupPackageName =
+                activeState.ExpectedPackageName;
+            activeState.CleanupResolutionOperationId =
+                cleanupResolutionOperationId;
             activeState.FailureMessage =
                 (verificationError ?? "The installed package did not match the request.") +
                 " The newly-added dependency is being removed.";
+            bool resolutionPrepared = false;
+            bool manifestRemoved = false;
             try
             {
+                // Persist destructive intent before touching manifest.json. A
+                // reload of this write-ahead stage is ambiguous and therefore
+                // recovery-blocked; it never repeats the mutation.
                 SaveActiveState();
-                activeRemoveRequest = Client.Remove(result.name);
-                if (activeRemoveRequest == null)
-                    throw new InvalidOperationException("Unity did not create a remove request.");
+
+                if (!PackageManagerProjectResolutionService.TryPrepare(
+                        cleanupResolutionOperationId,
+                        activeState.CleanupPackageName,
+                        PackageManagerResolutionExpectation.Absent,
+                        out string resolutionError))
+                {
+                    cleanupFailureMessage = BuildMismatchCleanupFailureMessage(
+                        verificationError,
+                        resolutionError);
+                    return false;
+                }
+                resolutionPrepared = true;
+
+                if (!TryRemoveExactMismatchDependencyAtPath(
+                        PackageManifestGitDependencyStore.ManifestPath,
+                        activeState.CleanupPackageName,
+                        activeState.Spec,
+                        out string removalError))
+                {
+                    PackageManagerProjectResolutionService.CancelPrepared(
+                        cleanupResolutionOperationId);
+                    cleanupFailureMessage = BuildMismatchCleanupFailureMessage(
+                        verificationError,
+                        removalError);
+                    return false;
+                }
+                manifestRemoved = true;
+
+                // The exact compare-and-swap is complete. Persist the recovery
+                // stage before returning to Unity; reload now observes only the
+                // resolution handoff and never issues manifest cleanup again.
+                activeState.Stage = StageCleanup;
+                SaveActiveState();
                 return true;
             }
             catch (Exception exception)
             {
+                if (manifestRemoved)
+                {
+                    // The exact owned key is already gone. Keep the prepared
+                    // Absent resolution and in-memory recovery state; a reload
+                    // sees the write-ahead stage and blocks rather than repeat.
+                    activeState.Stage = StageCleanup;
+                    Debug.LogWarning(SanitizeMessage(
+                        "The mismatched read-only dependency was removed, but its final recovery marker could not be persisted: " +
+                        exception.Message));
+                    return true;
+                }
+
+                if (resolutionPrepared)
+                {
+                    PackageManagerProjectResolutionService.CancelPrepared(
+                        cleanupResolutionOperationId);
+                }
                 cleanupFailureMessage = BuildMismatchCleanupFailureMessage(
                     verificationError,
-                    "Unity Package Manager could not start automatic removal: " +
+                    "the exact manifest cleanup could not be completed safely: " +
                     exception.Message);
                 return false;
             }
+        }
+
+        internal static bool TryRemoveExactMismatchDependencyAtPath(
+            string manifestPath,
+            string packageName,
+            string expectedSpec,
+            out string error)
+        {
+            return PackageManifestGitDependencyStore.TryRemoveDependencyAtPath(
+                manifestPath,
+                packageName,
+                expectedSpec,
+                out _,
+                out error);
         }
 
         internal static string BuildMismatchCleanupFailureMessage(
@@ -617,35 +906,14 @@ namespace MartinCalander.GitSubmoduleManager.Editor
 
         private static void UpdateCleanup()
         {
-            if (activeRemoveRequest != null)
-            {
-                if (!activeRemoveRequest.IsCompleted)
-                    return;
-
-                RemoveRequest request = activeRemoveRequest;
-                activeRemoveRequest = null;
-                if (request.Status == StatusCode.Success)
-                {
-                    FinishCleanupFailure();
-                    return;
-                }
-
-                string detail = request.Error?.message;
-                Finish(
-                    false,
-                    activeState.ExpectedPackageName,
-                    FindRegisteredPackage(activeState.CleanupPackageName),
-                    activeState.FailureMessage +
-                    (string.IsNullOrWhiteSpace(detail)
-                        ? " Automatic removal failed. Inspect Packages/manifest.json before retrying."
-                        : " Automatic removal failed: " + detail));
+            // The exact manifest mutation completed before this stage was
+            // persisted. Recovery may restore the UPM resolution handoff, but
+            // it must never issue another manifest removal.
+            if (PackageManagerProjectResolutionService.IsBusy)
                 return;
-            }
 
-            // Recovery after a reload during Client.Remove. A package can remain
-            // registered transitively; only a direct dependency means cleanup
-            // is still pending.
-            UpmPackageInfo cleanupPackage = FindRegisteredPackage(activeState.CleanupPackageName);
+            UpmPackageInfo cleanupPackage =
+                FindRegisteredPackage(activeState.CleanupPackageName);
             if (cleanupPackage == null || !cleanupPackage.isDirectDependency)
             {
                 FinishCleanupFailure();
@@ -660,6 +928,22 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                     cleanupPackage,
                     activeState.FailureMessage +
                     " Automatic removal did not reach a terminal state. Inspect Packages/manifest.json before retrying.");
+                return;
+            }
+
+            if (!PackageManagerProjectResolutionService.TryPrepare(
+                    activeState.CleanupResolutionOperationId,
+                    activeState.CleanupPackageName,
+                    PackageManagerResolutionExpectation.Absent,
+                    out string resolutionError))
+            {
+                Finish(
+                    false,
+                    activeState.ExpectedPackageName,
+                    cleanupPackage,
+                    BuildMismatchCleanupFailureMessage(
+                        activeState.FailureMessage,
+                        resolutionError));
             }
         }
 
@@ -721,45 +1005,6 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             }
         }
 
-        private static void OnRegisteredPackages(PackageRegistrationEventArgs _)
-        {
-            registeredPackagesChanged = true;
-        }
-
-        private static bool WasDirectPackageBefore(string packageName)
-        {
-            string[] names = activeState?.DirectPackageNamesBefore;
-            if (names == null)
-                return false;
-            foreach (string name in names)
-            {
-                if (string.Equals(name, packageName, StringComparison.Ordinal))
-                    return true;
-            }
-
-            return false;
-        }
-
-        private static string[] ReadDirectPackageNames()
-        {
-            var names = new List<string>();
-            UpmPackageInfo[] packages = UpmPackageInfo.GetAllRegisteredPackages();
-            if (packages == null)
-                return Array.Empty<string>();
-            foreach (UpmPackageInfo package in packages)
-            {
-                if (package != null &&
-                    package.isDirectDependency &&
-                    GitUtility.IsValidUpmPackageName(package.name))
-                {
-                    names.Add(package.name);
-                }
-            }
-
-            names.Sort(StringComparer.Ordinal);
-            return names.ToArray();
-        }
-
         private static UpmPackageInfo FindRegisteredPackage(string packageName)
         {
             if (!GitUtility.IsValidUpmPackageName(packageName))
@@ -787,34 +1032,6 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             return null;
         }
 
-        private static UpmPackageInfo FindRegisteredPackageByExactSpec(string spec)
-        {
-            try
-            {
-                UpmPackageInfo[] packages = UpmPackageInfo.GetAllRegisteredPackages();
-                if (packages == null)
-                    return null;
-                foreach (UpmPackageInfo package in packages)
-                {
-                    if (package != null &&
-                        package.isDirectDependency &&
-                        package.source == PackageSource.Git &&
-                        PackageManagerReadOnlyGitPackage.HasExactManifestSpec(
-                            package,
-                            spec))
-                    {
-                        return package;
-                    }
-                }
-            }
-            catch
-            {
-                // Retry after Unity finishes publishing registered packages.
-            }
-
-            return null;
-        }
-
         private static bool HasRecoveryTimedOut()
         {
             if (activeState == null || activeState.StartedUtcTicks <= 0)
@@ -832,38 +1049,285 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             {
                 PersistedInstallState state =
                     JsonUtility.FromJson<PersistedInstallState>(json);
-                if (state == null ||
-                    !GitUtility.IsValidUpmPackageName(state.ExpectedPackageName) ||
-                    (!string.IsNullOrWhiteSpace(state.ExpectedVersion) &&
-                     !GitUtility.IsValidSemanticVersion(state.ExpectedVersion)) ||
-                    (!string.IsNullOrWhiteSpace(
-                         state.ExpectedDependencyFingerprint) &&
-                     !GitUtility.IsValidPackageDependencyFingerprint(
-                         state.ExpectedDependencyFingerprint)) ||
-                    (!string.IsNullOrWhiteSpace(
-                         state.DependencyInstallOperationId) &&
-                     !Guid.TryParseExact(
-                         state.DependencyInstallOperationId,
-                         "N",
-                         out _)) ||
-                    !PackageManifestGitDependencyStore.TryBuildGitSpec(
-                        state.RepositoryUrl,
-                        state.Revision,
-                        out string expectedSpec,
-                        out _) ||
-                    !string.Equals(state.Spec, expectedSpec, StringComparison.Ordinal) ||
-                    (state.Stage != StageAdd && state.Stage != StageCleanup))
-                {
-                    SessionState.EraseString(ActiveStateKey);
-                    return null;
-                }
+                if (!IsValidPersistedInstallState(state))
+                    return CreateBlockedRecoveryState(
+                        state,
+                        SessionState.GetBool(
+                            RecoveryNotificationStateKey,
+                            false));
 
                 return state;
             }
             catch
             {
-                SessionState.EraseString(ActiveStateKey);
-                return null;
+                return CreateBlockedRecoveryState(
+                    null,
+                    SessionState.GetBool(
+                        RecoveryNotificationStateKey,
+                        false));
+            }
+        }
+
+        internal static bool TryBuildInvalidActiveStateCompletion(
+            string json,
+            out ReadOnlyGitPackageInstallCompletion completion)
+        {
+            completion = null;
+            if (string.IsNullOrWhiteSpace(json))
+                return false;
+
+            PersistedInstallState state;
+            try
+            {
+                state = JsonUtility.FromJson<PersistedInstallState>(json);
+            }
+            catch
+            {
+                state = null;
+            }
+
+            if (IsValidPersistedInstallState(state))
+                return false;
+
+            PersistedInstallState blocked = CreateBlockedRecoveryState(
+                state,
+                false);
+            completion = new ReadOnlyGitPackageInstallCompletion(
+                false,
+                blocked.FailureMessage,
+                blocked.ExpectedPackageName,
+                null,
+                blocked.DependencyInstallOperationId);
+            return true;
+        }
+
+        private static bool IsValidPersistedInstallState(
+            PersistedInstallState state)
+        {
+            if (state == null ||
+                state.SchemaVersion != CurrentActiveStateSchemaVersion ||
+                !GitUtility.IsValidUpmPackageName(state.ExpectedPackageName) ||
+                string.IsNullOrWhiteSpace(state.Revision) ||
+                string.Equals(state.Revision, ".", StringComparison.Ordinal) ||
+                !GitUtility.IsValidBranchName(state.Revision) ||
+                (!string.IsNullOrWhiteSpace(state.ExpectedVersion) &&
+                 !GitUtility.IsValidSemanticVersion(state.ExpectedVersion)) ||
+                (!string.IsNullOrWhiteSpace(
+                     state.ExpectedDependencyFingerprint) &&
+                 !GitUtility.IsValidPackageDependencyFingerprint(
+                     state.ExpectedDependencyFingerprint)) ||
+                !IsValidPackageManifestMetaEvidence(
+                    state.PackageManifestMetaVerification,
+                    state.ExpectedPackageManifestMetaGuid) ||
+                !GitUtility.IsValidGitObjectId(
+                    state.ExpectedInspectedCommit) ||
+                (!string.IsNullOrWhiteSpace(
+                     state.DependencyInstallOperationId) &&
+                 !Guid.TryParseExact(
+                     state.DependencyInstallOperationId,
+                     "N",
+                     out _)) ||
+                !Guid.TryParseExact(
+                    state.InstallResolutionOperationId,
+                    "N",
+                    out _) ||
+                !state.OwnsManifestEntry ||
+                state.StartedUtcTicks <= 0L ||
+                !PackageManifestGitDependencyStore.TryBuildGitSpec(
+                    state.RepositoryUrl,
+                    state.ExpectedInspectedCommit,
+                    out string expectedSpec,
+                    out _) ||
+                !string.Equals(state.Spec, expectedSpec, StringComparison.Ordinal) ||
+                (state.Stage != StageAdd && state.Stage != StageCleanup))
+            {
+                return false;
+            }
+
+            bool coordinatedInstall = !string.IsNullOrWhiteSpace(
+                state.DependencyInstallOperationId);
+            if (coordinatedInstall &&
+                (state.PackageManifestMetaVerification !=
+                     PackageManifestMetaVerification.Verified ||
+                 string.IsNullOrWhiteSpace(state.ExpectedVersion) ||
+                 !GitUtility.IsValidPackageDependencyFingerprint(
+                     state.ExpectedDependencyFingerprint)))
+            {
+                return false;
+            }
+
+            if (state.Stage == StageAdd)
+            {
+                return string.IsNullOrWhiteSpace(state.CleanupPackageName) &&
+                       string.IsNullOrWhiteSpace(
+                           state.CleanupResolutionOperationId) &&
+                       string.IsNullOrWhiteSpace(state.FailureMessage);
+            }
+
+            return string.Equals(
+                       state.CleanupPackageName,
+                       state.ExpectedPackageName,
+                       StringComparison.Ordinal) &&
+                   Guid.TryParseExact(
+                       state.CleanupResolutionOperationId,
+                       "N",
+                       out _) &&
+                   !string.IsNullOrWhiteSpace(state.FailureMessage);
+        }
+
+        private static bool TryValidatePackageManifestMetaEvidence(
+            PackageManifestMetaVerification verification,
+            string guid,
+            out string error)
+        {
+            if (IsValidPackageManifestMetaEvidence(verification, guid))
+            {
+                error = string.Empty;
+                return true;
+            }
+
+            error = verification == PackageManifestMetaVerification.Unverified
+                ? "Read-only Git installs require verified package.json.meta evidence."
+                : "Verified package.json.meta evidence requires a valid nonzero Unity GUID.";
+            return false;
+        }
+
+        private static bool IsValidPackageManifestMetaEvidence(
+            PackageManifestMetaVerification verification,
+            string guid)
+        {
+            return verification == PackageManifestMetaVerification.Verified &&
+                   GitSubmoduleInstallProbeSnapshot.IsValidMetaGuid(guid);
+        }
+
+        internal static bool TryValidateResolvedCommit(
+            string expectedCommit,
+            string actualCommit,
+            out string error)
+        {
+            string expected = expectedCommit?.Trim() ?? string.Empty;
+            string actual = actualCommit?.Trim() ?? string.Empty;
+            if (!GitUtility.IsValidGitObjectId(expected))
+            {
+                error = "The inspected Git commit evidence is missing or invalid.";
+                return false;
+            }
+
+            if (!GitUtility.IsValidGitObjectId(actual))
+            {
+                error =
+                    "Unity did not report a verifiable resolved Git commit for the installed package.";
+                return false;
+            }
+
+            if (!string.Equals(
+                    expected,
+                    actual,
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                error =
+                    "Unity resolved a different Git commit than the one whose package metadata was inspected.";
+                return false;
+            }
+
+            error = string.Empty;
+            return true;
+        }
+
+        private static PersistedInstallState CreateBlockedRecoveryState(
+            PersistedInstallState state,
+            bool recoveryFailurePublished)
+        {
+            string packageName = GitUtility.IsValidUpmPackageName(
+                state?.ExpectedPackageName)
+                ? state.ExpectedPackageName.Trim()
+                : string.Empty;
+            string operationId = Guid.TryParseExact(
+                state?.DependencyInstallOperationId,
+                "N",
+                out _)
+                ? state.DependencyInstallOperationId.Trim()
+                : string.Empty;
+            return new PersistedInstallState
+            {
+                SchemaVersion = CurrentActiveStateSchemaVersion,
+                Stage = StageRecoveryBlocked,
+                ExpectedPackageName = packageName,
+                DependencyInstallOperationId = operationId,
+                StartedUtcTicks = DateTime.UtcNow.Ticks,
+                RecoveryFailurePublished = recoveryFailurePublished,
+                FailureMessage =
+                    "A persisted read-only Git install record is damaged, so Unity cannot prove whether its exact " +
+                    "manifest mutation completed. No package mutation was issued again and this project remains " +
+                    "blocked from package mutations. Preserve and inspect Packages/manifest.json plus Unity's " +
+                    "registered package state, repair or remove only state you can identify safely, then restart " +
+                    "the Unity Editor to clear this session recovery block."
+            };
+        }
+
+        private static void PublishRecoveryFailureOnce()
+        {
+            if (activeState == null ||
+                activeState.RecoveryFailurePublished ||
+                !string.Equals(
+                    activeState.Stage,
+                    StageRecoveryBlocked,
+                    StringComparison.Ordinal))
+            {
+                return;
+            }
+
+            var completion = new ReadOnlyGitPackageInstallCompletion(
+                false,
+                SanitizeMessage(activeState.FailureMessage),
+                activeState.ExpectedPackageName,
+                null,
+                activeState.DependencyInstallOperationId);
+            if (!TryRetainRecoveryFailure(
+                    completion,
+                    PersistRecoveryCompletion,
+                    () => SessionState.SetBool(
+                        RecoveryNotificationStateKey,
+                        true),
+                    out string persistenceError))
+            {
+                Debug.LogWarning(SanitizeMessage(
+                    "The read-only package recovery failure could not be retained: " +
+                    persistenceError));
+                return;
+            }
+
+            activeState.RecoveryFailurePublished = true;
+            Notify(Completed, completion);
+        }
+
+        internal static bool TryRetainRecoveryFailure(
+            ReadOnlyGitPackageInstallCompletion completion,
+            Action<ReadOnlyGitPackageInstallCompletion> persistCompletion,
+            Action persistNotificationOwnership,
+            out string error)
+        {
+            if (completion == null)
+                throw new ArgumentNullException(nameof(completion));
+            if (persistCompletion == null)
+                throw new ArgumentNullException(nameof(persistCompletion));
+            if (persistNotificationOwnership == null)
+                throw new ArgumentNullException(
+                    nameof(persistNotificationOwnership));
+
+            try
+            {
+                // A retained outcome must exist before the once-only marker can
+                // suppress another publication after a domain reload.
+                persistCompletion(completion);
+                persistNotificationOwnership();
+                error = string.Empty;
+                return true;
+            }
+            catch (Exception exception)
+            {
+                error = exception.Message;
+                return false;
             }
         }
 
@@ -883,10 +1347,24 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         private static void PersistCompletion(
             ReadOnlyGitPackageInstallCompletion completion)
         {
+            PersistCompletion(completion, false);
+        }
+
+        private static void PersistRecoveryCompletion(
+            ReadOnlyGitPackageInstallCompletion completion)
+        {
+            PersistCompletion(completion, true);
+        }
+
+        private static void PersistCompletion(
+            ReadOnlyGitPackageInstallCompletion completion,
+            bool isRecovery)
+        {
             SessionState.SetString(
                 CompletionStateKey,
                 JsonUtility.ToJson(new PersistedCompletion
                 {
+                    IsRecovery = isRecovery,
                     Success = completion.Success,
                     Message = completion.Message,
                     PackageName = completion.PackageName,
@@ -899,21 +1377,19 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         {
             activeState = null;
             UnsubscribeActiveEvents();
-            activeAddRequest = null;
-            activeRemoveRequest = null;
             activeCallback = null;
-            registeredPackagesChanged = false;
             SessionState.EraseString(ActiveStateKey);
         }
 
         private static void SubscribeActiveEvents()
         {
-            if (activeState == null || activeEventsSubscribed)
+            if (activeState == null || activeEventsSubscribed ||
+                (IsRecoveryBlocked &&
+                 activeState.RecoveryFailurePublished))
                 return;
 
             activeEventsSubscribed = true;
             EditorApplication.update += Update;
-            Events.registeredPackages += OnRegisteredPackages;
         }
 
         private static void UnsubscribeActiveEvents()
@@ -923,7 +1399,6 @@ namespace MartinCalander.GitSubmoduleManager.Editor
 
             activeEventsSubscribed = false;
             EditorApplication.update -= Update;
-            Events.registeredPackages -= OnRegisteredPackages;
         }
 
         private static string SanitizeMessage(string message)
@@ -935,23 +1410,33 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         [Serializable]
         private sealed class PersistedInstallState
         {
+            public int SchemaVersion;
             public string Stage = string.Empty;
             public string RepositoryUrl = string.Empty;
             public string Revision = string.Empty;
             public string ExpectedPackageName = string.Empty;
             public string ExpectedVersion = string.Empty;
             public string ExpectedDependencyFingerprint = string.Empty;
+            public PackageManifestMetaVerification
+                PackageManifestMetaVerification;
+            public string ExpectedPackageManifestMetaGuid = string.Empty;
+            public string ExpectedInspectedCommit = string.Empty;
             public string DependencyInstallOperationId = string.Empty;
+            public string InstallResolutionOperationId = string.Empty;
+            public bool OwnsManifestEntry;
             public string Spec = string.Empty;
-            public string[] DirectPackageNamesBefore = Array.Empty<string>();
             public string CleanupPackageName = string.Empty;
+            public string CleanupResolutionOperationId = string.Empty;
             public string FailureMessage = string.Empty;
             public long StartedUtcTicks;
+            [NonSerialized]
+            public bool RecoveryFailurePublished;
         }
 
         [Serializable]
         private sealed class PersistedCompletion
         {
+            public bool IsRecovery;
             public bool Success;
             public string Message = string.Empty;
             public string PackageName = string.Empty;

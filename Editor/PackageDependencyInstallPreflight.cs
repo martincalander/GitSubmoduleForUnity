@@ -8,8 +8,9 @@ namespace MartinCalander.GitSubmoduleManager.Editor
 {
     /// <summary>
     /// Immutable root install intent shared by Package Manager's GitHub action
-    /// and its add-menu popup. Dependency metadata must describe the exact
-    /// repository revision represented by <see cref="Revision"/>.
+    /// and its add-menu popup. <see cref="Revision"/> retains the selected
+    /// branch while <see cref="InspectedCommit"/> binds validated package
+    /// metadata to one immutable Git commit.
     /// </summary>
     internal sealed class PackageDependencyInstallRequest
     {
@@ -19,13 +20,23 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             string rootPackageName,
             string rootVersion,
             PackageManagerGitInstallMode installMode,
-            IEnumerable<PackageManifestDependency> dependencies)
+            IEnumerable<PackageManifestDependency> dependencies,
+            PackageManifestMetaVerification packageManifestMetaVerification =
+                PackageManifestMetaVerification.Unverified,
+            string packageManifestMetaGuid = "",
+            PackageManifestMetaPolicy packageManifestMetaPolicy =
+                PackageManifestMetaPolicy.AllowUnverifiedWithWarning,
+            string inspectedCommit = "")
         {
             RepositoryUrl = repositoryUrl?.Trim() ?? string.Empty;
             Revision = revision?.Trim() ?? string.Empty;
             RootPackageName = rootPackageName?.Trim() ?? string.Empty;
             RootVersion = rootVersion?.Trim() ?? string.Empty;
             InstallMode = installMode;
+            PackageManifestMetaVerification = packageManifestMetaVerification;
+            PackageManifestMetaGuid = packageManifestMetaGuid?.Trim() ?? string.Empty;
+            PackageManifestMetaPolicy = packageManifestMetaPolicy;
+            InspectedCommit = inspectedCommit?.Trim() ?? string.Empty;
             Dependencies = new ReadOnlyCollection<PackageManifestDependency>(
                 (dependencies ?? Array.Empty<PackageManifestDependency>())
                 .Where(dependency => dependency != null)
@@ -41,6 +52,11 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         internal string RootPackageName { get; }
         internal string RootVersion { get; }
         internal PackageManagerGitInstallMode InstallMode { get; }
+        internal PackageManifestMetaVerification PackageManifestMetaVerification
+            { get; }
+        internal string PackageManifestMetaGuid { get; }
+        internal PackageManifestMetaPolicy PackageManifestMetaPolicy { get; }
+        internal string InspectedCommit { get; }
         internal IReadOnlyList<PackageManifestDependency> Dependencies { get; }
     }
 
@@ -58,7 +74,9 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             string expectedPackageName,
             PackageManagerGitInstallMode installMode,
             out PackageDependencyInstallRequest request,
-            out string error)
+            out string error,
+            PackageManifestMetaPolicy packageManifestMetaPolicy =
+                PackageManifestMetaPolicy.AllowUnverifiedWithWarning)
         {
             request = null;
             error = string.Empty;
@@ -141,13 +159,44 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 return false;
             }
 
+            bool hasVerifiedMeta = snapshot.PackageManifestMetaVerification ==
+                                   PackageManifestMetaVerification.Verified &&
+                                   GitSubmoduleInstallProbeSnapshot.IsValidMetaGuid(
+                                       snapshot.PackageManifestMetaGuid);
+            if (packageManifestMetaPolicy ==
+                    PackageManifestMetaPolicy.RequireVerified &&
+                !hasVerifiedMeta)
+            {
+                error = string.IsNullOrWhiteSpace(
+                    snapshot.PackageManifestMetaMessage)
+                    ? "The selected branch does not contain a valid root package.json.meta, so Unity package intent could not be verified."
+                    : PackageDependencyResolutionService.SanitizeDiagnostic(
+                        snapshot.PackageManifestMetaMessage);
+                return false;
+            }
+
+            if (packageManifestMetaPolicy !=
+                    PackageManifestMetaPolicy.AllowUnverifiedWithWarning &&
+                packageManifestMetaPolicy !=
+                    PackageManifestMetaPolicy.RequireVerified)
+            {
+                error = "The package.json.meta verification policy is invalid.";
+                return false;
+            }
+
             request = new PackageDependencyInstallRequest(
                 url,
                 branch,
                 packageName,
                 snapshot.Version,
                 installMode,
-                snapshot.Dependencies);
+                snapshot.Dependencies,
+                hasVerifiedMeta
+                    ? PackageManifestMetaVerification.Verified
+                    : PackageManifestMetaVerification.Unverified,
+                hasVerifiedMeta ? snapshot.PackageManifestMetaGuid : string.Empty,
+                packageManifestMetaPolicy,
+                snapshot.InspectedCommit);
             error = PackageDependencyPreflightRunner.ValidateRequest(request);
             if (!string.IsNullOrWhiteSpace(error))
             {
@@ -293,6 +342,51 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 request.InstallMode != PackageManagerGitInstallMode.ReadOnlyPackage)
             {
                 return "The requested package install mode is invalid.";
+            }
+            if (request.PackageManifestMetaVerification !=
+                    PackageManifestMetaVerification.Unverified &&
+                request.PackageManifestMetaVerification !=
+                    PackageManifestMetaVerification.Verified)
+            {
+                return "The package.json.meta verification state is invalid.";
+            }
+            if (request.PackageManifestMetaVerification ==
+                    PackageManifestMetaVerification.Verified)
+            {
+                if (!GitSubmoduleInstallProbeSnapshot.IsValidMetaGuid(
+                        request.PackageManifestMetaGuid))
+                {
+                    return "Verified package.json.meta evidence requires a valid Unity GUID.";
+                }
+            }
+            else if (!string.IsNullOrWhiteSpace(request.PackageManifestMetaGuid))
+            {
+                return "Unverified package.json.meta evidence cannot carry a trusted GUID.";
+            }
+            if (request.PackageManifestMetaPolicy !=
+                    PackageManifestMetaPolicy.AllowUnverifiedWithWarning &&
+                request.PackageManifestMetaPolicy !=
+                    PackageManifestMetaPolicy.RequireVerified)
+            {
+                return "The package.json.meta verification policy is invalid.";
+            }
+            if (request.PackageManifestMetaPolicy ==
+                    PackageManifestMetaPolicy.RequireVerified &&
+                request.PackageManifestMetaVerification !=
+                    PackageManifestMetaVerification.Verified)
+            {
+                return "This package install requires verified package.json.meta evidence.";
+            }
+            if (request.InstallMode ==
+                    PackageManagerGitInstallMode.ReadOnlyPackage &&
+                request.PackageManifestMetaPolicy !=
+                    PackageManifestMetaPolicy.RequireVerified)
+            {
+                return "Read-only Git installs require verified package.json.meta evidence.";
+            }
+            if (!GitUtility.IsValidGitObjectId(request.InspectedCommit))
+            {
+                return "Git package installs require the exact inspected Git commit as a valid nonzero SHA-1 or SHA-256 object ID.";
             }
 
             return string.Empty;

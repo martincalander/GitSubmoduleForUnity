@@ -185,19 +185,127 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         internal bool ReuseExistingMetadata;
         internal bool GitModulesExisted;
         internal byte[] GitModulesContents = Array.Empty<byte>();
+        internal GitModulesIndexEntry GitModulesIndexBefore;
+        internal GitModulesIndexEntry ExpectedGitProducedGitModulesIndex;
+        internal byte[] AddedGitModulesContents = Array.Empty<byte>();
+        internal AddedSubmoduleIndexSnapshot AddedIndexSnapshot;
     }
 
     internal sealed class RemoveSubmoduleGitModulesPlan
     {
+        internal string Path = string.Empty;
+        internal string ExpectedGitlinkObjectId = string.Empty;
         internal bool ExistedInHead;
+        internal byte[] OriginalContents = Array.Empty<byte>();
         internal byte[] ExpectedContents = Array.Empty<byte>();
         internal byte[] ExpectedGitProducedContents = Array.Empty<byte>();
         internal string ExpectedGitProducedBlobId = string.Empty;
+        internal GitModulesIndexEntry GitModulesIndexBefore;
+        internal GitModulesIndexEntry DesiredGitModulesIndex;
+        internal GitModulesIndexEntry ExpectedGitProducedGitModulesIndex;
+    }
+
+    internal sealed class ExactSubmoduleRegistrationRemovalPlan
+    {
+        internal string Path = string.Empty;
+        internal string ExpectedGitlinkObjectId = string.Empty;
+        internal byte[] ExpectedGitModulesContents = Array.Empty<byte>();
+        internal byte[] DesiredGitModulesContents = Array.Empty<byte>();
+        internal GitModulesIndexEntry ExpectedGitModulesIndex;
+        internal GitModulesIndexEntry DesiredGitModulesIndex;
+        internal byte[] IndexPatch = Array.Empty<byte>();
+    }
+
+    internal sealed class GitModulesIndexEntry
+    {
+        internal bool Exists;
+        internal string Mode = string.Empty;
+        internal string ObjectId = string.Empty;
+    }
+
+    internal sealed class AddedSubmoduleIndexSnapshot
+    {
+        internal GitModulesIndexEntry GitModules = new GitModulesIndexEntry();
+        internal string GitlinkObjectId = string.Empty;
     }
 
     internal static class GitUtility
     {
-        private const int MaxPackageJsonLength = 1024 * 1024;
+        /// <summary>
+        /// Opaque evidence issued only after a complete remote advertisement
+        /// confirms the exact commit, or intersects protected local ancestry
+        /// and a no-download negotiation confirms it. The private issuer
+        /// identity prevents callers from manufacturing valid publication
+        /// evidence for the destructive removal path.
+        /// </summary>
+        internal sealed class RepositoryCommitPublicationProof
+        {
+            private readonly object issuer;
+            private readonly string projectRoot;
+            private readonly string repositoryPath;
+            private readonly string repositoryUrl;
+            private readonly string commit;
+
+            private RepositoryCommitPublicationProof(
+                object issuer,
+                string projectRoot,
+                string repositoryPath,
+                string repositoryUrl,
+                string commit)
+            {
+                this.issuer = issuer;
+                this.projectRoot = projectRoot;
+                this.repositoryPath = repositoryPath;
+                this.repositoryUrl = repositoryUrl;
+                this.commit = commit;
+            }
+
+            internal static RepositoryCommitPublicationProof Issue(
+                object issuer,
+                string projectRoot,
+                string repositoryPath,
+                string repositoryUrl,
+                string commit)
+            {
+                return new RepositoryCommitPublicationProof(
+                    issuer,
+                    projectRoot,
+                    repositoryPath,
+                    repositoryUrl,
+                    commit);
+            }
+
+            internal bool Matches(
+                object expectedIssuer,
+                string expectedProjectRoot,
+                string expectedRepositoryPath,
+                string expectedRepositoryUrl,
+                string expectedCommit)
+            {
+                return ReferenceEquals(issuer, expectedIssuer) &&
+                       string.Equals(
+                           projectRoot,
+                           expectedProjectRoot,
+                           RuntimeInformation.IsOSPlatform(OSPlatform.Windows)
+                               ? StringComparison.OrdinalIgnoreCase
+                               : StringComparison.Ordinal) &&
+                       string.Equals(
+                           repositoryPath,
+                           NormalizePath(expectedRepositoryPath),
+                           StringComparison.Ordinal) &&
+                       string.Equals(
+                           commit,
+                           expectedCommit?.Trim(),
+                           StringComparison.OrdinalIgnoreCase) &&
+                       AreRepositoryUrlsEquivalent(
+                           repositoryUrl,
+                           expectedRepositoryUrl);
+            }
+        }
+
+        private const int MaxPackageJsonBytes = 1024 * 1024;
+        private const int MaxPackageManifestMetaLength = 16 * 1024;
+        private const int MaxGitModulesBytes = 128 * 1024;
         private const int MaxPackageNameLength = 214;
         private const int MaxBranchNameLength = 1024;
         private const int MaxRepositoryUrlLength = 4096;
@@ -206,11 +314,15 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         private const int MaxPackageDependencyCount = 512;
         private const int MaxPackageDependencyVersionLength = 1024;
         private const int MaxPackageLicenseLength = 256;
+        private const int MaxStructuralPathLength = 4096;
         private static readonly Encoding StrictUtf8Encoding = new UTF8Encoding(false, true);
         private static readonly Regex PackageNameRegex = new Regex(@"^[a-z0-9]+(?:[._-][a-z0-9]+)+$", RegexOptions.Compiled);
         private static readonly Regex BranchNameRegex = new Regex(@"^[A-Za-z0-9][A-Za-z0-9._/-]*$", RegexOptions.Compiled);
         private static readonly Regex CommitObjectIdRegex = new Regex(
             "^[0-9a-fA-F]{40,64}$",
+            RegexOptions.Compiled | RegexOptions.CultureInvariant);
+        private static readonly Regex PackageManifestMetaGuidRegex = new Regex(
+            "^[0-9a-fA-F]{32}$",
             RegexOptions.Compiled | RegexOptions.CultureInvariant);
         private static readonly Regex UriUserInfoRegex = new Regex(@"(?<scheme>[a-z][a-z0-9+.-]*://)[^\s/@]+@", RegexOptions.IgnoreCase | RegexOptions.Compiled);
         private static readonly Regex SensitiveParameterRegex = new Regex(
@@ -226,7 +338,16 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         private static string cachedProjectRoot;
         private static string projectRootOverride;
         private static string gitExecutableOverride;
+        private static readonly object PublicationProofIssuer = new object();
         private static Action<string> beforeGitModulesCleanupMoveForTests;
+        private static Action<string> beforeGitModulesIndexCompareAndSwapForTests;
+        private static Action<string> afterExactSubmoduleIndexApplyForTests;
+        private static Action<string> afterExactSubmoduleRemovalForTests;
+        private static Action<string> beforeAddedSubmoduleTerminalProofForTests;
+        private static Action<string> beforeAddedSubmoduleTerminalOriginForTests;
+        private static Action<string> beforeAddedSubmoduleClosingProofForTests;
+        private static Action<string> afterSubmoduleMetadataRecoveryRootCreateForTests;
+        private static Action<string> beforeSubmoduleMetadataMoveForTests;
         [ThreadStatic] private static bool commandTerminationUnconfirmed;
 
         internal static string ProjectRoot
@@ -278,6 +399,80 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             return new DisposableAction(() => beforeGitModulesCleanupMoveForTests = previous);
         }
 
+        internal static IDisposable OverrideBeforeGitModulesIndexCompareAndSwapForTests(
+            Action<string> action)
+        {
+            Action<string> previous =
+                beforeGitModulesIndexCompareAndSwapForTests;
+            beforeGitModulesIndexCompareAndSwapForTests = action;
+            return new DisposableAction(
+                () => beforeGitModulesIndexCompareAndSwapForTests = previous);
+        }
+
+        internal static IDisposable OverrideAfterExactSubmoduleIndexApplyForTests(
+            Action<string> action)
+        {
+            Action<string> previous = afterExactSubmoduleIndexApplyForTests;
+            afterExactSubmoduleIndexApplyForTests = action;
+            return new DisposableAction(
+                () => afterExactSubmoduleIndexApplyForTests = previous);
+        }
+
+        internal static IDisposable OverrideAfterExactSubmoduleRemovalForTests(
+            Action<string> action)
+        {
+            Action<string> previous = afterExactSubmoduleRemovalForTests;
+            afterExactSubmoduleRemovalForTests = action;
+            return new DisposableAction(
+                () => afterExactSubmoduleRemovalForTests = previous);
+        }
+
+        internal static IDisposable OverrideBeforeAddedSubmoduleTerminalProofForTests(
+            Action<string> action)
+        {
+            Action<string> previous = beforeAddedSubmoduleTerminalProofForTests;
+            beforeAddedSubmoduleTerminalProofForTests = action;
+            return new DisposableAction(
+                () => beforeAddedSubmoduleTerminalProofForTests = previous);
+        }
+
+        internal static IDisposable OverrideBeforeAddedSubmoduleTerminalOriginForTests(
+            Action<string> action)
+        {
+            Action<string> previous = beforeAddedSubmoduleTerminalOriginForTests;
+            beforeAddedSubmoduleTerminalOriginForTests = action;
+            return new DisposableAction(
+                () => beforeAddedSubmoduleTerminalOriginForTests = previous);
+        }
+
+        internal static IDisposable OverrideBeforeAddedSubmoduleClosingProofForTests(
+            Action<string> action)
+        {
+            Action<string> previous = beforeAddedSubmoduleClosingProofForTests;
+            beforeAddedSubmoduleClosingProofForTests = action;
+            return new DisposableAction(
+                () => beforeAddedSubmoduleClosingProofForTests = previous);
+        }
+
+        internal static IDisposable OverrideAfterSubmoduleMetadataRecoveryRootCreateForTests(
+            Action<string> action)
+        {
+            Action<string> previous =
+                afterSubmoduleMetadataRecoveryRootCreateForTests;
+            afterSubmoduleMetadataRecoveryRootCreateForTests = action;
+            return new DisposableAction(
+                () => afterSubmoduleMetadataRecoveryRootCreateForTests = previous);
+        }
+
+        internal static IDisposable OverrideBeforeSubmoduleMetadataMoveForTests(
+            Action<string> action)
+        {
+            Action<string> previous = beforeSubmoduleMetadataMoveForTests;
+            beforeSubmoduleMetadataMoveForTests = action;
+            return new DisposableAction(
+                () => beforeSubmoduleMetadataMoveForTests = previous);
+        }
+
         internal static bool IsValidPackageName(string packageName)
         {
             return packageName != null &&
@@ -320,9 +515,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 value.Contains("//") ||
                 value.EndsWith(".", StringComparison.Ordinal) ||
                 value.EndsWith("/", StringComparison.Ordinal))
-            {
                 return false;
-            }
 
             foreach (string segment in value.Split('/'))
             {
@@ -334,6 +527,24 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             }
 
             return true;
+        }
+
+        internal static bool IsValidGitObjectId(string objectId)
+        {
+            string value = objectId?.Trim() ?? string.Empty;
+            if ((value.Length != 40 && value.Length != 64) ||
+                !CommitObjectIdRegex.IsMatch(value))
+            {
+                return false;
+            }
+
+            foreach (char character in value)
+            {
+                if (character != '0')
+                    return true;
+            }
+
+            return false;
         }
 
         internal static bool IsValidRepositoryUrl(string url)
@@ -558,38 +769,79 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                     return false;
                 }
 
-                if (fileInfo.Length > MaxPackageJsonLength)
+                if (fileInfo.Length > MaxPackageJsonBytes)
                 {
                     error = "package.json exceeds the 1 MiB validation limit.";
                     return false;
                 }
 
-                var content = new StringBuilder((int)Math.Min(fileInfo.Length, MaxPackageJsonLength));
+                var bytes = new byte[MaxPackageJsonBytes + 1];
+                int byteCount = 0;
                 using (var stream = new FileStream(
                            packageJsonPath,
                            FileMode.Open,
                            FileAccess.Read,
                            FileShare.Read))
-                using (var reader = new StreamReader(stream, StrictUtf8Encoding, true, 4096, false))
                 {
-                    var buffer = new char[4096];
                     int read;
-                    while ((read = reader.Read(buffer, 0, buffer.Length)) > 0)
+                    while (byteCount < bytes.Length &&
+                           (read = stream.Read(
+                               bytes,
+                               byteCount,
+                               bytes.Length - byteCount)) > 0)
                     {
                         cancellationToken.ThrowIfCancellationRequested();
-                        if (content.Length + read > MaxPackageJsonLength)
-                        {
-                            error = "package.json exceeds the 1 MiB validation limit.";
-                            return false;
-                        }
-
-                        content.Append(buffer, 0, read);
+                        byteCount += read;
                     }
                 }
 
+                if (byteCount > MaxPackageJsonBytes)
+                {
+                    error = "package.json exceeds the 1 MiB validation limit.";
+                    return false;
+                }
+
                 cancellationToken.ThrowIfCancellationRequested();
+                fileInfo.Refresh();
+                if (!fileInfo.Exists ||
+                    (fileInfo.Attributes &
+                     (FileAttributes.Directory | FileAttributes.ReparsePoint)) != 0)
+                {
+                    error =
+                        "package.json changed to a missing, non-regular, or reparse-point entry while it was being validated.";
+                    return false;
+                }
+
+                if (fileInfo.Length != byteCount)
+                {
+                    error =
+                        "package.json changed while it was being validated; retry after the repository is stable.";
+                    return false;
+                }
+
+                int contentOffset =
+                    byteCount >= 3 &&
+                    bytes[0] == 0xef &&
+                    bytes[1] == 0xbb &&
+                    bytes[2] == 0xbf
+                        ? 3
+                        : 0;
+                string content;
+                try
+                {
+                    content = StrictUtf8Encoding.GetString(
+                        bytes,
+                        contentOffset,
+                        byteCount - contentOffset);
+                }
+                catch (DecoderFallbackException)
+                {
+                    error = "package.json must contain valid UTF-8 text.";
+                    return false;
+                }
+
                 return TryReadPackageManifestMetadataFromJson(
-                    content.ToString(),
+                    content,
                     out metadata,
                     out error);
             }
@@ -603,6 +855,331 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                     "package.json could not be read safely: " + exception.Message);
                 return false;
             }
+        }
+
+        internal static bool TryReadValidPackageManifestMeta(
+            string packageManifestMetaPath,
+            out string guid,
+            out string error,
+            CancellationToken cancellationToken = default(CancellationToken))
+        {
+            guid = string.Empty;
+            error = string.Empty;
+            if (string.IsNullOrWhiteSpace(packageManifestMetaPath))
+            {
+                error = "package.json.meta path is missing.";
+                return false;
+            }
+
+            cancellationToken.ThrowIfCancellationRequested();
+            try
+            {
+                var fileInfo = new FileInfo(packageManifestMetaPath);
+                if (!fileInfo.Exists)
+                {
+                    error = "package.json.meta does not exist.";
+                    return false;
+                }
+
+                FileAttributes attributes = fileInfo.Attributes;
+                if ((attributes & (FileAttributes.Directory | FileAttributes.ReparsePoint)) != 0)
+                {
+                    error =
+                        "package.json.meta must be a regular file inside the package, not a symbolic link, junction, or other reparse point.";
+                    return false;
+                }
+
+                if (fileInfo.Length > MaxPackageManifestMetaLength)
+                {
+                    error = "package.json.meta exceeds the 16 KiB validation limit.";
+                    return false;
+                }
+
+                var bytes = new byte[MaxPackageManifestMetaLength + 1];
+                int byteCount = 0;
+                using (var stream = new FileStream(
+                           packageManifestMetaPath,
+                           FileMode.Open,
+                           FileAccess.Read,
+                           FileShare.Read))
+                {
+                    int read;
+                    while (byteCount < bytes.Length &&
+                           (read = stream.Read(
+                               bytes,
+                               byteCount,
+                               bytes.Length - byteCount)) > 0)
+                    {
+                        cancellationToken.ThrowIfCancellationRequested();
+                        byteCount += read;
+                    }
+                }
+
+                if (byteCount > MaxPackageManifestMetaLength)
+                {
+                    error = "package.json.meta exceeds the 16 KiB validation limit.";
+                    return false;
+                }
+
+                cancellationToken.ThrowIfCancellationRequested();
+                fileInfo.Refresh();
+                if (!fileInfo.Exists ||
+                    (fileInfo.Attributes &
+                     (FileAttributes.Directory | FileAttributes.ReparsePoint)) != 0)
+                {
+                    error =
+                        "package.json.meta changed to a missing, non-regular, or reparse-point entry while it was being validated.";
+                    return false;
+                }
+
+                if (fileInfo.Length != byteCount)
+                {
+                    error =
+                        "package.json.meta changed while it was being validated; retry after the repository is stable.";
+                    return false;
+                }
+
+                int contentOffset =
+                    byteCount >= 3 &&
+                    bytes[0] == 0xef &&
+                    bytes[1] == 0xbb &&
+                    bytes[2] == 0xbf
+                        ? 3
+                        : 0;
+                string content;
+                try
+                {
+                    content = StrictUtf8Encoding.GetString(
+                        bytes,
+                        contentOffset,
+                        byteCount - contentOffset);
+                }
+                catch (DecoderFallbackException)
+                {
+                    error = "package.json.meta must contain valid UTF-8 text.";
+                    return false;
+                }
+
+                cancellationToken.ThrowIfCancellationRequested();
+                return TryReadValidPackageManifestMetaFromText(
+                    content,
+                    out guid,
+                    out error);
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (Exception exception)
+            {
+                error = GitHubUtility.SanitizeUiDiagnostic(
+                    "package.json.meta could not be read safely: " +
+                    exception.Message);
+                return false;
+            }
+        }
+
+        internal static bool TryReadValidPackageManifestMetaFromText(
+            string content,
+            out string guid,
+            out string error)
+        {
+            guid = string.Empty;
+            error = string.Empty;
+            if (content == null)
+            {
+                error = "package.json.meta is empty.";
+                return false;
+            }
+
+            int encodedLength;
+            try
+            {
+                encodedLength = StrictUtf8Encoding.GetByteCount(content);
+            }
+            catch (EncoderFallbackException)
+            {
+                error = "package.json.meta must contain valid UTF-8 text.";
+                return false;
+            }
+
+            if (encodedLength > MaxPackageManifestMetaLength)
+            {
+                error = "package.json.meta exceeds the 16 KiB validation limit.";
+                return false;
+            }
+
+            if (content.Length > 0 && content[0] == '\ufeff')
+                content = content.Substring(1);
+
+            if (string.IsNullOrWhiteSpace(content))
+            {
+                error = "package.json.meta is empty.";
+                return false;
+            }
+
+            for (int index = 0; index < content.Length; index++)
+            {
+                char character = content[index];
+                if ((char.IsControl(character) &&
+                     character != '\r' &&
+                     character != '\n' &&
+                     character != '\t') ||
+                    character == '\ufeff')
+                {
+                    error =
+                        "package.json.meta contains control or binary-like content.";
+                    return false;
+                }
+            }
+
+            int fileFormatVersionCount = 0;
+            int guidCount = 0;
+            string parsedGuid = string.Empty;
+            using (var reader = new StringReader(content))
+            {
+                string line;
+                while ((line = reader.ReadLine()) != null)
+                {
+                    string trimmedLine = line.Trim(' ', '\t');
+                    if (trimmedLine.Length == 0 ||
+                        trimmedLine.StartsWith("#", StringComparison.Ordinal))
+                    {
+                        continue;
+                    }
+
+                    bool isIndented =
+                        line.Length > 0 &&
+                        (line[0] == ' ' || line[0] == '\t');
+                    if (isIndented)
+                        continue;
+
+                    if (!TryReadPackageManifestMetaProperty(
+                            line,
+                            out string propertyName,
+                            out string propertyValue))
+                    {
+                        error =
+                            "package.json.meta contains a malformed top-level property.";
+                        return false;
+                    }
+
+                    if (string.Equals(
+                            propertyName,
+                            "fileFormatVersion",
+                            StringComparison.Ordinal))
+                    {
+                        fileFormatVersionCount++;
+                        if (fileFormatVersionCount != 1)
+                        {
+                            error =
+                                "package.json.meta must contain exactly one fileFormatVersion property.";
+                            return false;
+                        }
+
+                        if (!string.Equals(
+                                propertyValue.Trim(' ', '\t'),
+                                "2",
+                                StringComparison.Ordinal))
+                        {
+                            error =
+                                "package.json.meta must contain exactly one 'fileFormatVersion: 2' property.";
+                            return false;
+                        }
+                    }
+                    else if (string.Equals(
+                                 propertyName,
+                                 "guid",
+                                 StringComparison.Ordinal))
+                    {
+                        guidCount++;
+                        if (guidCount != 1)
+                        {
+                            error =
+                                "package.json.meta must contain exactly one guid property.";
+                            return false;
+                        }
+
+                        string candidateGuid = propertyValue.Trim(' ', '\t');
+                        if (!PackageManifestMetaGuidRegex.IsMatch(candidateGuid) ||
+                            candidateGuid.All(character => character == '0'))
+                        {
+                            error =
+                                "package.json.meta guid must be a nonzero 32-character hexadecimal value.";
+                            return false;
+                        }
+
+                        parsedGuid = candidateGuid;
+                    }
+                }
+            }
+
+            if (fileFormatVersionCount != 1)
+            {
+                error =
+                    "package.json.meta must contain exactly one 'fileFormatVersion: 2' property.";
+                return false;
+            }
+
+            if (guidCount != 1)
+            {
+                error =
+                    "package.json.meta must contain exactly one nonzero 32-character hexadecimal guid.";
+                return false;
+            }
+
+            guid = parsedGuid;
+            return true;
+        }
+
+        private static bool TryReadPackageManifestMetaProperty(
+            string line,
+            out string propertyName,
+            out string propertyValue)
+        {
+            propertyName = string.Empty;
+            propertyValue = string.Empty;
+            if (string.IsNullOrEmpty(line))
+                return false;
+
+            int colonIndex = line.IndexOf(':');
+            if (colonIndex <= 0)
+                return false;
+
+            string candidateName = line.Substring(0, colonIndex).TrimEnd(' ', '\t');
+            if (candidateName.Length == 0 ||
+                !IsAsciiLetter(candidateName[0]))
+            {
+                return false;
+            }
+
+            for (int index = 1; index < candidateName.Length; index++)
+            {
+                char character = candidateName[index];
+                if (!IsAsciiLetter(character) &&
+                    (character < '0' || character > '9') &&
+                    character != '_')
+                {
+                    return false;
+                }
+            }
+
+            for (int index = candidateName.Length; index < colonIndex; index++)
+            {
+                char character = line[index];
+                if (character != ' ' && character != '\t')
+                    return false;
+            }
+
+            propertyName = candidateName;
+            propertyValue = line.Substring(colonIndex + 1);
+            return true;
+        }
+
+        private static bool IsAsciiLetter(char character)
+        {
+            return (character >= 'A' && character <= 'Z') ||
+                   (character >= 'a' && character <= 'z');
         }
 
         internal static bool TryReadPackageNameFromJson(string packageJsonContent, out string packageName)
@@ -821,7 +1398,27 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 return false;
             }
 
-            if (content.Length > MaxPackageJsonLength)
+            // UTF-8 never uses fewer bytes than the number of UTF-16 code units.
+            // Reject obviously oversized input before performing the exact strict
+            // UTF-8 byte count below.
+            if (content.Length > MaxPackageJsonBytes)
+            {
+                error = "package.json exceeds the 1 MiB validation limit.";
+                return false;
+            }
+
+            int encodedLength;
+            try
+            {
+                encodedLength = StrictUtf8Encoding.GetByteCount(content);
+            }
+            catch (EncoderFallbackException)
+            {
+                error = "package.json must contain valid UTF-8 text.";
+                return false;
+            }
+
+            if (encodedLength > MaxPackageJsonBytes)
             {
                 error = "package.json exceeds the 1 MiB validation limit.";
                 return false;
@@ -1355,6 +1952,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 return false;
 
             var names = ExtractSubmoduleNamesFromConfig(config);
+            bool canInspectSubmoduleCommits = true;
 
             foreach (string name in names)
             {
@@ -1387,9 +1985,107 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                     info.PackageName = Path.GetFileName(path);
                 }
 
+                // This snapshot runs on its dedicated worker. Capture an exact
+                // commit only when the parent index gitlink and the initialized
+                // submodule worktree HEAD agree; presentation can still retain
+                // the submodule with empty evidence when that proof is absent.
+                if (canInspectSubmoduleCommits)
+                {
+                    var indexResult = RunGit(
+                        $"ls-files --stage -- {Quote(path)}",
+                        root,
+                        5000,
+                        cancellationToken);
+                    canInspectSubmoduleCommits =
+                        indexResult?.TerminationConfirmed == true;
+                    CommandResult headResult = canInspectSubmoduleCommits
+                        ? RunGit(
+                            BuildReadSubmoduleHeadCommitArguments(path),
+                            root,
+                            5000,
+                            cancellationToken)
+                        : null;
+                    canInspectSubmoduleCommits =
+                        canInspectSubmoduleCommits &&
+                        headResult?.TerminationConfirmed == true;
+                    if (TryResolveExactSubmoduleCommit(
+                            indexResult,
+                            headResult,
+                            path,
+                            out string resolvedCommit,
+                            out _))
+                    {
+                        info.ResolvedCommit = resolvedCommit;
+                    }
+                }
+
                 submodules.Add(info);
             }
 
+            return true;
+        }
+
+        internal static bool TryResolveExactSubmoduleCommit(
+            CommandResult indexResult,
+            CommandResult headResult,
+            string path,
+            out string resolvedCommit,
+            out string error)
+        {
+            resolvedCommit = string.Empty;
+            error = string.Empty;
+            string normalizedPath = NormalizePath(path);
+            if (!IsPackagePath(normalizedPath) ||
+                !TryParseGitlink(
+                    indexResult,
+                    normalizedPath,
+                    out string gitlinkCommit,
+                    out error))
+            {
+                if (string.IsNullOrEmpty(error))
+                {
+                    error =
+                        "The submodule commit path is not a managed package path.";
+                }
+                return false;
+            }
+
+            if (!TryRequireCompleteStructuralOutput(
+                    headResult,
+                    "Submodule snapshot commit inspection",
+                    out error))
+            {
+                return false;
+            }
+
+            if (headResult == null || !headResult.IsSuccess)
+            {
+                error = BuildCommandError(
+                    "The initialized package HEAD could not be inspected",
+                    headResult);
+                return false;
+            }
+
+            string headCommit = headResult.StdOut?.Trim() ?? string.Empty;
+            if (!IsValidGitObjectId(headCommit))
+            {
+                error =
+                    "Git returned an invalid initialized package HEAD commit.";
+                return false;
+            }
+
+            if (!string.Equals(
+                    gitlinkCommit,
+                    headCommit,
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                error =
+                    "The initialized package HEAD does not match the parent index gitlink.";
+                return false;
+            }
+
+            resolvedCommit = gitlinkCommit.Trim().ToLowerInvariant();
+            error = string.Empty;
             return true;
         }
 
@@ -1415,11 +2111,27 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             plan.ExpectedBranch = branch?.Trim() ?? string.Empty;
 
             var result = RunGit(args, ProjectRoot, 120000, cancellationToken);
+            string rollbackEvidenceError = string.Empty;
+            bool rollbackEvidenceCaptured = false;
+            if (result != null && result.TerminationConfirmed &&
+                TryReadAddedSubmoduleIndexSnapshot(
+                    plan.Path,
+                    out AddedSubmoduleIndexSnapshot immediateSnapshot,
+                    out rollbackEvidenceError,
+                    CancellationToken.None))
+            {
+                rollbackEvidenceCaptured = TryCaptureFailedAddRollbackEvidence(
+                    plan,
+                    immediateSnapshot.GitlinkObjectId,
+                    out rollbackEvidenceError,
+                    CancellationToken.None);
+            }
+
             if (!result.IsSuccess)
             {
                 error = BuildCommandError("Failed to add submodule", result);
                 if (result.TerminationConfirmed &&
-                    !TryCleanupFailedAdd(plan, out string cleanupWarning, cancellationToken) &&
+                    !TryCleanupFailedAdd(plan, out string cleanupWarning, CancellationToken.None) &&
                     !string.IsNullOrWhiteSpace(cleanupWarning))
                 {
                     error += " Cleanup warning: " + cleanupWarning;
@@ -1427,10 +2139,21 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 return false;
             }
 
-            if (TryVerifyAddedSubmodule(plan, url, branch, out error, cancellationToken))
+            if (!rollbackEvidenceCaptured)
+            {
+                error =
+                    "Git reported success, but exact failed-add rollback evidence could not be captured: " +
+                    rollbackEvidenceError;
+            }
+            else if (TryVerifyAddedSubmodule(
+                         plan,
+                         url,
+                         branch,
+                         out error,
+                         CancellationToken.None))
                 return true;
 
-            if (!TryCleanupFailedAdd(plan, out string rollbackWarning, cancellationToken) &&
+            if (!TryCleanupFailedAdd(plan, out string rollbackWarning, CancellationToken.None) &&
                 !string.IsNullOrWhiteSpace(rollbackWarning))
             {
                 error += " Rollback warning: " + rollbackWarning;
@@ -1472,32 +2195,73 @@ namespace MartinCalander.GitSubmoduleManager.Editor
 
             string normalizedPath = NormalizePath(path);
             string gitModulesPath = Path.Combine(ProjectRoot, ".gitmodules");
-            AddSubmodulePlan preparedPlan;
-            try
+            bool gitModulesExisted = File.Exists(gitModulesPath);
+            byte[] gitModulesContents = Array.Empty<byte>();
+            if (gitModulesExisted &&
+                !TryReadBoundedGitModulesBytes(
+                    gitModulesPath,
+                    out gitModulesContents,
+                    out error,
+                    cancellationToken))
             {
-                cancellationToken.ThrowIfCancellationRequested();
-                bool gitModulesExisted = File.Exists(gitModulesPath);
-                preparedPlan = new AddSubmodulePlan
-                {
-                    Path = normalizedPath,
-                    ExpectedUrl = url?.Trim() ?? string.Empty,
-                    ExpectedSubmoduleName = normalizedPath,
-                    GitModulesExisted = gitModulesExisted,
-                    GitModulesContents = gitModulesExisted
-                        ? File.ReadAllBytes(gitModulesPath)
-                        : Array.Empty<byte>()
-                };
-                cancellationToken.ThrowIfCancellationRequested();
-            }
-            catch (OperationCanceledException)
-            {
-                throw;
-            }
-            catch (Exception ex)
-            {
-                error = $"Failed to capture the pre-add .gitmodules state: {ex.Message}";
                 return false;
             }
+
+            var preparedPlan = new AddSubmodulePlan
+            {
+                Path = normalizedPath,
+                ExpectedUrl = url?.Trim() ?? string.Empty,
+                ExpectedSubmoduleName = normalizedPath,
+                GitModulesExisted = gitModulesExisted,
+                GitModulesContents = gitModulesContents
+            };
+
+            if (!TryReadGitModulesIndexEntry(
+                    out GitModulesIndexEntry gitModulesIndexBefore,
+                    out error,
+                    cancellationToken))
+            {
+                return false;
+            }
+
+            if (preparedPlan.GitModulesExisted != gitModulesIndexBefore.Exists)
+            {
+                error = preparedPlan.GitModulesExisted
+                    ? ".gitmodules is not a regular stage-0 entry in the parent index."
+                    : "A staged .gitmodules entry appeared while the add operation was being prepared.";
+                return false;
+            }
+
+            if (!TryHashGitModulesContents(
+                    preparedPlan.GitModulesContents,
+                    out string baselineBlobId,
+                    out error,
+                    cancellationToken))
+            {
+                return false;
+            }
+
+            if (gitModulesIndexBefore.Exists &&
+                !string.Equals(
+                    gitModulesIndexBefore.ObjectId,
+                    baselineBlobId,
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                error =
+                    "The staged and working copies of .gitmodules changed while the add operation was being prepared.";
+                return false;
+            }
+
+            preparedPlan.GitModulesIndexBefore = gitModulesIndexBefore;
+            preparedPlan.ExpectedGitProducedGitModulesIndex =
+                gitModulesIndexBefore.Exists
+                    ? CloneGitModulesIndexEntry(gitModulesIndexBefore)
+                    : new GitModulesIndexEntry
+                    {
+                        Exists = true,
+                        Mode = "100644",
+                        ObjectId = baselineBlobId
+                    };
             if (!TryResolveSubmoduleGitDir(
                     normalizedPath,
                     out string moduleGitDir,
@@ -1908,15 +2672,34 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             return true;
         }
 
-        internal static bool TryVerifyRepositoryCommitFetchable(
+        internal static bool TryVerifyRepositoryCommitPublished(
+            string repositoryPath,
             string repositoryUrl,
             string commit,
+            out RepositoryCommitPublicationProof proof,
             out string error,
             CancellationToken cancellationToken = default(CancellationToken))
         {
+            proof = null;
             error = string.Empty;
+            string normalizedPath = NormalizePath(repositoryPath);
             string url = repositoryUrl?.Trim() ?? string.Empty;
             string objectId = commit?.Trim() ?? string.Empty;
+            if (!IsPackagePath(normalizedPath))
+            {
+                error =
+                    "The package repository path is not an exact Packages/<package-name> path.";
+                return false;
+            }
+
+            if (!TryValidateExactSubmoduleWorktree(
+                    normalizedPath,
+                    out error,
+                    cancellationToken))
+            {
+                return false;
+            }
+
             if (!IsValidRepositoryUrl(url))
             {
                 error =
@@ -1924,190 +2707,507 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 return false;
             }
 
-            if (!CommitObjectIdRegex.IsMatch(objectId))
+            if (!IsValidGitObjectId(objectId))
             {
                 error = "The package commit is not a verifiable Git object ID.";
                 return false;
             }
 
-            string probesRoot = Path.Combine(
+            cancellationToken.ThrowIfCancellationRequested();
+            string localProtocol = IsLocalRepositoryUrl(url)
+                ? "-c protocol.file.allow=always "
+                : string.Empty;
+            CommandResult advertisedResult = RunGit(
+                $"{localProtocol}ls-remote --heads --tags {Quote(url)}",
                 ProjectRoot,
-                "Library",
-                "GitSubmoduleManager",
-                "FetchProbes");
-            string probePath = Path.Combine(
-                probesRoot,
-                Guid.NewGuid().ToString("N") + ".git");
-            bool cleanupAllowed = true;
-            bool verified = false;
-            OperationCanceledException cancellation = null;
-            try
+                120000,
+                cancellationToken);
+            if (advertisedResult == null ||
+                !advertisedResult.IsSuccess ||
+                !advertisedResult.TerminationConfirmed)
             {
-                verified = TryRunRepositoryCommitFetchProbe(
-                    probesRoot,
-                    probePath,
-                    url,
-                    objectId,
-                    ref cleanupAllowed,
+                error = BuildCommandError(
+                    "The registered repository's advertised branches and tags could not be inspected",
+                    advertisedResult);
+                return false;
+            }
+
+            if (!TryRequireCompleteStructuralOutput(
+                    advertisedResult,
+                    "Remote branch and tag advertisement inspection",
+                    out error) ||
+                !TryParseAdvertisedRefObjectIds(
+                    advertisedResult.StdOut,
+                    out HashSet<string> advertisedObjectIds,
+                    out error))
+            {
+                return false;
+            }
+
+            // Replacement refs and legacy grafts can make a local ref appear
+            // to contain an otherwise unrelated commit. Disable replacements
+            // for the graph query and reject the repository's exact graft file
+            // on both sides of that query so neither mechanism can authorize a
+            // destructive operation.
+            if (!TryEnsureRepositoryGraftsAbsent(
+                    normalizedPath,
                     out error,
-                    cancellationToken);
-            }
-            catch (OperationCanceledException exception)
+                    cancellationToken))
             {
-                cancellation = exception;
+                return false;
             }
-            catch (Exception exception)
+
+            cancellationToken.ThrowIfCancellationRequested();
+            CommandResult containingRefsResult = RunGit(
+                $"--no-replace-objects -C {Quote(normalizedPath)} " +
+                $"for-each-ref --contains={objectId} " +
+                $"--format={Quote("%(objectname)")} refs/heads refs/remotes refs/tags",
+                ProjectRoot,
+                CliCommandRunner.DefaultTimeoutMs,
+                cancellationToken);
+            if (containingRefsResult == null ||
+                !containingRefsResult.IsSuccess ||
+                !containingRefsResult.TerminationConfirmed)
+            {
+                error = BuildCommandError(
+                    "Local refs containing the package HEAD could not be inspected",
+                    containingRefsResult);
+                return false;
+            }
+
+            if (!TryEnsureRepositoryGraftsAbsent(
+                    normalizedPath,
+                    out error,
+                    cancellationToken))
+            {
+                return false;
+            }
+
+            if (!TryRequireCompleteStructuralOutput(
+                    containingRefsResult,
+                    "Local containing-ref inspection",
+                    out error) ||
+                !TryParseObjectIdLines(
+                    containingRefsResult.StdOut,
+                    "local containing-ref",
+                    out HashSet<string> containingObjectIds,
+                    out error))
+            {
+                return false;
+            }
+
+            if (!advertisedObjectIds.Overlaps(containingObjectIds))
             {
                 error =
-                    "The isolated Git fetch probe could not be completed safely: " +
-                    exception.Message;
+                    "The package HEAD could not be proven reachable from a currently " +
+                    "advertised remote branch or tag. Fetch and prune the registered " +
+                    "repository, then retry. If the commit remains unadvertised, push " +
+                    "or otherwise publish it before continuing.";
+                return false;
             }
 
-            bool cleaned = TryCleanupRepositoryCommitFetchProbe(
-                probePath,
-                cleanupAllowed,
-                out string cleanupError);
-            if (!cleaned)
+            // An exact advertised object ID already proves that the serving
+            // repository has HEAD, including when that repository is shallow.
+            // Only descendant-based proofs need protocol-v2 negotiation.
+            if (!advertisedObjectIds.Contains(objectId))
             {
-                error = string.IsNullOrWhiteSpace(error)
-                    ? cleanupError
-                    : error.TrimEnd() + " " + cleanupError;
+                // An advertised descendant is insufficient when the serving
+                // repository itself is shallow: the tip can be advertised even
+                // though this exact commit is absent. Negotiate the exact HEAD
+                // as the sole tip. --negotiate-only prints common object IDs
+                // without downloading a pack or updating refs/FETCH_HEAD.
+                cancellationToken.ThrowIfCancellationRequested();
+                CommandResult remotePresenceResult = RunGit(
+                    $"{localProtocol}--no-replace-objects -C {Quote(normalizedPath)} " +
+                    $"fetch --no-write-fetch-head --no-recurse-submodules " +
+                    $"--negotiate-only --negotiation-tip={objectId} {Quote(url)}",
+                    ProjectRoot,
+                    120000,
+                    cancellationToken);
+                if (remotePresenceResult == null ||
+                    !remotePresenceResult.IsSuccess ||
+                    !remotePresenceResult.TerminationConfirmed)
+                {
+                    if ((remotePresenceResult?.StdErr ?? string.Empty).IndexOf(
+                            "shallow-info",
+                            StringComparison.OrdinalIgnoreCase) >= 0)
+                    {
+                        error =
+                            "The registered repository reported shallow history, so the package HEAD could not be proven present on the remote. Publish the exact commit to a complete remote, then retry.";
+                    }
+                    else
+                    {
+                        error = BuildCommandError(
+                            "The exact package HEAD could not be negotiated with the registered repository",
+                            remotePresenceResult);
+                    }
+
+                    return false;
+                }
+
+                if (remotePresenceResult.StdErrTruncated)
+                {
+                    error =
+                        "Exact remote commit-presence inspection returned truncated Git diagnostics. The operation was blocked because the result could not be verified completely.";
+                    return false;
+                }
+
+                if (!TryRequireCompleteStructuralOutput(
+                        remotePresenceResult,
+                        "Exact remote commit-presence inspection",
+                        out error) ||
+                    !TryParseObjectIdLines(
+                        remotePresenceResult.StdOut,
+                        "remote negotiation",
+                        out HashSet<string> remoteCommonObjectIds,
+                        out error))
+                {
+                    return false;
+                }
+
+                if (!remoteCommonObjectIds.Contains(objectId))
+                {
+                    error =
+                        "The package HEAD could not be proven present in the registered remote repository. Fetch and retry; if the commit remains absent, push or otherwise publish the exact commit before continuing.";
+                    return false;
+                }
             }
 
-            if (cancellation != null)
-                throw cancellation;
-
-            return verified && cleaned;
+            proof = RepositoryCommitPublicationProof.Issue(
+                PublicationProofIssuer,
+                Path.GetFullPath(ProjectRoot),
+                normalizedPath,
+                url,
+                objectId);
+            return true;
         }
 
-        private static bool TryRunRepositoryCommitFetchProbe(
-            string probesRoot,
-            string probePath,
-            string repositoryUrl,
-            string objectId,
-            ref bool cleanupAllowed,
+        private static bool TryEnsureRepositoryGraftsAbsent(
+            string normalizedPath,
             out string error,
             CancellationToken cancellationToken)
         {
             error = string.Empty;
+            if (!TryValidateExactSubmoduleWorktree(
+                    normalizedPath,
+                    out error,
+                    cancellationToken))
+            {
+                return false;
+            }
+
             cancellationToken.ThrowIfCancellationRequested();
-            if (!TryValidateProjectOwnedPath(probesRoot, out error) ||
-                !TryValidateProjectOwnedPath(probePath, out error))
-            {
-                return false;
-            }
-
-            Directory.CreateDirectory(probesRoot);
-            // Revalidate the full random destination after creating its parent
-            // so a symlink/junction swap cannot redirect Git.
-            if (!TryValidateProjectOwnedPath(probesRoot, out error) ||
-                !TryValidateProjectOwnedPath(probePath, out error))
-            {
-                return false;
-            }
-
-            cleanupAllowed = false;
-            CommandResult initResult = RunGit(
-                $"init --bare {Quote(probePath)}",
+            CommandResult gitDirResult = RunGit(
+                $"--no-replace-objects -C {Quote(normalizedPath)} " +
+                "rev-parse --absolute-git-dir",
                 ProjectRoot,
-                30000,
+                5000,
                 cancellationToken);
-            cleanupAllowed = initResult?.TerminationConfirmed == true;
-            if (initResult == null ||
-                !initResult.IsSuccess ||
-                !initResult.TerminationConfirmed)
+            if (gitDirResult == null ||
+                !gitDirResult.IsSuccess ||
+                !gitDirResult.TerminationConfirmed)
             {
                 error = BuildCommandError(
-                    "Failed to create an isolated Git fetch probe",
-                    initResult);
+                    "The package repository Git directory could not be resolved",
+                    gitDirResult);
                 return false;
             }
 
-            // `git init` created the exact directory that subsequent fetch and
-            // cleanup operations will own. Validate it again before either can
-            // follow a redirected filesystem entry.
-            if (!TryValidateProjectOwnedPath(probesRoot, out error) ||
-                !TryValidateProjectOwnedPath(probePath, out error))
+            if (!TryRequireCompleteStructuralOutput(
+                    gitDirResult,
+                    "Package Git-directory inspection",
+                    out error) ||
+                !TryParseSingleStructuralPath(
+                    gitDirResult.StdOut,
+                    out string gitDirValue,
+                    out error))
             {
                 return false;
             }
 
-            string localProtocol = IsLocalRepositoryUrl(repositoryUrl)
-                ? "-c protocol.file.allow=always "
-                : string.Empty;
-            cleanupAllowed = false;
-            CommandResult fetchResult = RunGit(
-                $"{localProtocol}--git-dir {Quote(probePath)} fetch --no-tags --depth=1 {Quote(repositoryUrl)} {Quote(objectId)}",
+            string moduleGitDir;
+            try
+            {
+                if (!Path.IsPathRooted(gitDirValue))
+                {
+                    error =
+                        "Git returned a non-absolute package metadata path for --absolute-git-dir.";
+                    return false;
+                }
+
+                moduleGitDir = Path.GetFullPath(gitDirValue);
+            }
+            catch (Exception exception)
+            {
+                error =
+                    "The package repository Git directory could not be validated safely: " +
+                    exception.Message;
+                return false;
+            }
+
+            if (!TryValidateSubmoduleMetadataPath(
+                    moduleGitDir,
+                    out error,
+                    cancellationToken))
+            {
+                return false;
+            }
+
+            cancellationToken.ThrowIfCancellationRequested();
+            CommandResult graftPathResult = RunGit(
+                $"--no-replace-objects -C {Quote(normalizedPath)} " +
+                $"rev-parse --git-path {Quote("info/grafts")}",
                 ProjectRoot,
-                120000,
+                5000,
                 cancellationToken);
-            cleanupAllowed = fetchResult?.TerminationConfirmed == true;
-            if (fetchResult == null ||
-                !fetchResult.IsSuccess ||
-                !fetchResult.TerminationConfirmed)
+            if (graftPathResult == null ||
+                !graftPathResult.IsSuccess ||
+                !graftPathResult.TerminationConfirmed)
             {
                 error = BuildCommandError(
-                    "The submodule commit cannot be fetched from its registered repository URL",
-                    fetchResult);
+                    "The repository graft path could not be resolved",
+                    graftPathResult);
                 return false;
             }
 
-            cleanupAllowed = false;
-            CommandResult verifyResult = RunGit(
-                $"--git-dir {Quote(probePath)} cat-file -e {Quote(objectId + "^{commit}")}",
-                ProjectRoot,
-                10000,
-                cancellationToken);
-            cleanupAllowed = verifyResult?.TerminationConfirmed == true;
-            if (verifyResult == null ||
-                !verifyResult.IsSuccess ||
-                !verifyResult.TerminationConfirmed)
+            if (!TryRequireCompleteStructuralOutput(
+                    graftPathResult,
+                    "Repository graft-path inspection",
+                    out error) ||
+                !TryParseSingleStructuralPath(
+                    graftPathResult.StdOut,
+                    out string graftPathValue,
+                    out error))
             {
-                error = BuildCommandError(
-                    "The fetched object is not a Git commit",
-                    verifyResult);
                 return false;
+            }
+
+            try
+            {
+                string worktreeRoot = Path.GetFullPath(
+                    Path.Combine(ProjectRoot, normalizedPath));
+                string graftPath = Path.GetFullPath(
+                    Path.IsPathRooted(graftPathValue)
+                        ? graftPathValue
+                        : Path.Combine(worktreeRoot, graftPathValue));
+                string expectedGraftPath = Path.GetFullPath(
+                    Path.Combine(moduleGitDir, "info", "grafts"));
+                StringComparison comparison = RuntimeInformation.IsOSPlatform(OSPlatform.Windows)
+                    ? StringComparison.OrdinalIgnoreCase
+                    : StringComparison.Ordinal;
+                if (!string.Equals(graftPath, expectedGraftPath, comparison))
+                {
+                    error =
+                        "Git resolved an unexpected repository graft path. Publication safety could not be verified.";
+                    return false;
+                }
+
+                if (HasReparsePointBetween(moduleGitDir, graftPath))
+                {
+                    error =
+                        "The repository graft path contains a symbolic link, junction, or other reparse point. Publication safety could not be verified.";
+                    return false;
+                }
+
+                if (!TryInspectFileSystemEntryPresence(
+                        graftPath,
+                        out bool graftEntryExists,
+                        out error,
+                        cancellationToken))
+                {
+                    return false;
+                }
+
+                if (graftEntryExists)
+                {
+                    error =
+                        "The repository contains .git/info/grafts, which can falsify commit ancestry. Remove the grafts entry and retry before converting or removing this package.";
+                    return false;
+                }
+
+                return true;
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (Exception exception)
+            {
+                error =
+                    "The repository graft path could not be validated safely: " +
+                    exception.Message;
+                return false;
+            }
+        }
+
+        private static bool TryParseSingleStructuralPath(
+            string output,
+            out string path,
+            out string error)
+        {
+            path = string.Empty;
+            error = string.Empty;
+            string value = output ?? string.Empty;
+            if (value.EndsWith("\r\n", StringComparison.Ordinal))
+                value = value.Substring(0, value.Length - 2);
+            else if (value.EndsWith("\n", StringComparison.Ordinal))
+                value = value.Substring(0, value.Length - 1);
+
+            if (value.Length == 0 ||
+                value.Length > MaxStructuralPathLength ||
+                value.IndexOfAny(new[] { '\0', '\r', '\n' }) >= 0 ||
+                !string.Equals(value, value.Trim(), StringComparison.Ordinal))
+            {
+                error =
+                    "Git returned an invalid or ambiguous structural path.";
+                return false;
+            }
+
+            path = value;
+            return true;
+        }
+
+        private static bool TryParseAdvertisedRefObjectIds(
+            string output,
+            out HashSet<string> objectIds,
+            out string error)
+        {
+            objectIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            error = string.Empty;
+            var refs = new Dictionary<string, string>(StringComparer.Ordinal);
+            foreach (string rawLine in (output ?? string.Empty).Split('\n'))
+            {
+                string line = rawLine.EndsWith("\r", StringComparison.Ordinal)
+                    ? rawLine.Substring(0, rawLine.Length - 1)
+                    : rawLine;
+                if (line.Length == 0)
+                    continue;
+
+                int separator = line.IndexOf('\t');
+                if (separator <= 0 ||
+                    separator != line.LastIndexOf('\t') ||
+                    separator + 1 >= line.Length)
+                {
+                    error =
+                        "Git returned malformed remote branch or tag advertisement output.";
+                    return false;
+                }
+
+                string objectId = line.Substring(0, separator);
+                string refName = line.Substring(separator + 1);
+                if (!IsValidGitObjectId(objectId) ||
+                    !IsValidAdvertisedRefName(refName) ||
+                    refs.ContainsKey(refName))
+                {
+                    error =
+                        "Git returned invalid or ambiguous remote branch or tag advertisement output.";
+                    return false;
+                }
+
+                refs.Add(refName, objectId);
+                objectIds.Add(objectId);
             }
 
             return true;
         }
 
-        private static bool TryCleanupRepositoryCommitFetchProbe(
-            string probePath,
-            bool cleanupAllowed,
+        private static bool IsValidAdvertisedRefName(string refName)
+        {
+            if (string.IsNullOrWhiteSpace(refName) ||
+                !string.Equals(refName, refName.Trim(), StringComparison.Ordinal) ||
+                refName.Length > MaxBranchNameLength + "refs/heads/".Length + 3)
+            {
+                return false;
+            }
+
+            bool isPeeledTag = refName.EndsWith("^{}", StringComparison.Ordinal);
+            string value = isPeeledTag
+                ? refName.Substring(0, refName.Length - 3)
+                : refName;
+            bool allowedNamespace =
+                value.StartsWith("refs/heads/", StringComparison.Ordinal) ||
+                value.StartsWith("refs/tags/", StringComparison.Ordinal);
+            if (!allowedNamespace ||
+                (isPeeledTag &&
+                 !value.StartsWith("refs/tags/", StringComparison.Ordinal)) ||
+                value.EndsWith("/", StringComparison.Ordinal) ||
+                value.EndsWith(".", StringComparison.Ordinal) ||
+                value.Contains("..") ||
+                value.Contains("@{") ||
+                value.Contains("//") ||
+                value.IndexOfAny(new[] { '~', '^', ':', '?', '*', '[', '\\' }) >= 0)
+            {
+                return false;
+            }
+
+            foreach (char character in value)
+            {
+                if (character <= ' ' || character == 0x7f)
+                    return false;
+            }
+
+            foreach (string segment in value.Split('/'))
+            {
+                if (string.IsNullOrEmpty(segment) ||
+                    string.Equals(segment, ".", StringComparison.Ordinal) ||
+                    string.Equals(segment, "..", StringComparison.Ordinal) ||
+                    segment.EndsWith(".lock", StringComparison.OrdinalIgnoreCase))
+                {
+                    return false;
+                }
+            }
+
+            return true;
+        }
+
+        private static bool TryParseObjectIdLines(
+            string output,
+            string description,
+            out HashSet<string> objectIds,
+            out string error)
+        {
+            objectIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            error = string.Empty;
+            foreach (string rawLine in (output ?? string.Empty).Split('\n'))
+            {
+                string line = rawLine.EndsWith("\r", StringComparison.Ordinal)
+                    ? rawLine.Substring(0, rawLine.Length - 1)
+                    : rawLine;
+                if (line.Length == 0)
+                    continue;
+                if (!IsValidGitObjectId(line))
+                {
+                    error = $"Git returned an invalid {description} object ID.";
+                    objectIds.Clear();
+                    return false;
+                }
+
+                objectIds.Add(line);
+            }
+
+            return true;
+        }
+
+        private static bool PublicationProofMatches(
+            RepositoryCommitPublicationProof proof,
+            SubmoduleRemovalAssessment assessment,
             out string error)
         {
             error = string.Empty;
-            if (!Directory.Exists(probePath))
-                return true;
-
-            if (!cleanupAllowed)
+            if (proof == null || assessment == null ||
+                !proof.Matches(
+                    PublicationProofIssuer,
+                    Path.GetFullPath(ProjectRoot),
+                    assessment.Path,
+                    assessment.ResolvedRepositoryUrl,
+                    assessment.HeadCommit))
             {
                 error =
-                    "An isolated fetch probe was preserved under Library because " +
-                    "Git process-tree termination could not be confirmed. Restart " +
-                    "the Editor before inspecting or removing it: " + probePath;
+                    "The repository publication proof does not match the exact package path, URL, and commit immediately before removal.";
                 return false;
             }
 
-            // Delete only this GUID-named probe after validating its current
-            // filesystem chain once more. Never recursively clean the shared
-            // FetchProbes parent.
-            if (!TryValidateProjectOwnedPath(probePath, out error))
-                return false;
-
-            try
-            {
-                Directory.Delete(probePath, true);
-                return true;
-            }
-            catch (Exception exception)
-            {
-                error =
-                    "The isolated fetch probe could not be cleaned safely and " +
-                    "was preserved for manual inspection: " + exception.Message;
-                return false;
-            }
+            return true;
         }
 
         internal static bool TryRemoveSubmodule(string path, out string error)
@@ -2161,6 +3261,25 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             string path,
             SubmoduleRemovalAssessment confirmedAssessment,
             bool discardLocalWork,
+            out string error,
+            out GitOperationCompletionOutcome outcome,
+            CancellationToken cancellationToken = default(CancellationToken))
+        {
+            return TryRemoveSubmodule(
+                path,
+                confirmedAssessment,
+                discardLocalWork,
+                null,
+                out error,
+                out outcome,
+                cancellationToken);
+        }
+
+        internal static bool TryRemoveSubmodule(
+            string path,
+            SubmoduleRemovalAssessment confirmedAssessment,
+            bool discardLocalWork,
+            RepositoryCommitPublicationProof publicationProof,
             out string error,
             out GitOperationCompletionOutcome outcome,
             CancellationToken cancellationToken = default(CancellationToken))
@@ -2220,6 +3339,73 @@ namespace MartinCalander.GitSubmoduleManager.Editor
 
             assessment = finalAssessment;
 
+            // Local tracking refs are cached state and can be stale or
+            // fabricated. A clean ordinary removal therefore proves that an
+            // exact containing ref is currently advertised by the registered
+            // remote. Conversion passes the opaque proof it already obtained,
+            // avoiding a second network query while still binding removal to
+            // this exact path, URL, project, and commit.
+            if (assessment.IsInitialized && publicationProof != null)
+            {
+                if (!PublicationProofMatches(
+                        publicationProof,
+                        assessment,
+                        out error))
+                {
+                    return false;
+                }
+            }
+            else if (assessment.IsInitialized &&
+                     !assessment.HasLocalOnlyCommits)
+            {
+                if (!TryVerifyRepositoryCommitPublished(
+                        assessment.Path,
+                        assessment.ResolvedRepositoryUrl,
+                        assessment.HeadCommit,
+                        out RepositoryCommitPublicationProof verifiedProof,
+                        out string publicationError,
+                        cancellationToken))
+                {
+                    error =
+                        "Removal was blocked because local remote-tracking refs do not prove " +
+                        "that the package HEAD is published. " + publicationError;
+                    return false;
+                }
+
+                // The bounded network query can still take long enough for
+                // worktree, gitlink, registration, URL, or HEAD state to
+                // change. Capture the complete removal snapshot again after
+                // it returns and require an exact match before preparing any
+                // mutation.
+                cancellationToken.ThrowIfCancellationRequested();
+                if (!TryAssessSubmoduleRemoval(
+                        normalizedPath,
+                        out SubmoduleRemovalAssessment postProofAssessment,
+                        out error,
+                        cancellationToken))
+                {
+                    return false;
+                }
+
+                if (!RemovalAssessmentMatches(assessment, postProofAssessment))
+                {
+                    error =
+                        "The package or parent repository changed during remote publication verification. " +
+                        "Nothing was removed; review the current state and retry.";
+                    return false;
+                }
+
+                if (!PublicationProofMatches(
+                        verifiedProof,
+                        postProofAssessment,
+                        out error))
+                {
+                    return false;
+                }
+
+                assessment = postProofAssessment;
+            }
+
             if (!TryPrepareGitModulesRemoval(
                     normalizedPath,
                     out RemoveSubmoduleGitModulesPlan gitModulesPlan,
@@ -2227,45 +3413,77 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                     cancellationToken))
                 return false;
 
-            // A staged or unstaged gitlink revision makes plain `git rm`
-            // refuse even after the child worktree has been proven safe. Force
-            // only the parent-index removal in that case; dirty, untracked,
-            // ignored, and local-only child work still require explicit discard.
-            string force = discardLocalWork || assessment.HasOnlyParentGitlinkChanges
-                ? "-f "
-                : string.Empty;
-            outcome = GitOperationCompletionOutcome.FailedUnsafe;
-            var rmResult = RunGit(
-                $"rm {force}-- {Quote(normalizedPath)}",
-                root,
-                CliCommandRunner.DefaultTimeoutMs,
-                cancellationToken);
-            if (!rmResult.IsSuccess)
-            {
-                error = BuildCommandError(
-                    "Git did not complete the removal. No manual metadata deletion was attempted; inspect the repository before retrying",
-                    rmResult);
-                return false;
-            }
-
+            // Bind the exact preparation snapshot back to the complete removal
+            // assessment. The later binary patch carries the captured full
+            // blobs and remains conditional under Git's index lock.
             cancellationToken.ThrowIfCancellationRequested();
-            if (!TryApplyGitModulesRemoval(gitModulesPlan, out error, cancellationToken))
+            if (!TryAssessSubmoduleRemoval(
+                    normalizedPath,
+                    out SubmoduleRemovalAssessment preparedAssessment,
+                    out error,
+                    cancellationToken))
+                return false;
+            if (!RemovalAssessmentMatches(assessment, preparedAssessment))
             {
                 error =
-                    "The parent gitlink was removed, but .gitmodules could not be restored without changing unrelated content. " +
-                    error;
+                    "The package or parent repository changed while the exact removal mutation was being prepared. " +
+                    "Nothing was removed; review the current state and retry.";
                 return false;
             }
 
-            cancellationToken.ThrowIfCancellationRequested();
+            if (!TryPrepareExactSubmoduleRegistrationRemoval(
+                    gitModulesPlan.Path,
+                    gitModulesPlan.ExpectedGitlinkObjectId,
+                    gitModulesPlan.OriginalContents,
+                    gitModulesPlan.GitModulesIndexBefore,
+                    gitModulesPlan.ExpectedContents,
+                    gitModulesPlan.DesiredGitModulesIndex,
+                    false,
+                    "submodule removal",
+                    out ExactSubmoduleRegistrationRemovalPlan exactRemovalPlan,
+                    out error,
+                    cancellationToken))
+                return false;
+
+            outcome = GitOperationCompletionOutcome.FailedUnsafe;
+            if (!TryApplyExactSubmoduleRegistrationRemoval(
+                    exactRemovalPlan,
+                    "submodule removal",
+                    out string recoveryNotice,
+                    out error,
+                    cancellationToken))
+                return false;
+
+            afterExactSubmoduleRemovalForTests?.Invoke(
+                Path.Combine(root, normalizedPath));
+
+            // The exact mutation deliberately becomes non-cancellable once it
+            // moves recovery data. Complete its postconditions and Unity
+            // handoff even if the caller cancelled while that critical
+            // section was running.
+            CancellationToken postMutationToken = CancellationToken.None;
+            if (!TryVerifyExactSubmoduleRemovalClosingState(
+                    exactRemovalPlan,
+                    out string initialClosingError,
+                    postMutationToken))
+            {
+                error = JoinRecoveryNotices(
+                    initialClosingError,
+                    recoveryNotice);
+                return false;
+            }
+
             var trackedResult = RunGit(
                 $"ls-files --error-unmatch -- {Quote(normalizedPath)}",
                 root,
                 CliCommandRunner.DefaultTimeoutMs,
-                cancellationToken);
+                postMutationToken);
             if (trackedResult.IsSuccess)
             {
-                error = "Git reported success, but the submodule is still present in the parent index. Recovery metadata was preserved; inspect the repository before retrying.";
+                error =
+                    "Git reported success, but the submodule is still present in the parent index. " +
+                    "Recovery metadata was preserved; inspect the repository before retrying. " +
+                    recoveryNotice;
                 return false;
             }
 
@@ -2273,25 +3491,35 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             {
                 error = BuildCommandError(
                     "The submodule was removed, but its parent-index postcondition could not be verified. Recovery metadata was preserved",
-                    trackedResult);
+                    trackedResult) + " " + recoveryNotice;
                 return false;
             }
 
-            cancellationToken.ThrowIfCancellationRequested();
-            if (!TryFindSubmoduleNameForPath(
-                    normalizedPath,
-                    out _,
-                    out bool isStillRegistered,
-                    out string configError,
-                    cancellationToken))
+            bool isStillRegistered = false;
+            if (exactRemovalPlan.DesiredGitModulesIndex.Exists &&
+                (!TryReadGitModulesBlobConfig(
+                     exactRemovalPlan.DesiredGitModulesIndex.ObjectId,
+                     "Exact removal staged-registration postcondition",
+                     out Dictionary<string, string> closingConfig,
+                     out string configError,
+                     postMutationToken) ||
+                 !TryFindSubmoduleRegistrationForPath(
+                     closingConfig,
+                     normalizedPath,
+                     out _,
+                     out isStillRegistered,
+                     out configError)))
             {
-                error = configError;
+                error = JoinRecoveryNotices(configError, recoveryNotice);
                 return false;
             }
 
             if (isStillRegistered)
             {
-                error = "The parent index was updated, but .gitmodules still registers the package. Recovery metadata was preserved; inspect the repository before retrying.";
+                error =
+                    "The parent index was updated, but the exact staged .gitmodules blob still registers the package. " +
+                    "Recovery metadata was preserved; inspect the repository before retrying. " +
+                    recoveryNotice;
                 return false;
             }
 
@@ -2299,16 +3527,26 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             if (!TryVerifyFileSystemEntryAbsent(
                     removedWorktreePath,
                     out string absenceError,
-                    cancellationToken))
+                    postMutationToken))
             {
                 error =
                     "Git removed the parent registration, but package worktree absence could not be verified. " +
                     "It was preserved for manual review instead of reporting a completed removal. " +
-                    absenceError;
+                    absenceError + " " + recoveryNotice;
+                return false;
+            }
+
+            if (!TryVerifyExactSubmoduleRemovalClosingState(
+                    exactRemovalPlan,
+                    out string closingError,
+                    postMutationToken))
+            {
+                error = JoinRecoveryNotices(closingError, recoveryNotice);
                 return false;
             }
 
             outcome = GitOperationCompletionOutcome.Succeeded;
+            error = recoveryNotice;
             return true;
         }
 
@@ -2421,13 +3659,14 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 return false;
             }
 
+            CancellationToken postQuarantineToken = CancellationToken.None;
             // The default submodule name is its path. Preserve any partially-created
             // object database in Library instead of recursively deleting recoverable data.
             string metadataName = string.IsNullOrEmpty(submoduleName) ? normalizedPath : submoduleName;
             if (!TryQuarantineSubmoduleMetadata(
                     metadataName,
                     out string metadataNotice,
-                    cancellationToken))
+                    postQuarantineToken))
             {
                 warning = JoinRecoveryNotices(worktreeNotice, metadataNotice);
                 return false;
@@ -2706,10 +3945,35 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             out string error,
             CancellationToken cancellationToken = default(CancellationToken))
         {
+            return TryVerifyAddedSubmodule(
+                plan,
+                expectedUrl,
+                expectedBranch,
+                string.Empty,
+                out error,
+                cancellationToken);
+        }
+
+        internal static bool TryVerifyAddedSubmodule(
+            AddSubmodulePlan plan,
+            string expectedUrl,
+            string expectedBranch,
+            string expectedCommit,
+            out string error,
+            CancellationToken cancellationToken = default(CancellationToken))
+        {
             error = string.Empty;
             if (plan == null || !IsPackagePath(plan.Path))
             {
                 error = "The add verification plan is invalid.";
+                return false;
+            }
+
+            string commit = expectedCommit?.Trim() ?? string.Empty;
+            if (!string.IsNullOrEmpty(commit) && !IsValidGitObjectId(commit))
+            {
+                error =
+                    "The exact inspected Git commit for add verification is invalid.";
                 return false;
             }
 
@@ -2719,7 +3983,41 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                     out error))
                 return false;
 
+            if (!string.IsNullOrWhiteSpace(plan.ExpectedUrl) &&
+                !AreRepositoryUrlsEquivalent(
+                    plan.ExpectedUrl,
+                    expectedUrl))
+            {
+                error =
+                    "The add verification URL does not match the repository captured by the prepared operation.";
+                return false;
+            }
+
+            if (!string.IsNullOrWhiteSpace(plan.ExpectedBranch) &&
+                !string.Equals(
+                    plan.ExpectedBranch,
+                    expectedBranch?.Trim() ?? string.Empty,
+                    StringComparison.Ordinal))
+            {
+                error =
+                    "The add verification branch does not match the branch captured by the prepared operation.";
+                return false;
+            }
+
             string normalizedPath = NormalizePath(plan.Path);
+            if (!TryReadAddedSubmoduleIndexSnapshot(
+                    normalizedPath,
+                    out AddedSubmoduleIndexSnapshot registrationSnapshot,
+                    out error,
+                    cancellationToken) ||
+                !TryValidateAddedSubmoduleWorktreeGitModules(
+                    registrationSnapshot,
+                    out error,
+                    cancellationToken))
+            {
+                return false;
+            }
+
             if (!TryFindSubmoduleNameForPath(
                     normalizedPath,
                     out string submoduleName,
@@ -2730,6 +4028,17 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             if (!isRegistered || string.IsNullOrWhiteSpace(submoduleName))
             {
                 error = ".gitmodules does not contain the expected package registration after Git reported success.";
+                return false;
+            }
+
+            if (!string.IsNullOrWhiteSpace(plan.ExpectedSubmoduleName) &&
+                !string.Equals(
+                    plan.ExpectedSubmoduleName,
+                    submoduleName,
+                    StringComparison.Ordinal))
+            {
+                error =
+                    ".gitmodules registered the package under a different submodule identity than the prepared add operation.";
                 return false;
             }
 
@@ -2778,7 +4087,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                     return false;
                 }
             }
-            else if (branchResult.IsSuccess && !string.IsNullOrWhiteSpace(branchResult.StdOut))
+            else if (branchResult.IsSuccess)
             {
                 error = "The added submodule unexpectedly registered a branch when no branch was approved.";
                 return false;
@@ -2786,55 +4095,6 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             else if (!branchResult.IsSuccess && branchResult.ExitCode != 1)
             {
                 error = BuildCommandError("Failed to verify that the added submodule has no tracked branch", branchResult);
-                return false;
-            }
-
-            var indexResult = RunGit(
-                $"ls-files --stage -- {Quote(normalizedPath)}",
-                ProjectRoot,
-                5000,
-                cancellationToken);
-            if (!TryRequireCompleteStructuralOutput(
-                    indexResult,
-                    "Added package gitlink verification",
-                    out error))
-                return false;
-
-            if (!indexResult.IsSuccess || string.IsNullOrWhiteSpace(indexResult.StdOut))
-            {
-                error = BuildCommandError("The added package gitlink is missing from the parent index", indexResult);
-                return false;
-            }
-
-            Match indexMatch = Regex.Match(
-                indexResult.StdOut.Trim(),
-                @"^160000\s+([0-9a-fA-F]{40,64})\s+0\t(.+)$",
-                RegexOptions.CultureInvariant);
-            if (!indexMatch.Success ||
-                !string.Equals(NormalizePath(indexMatch.Groups[2].Value), normalizedPath, StringComparison.Ordinal))
-            {
-                error = "The parent index entry for the added package is not a valid submodule gitlink.";
-                return false;
-            }
-
-            var headResult = RunGit(
-                $"-C {Quote(normalizedPath)} rev-parse --verify HEAD",
-                ProjectRoot,
-                5000,
-                cancellationToken);
-            if (!TryRequireCompleteStructuralOutput(
-                    headResult,
-                    "Added package commit verification",
-                    out error))
-                return false;
-
-            if (!headResult.IsSuccess ||
-                !string.Equals(
-                    headResult.StdOut.Trim(),
-                    indexMatch.Groups[1].Value,
-                    StringComparison.OrdinalIgnoreCase))
-            {
-                error = "The package worktree HEAD does not match the commit staged in the parent gitlink.";
                 return false;
             }
 
@@ -2850,7 +4110,707 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 return false;
             }
 
-            return TryVerifySubmoduleClean(normalizedPath, out error, cancellationToken);
+            if (!TryVerifySubmoduleClean(
+                    normalizedPath,
+                    out error,
+                    cancellationToken))
+                return false;
+
+            var originPlan = new AddSubmodulePlan
+            {
+                Path = normalizedPath,
+                ExpectedUrl = expectedUrl.Trim(),
+                ExpectedSubmoduleName = submoduleName
+            };
+            if (!TryResolveApprovedInitializedUrl(
+                    originPlan,
+                    out string approvedOriginUrl,
+                    out error,
+                    cancellationToken))
+                return false;
+
+            // Bind .gitmodules and the gitlink to one parent-index snapshot,
+            // then prove the child origin and HEAD against that snapshot. The
+            // repeated terminal reads make a late stage-only redirect, origin
+            // swap, or commit swap fail closed instead of being reported as a
+            // successful installation.
+            if (!TryReadAddedSubmoduleIndexSnapshot(
+                    normalizedPath,
+                    out AddedSubmoduleIndexSnapshot firstSnapshot,
+                    out error,
+                    cancellationToken) ||
+                !AddedSubmoduleIndexSnapshotsEqual(
+                    registrationSnapshot,
+                    firstSnapshot) ||
+                !TryValidateAddedSubmoduleStagedRegistration(
+                    firstSnapshot,
+                    normalizedPath,
+                    submoduleName,
+                    expectedUrl,
+                    branch,
+                    out error,
+                    cancellationToken) ||
+                !TryValidateAddedSubmoduleWorktreeGitModules(
+                    firstSnapshot,
+                    out error,
+                    cancellationToken) ||
+                !TryReadAndValidateAddedSubmoduleOrigin(
+                    normalizedPath,
+                    approvedOriginUrl,
+                    out string firstOrigin,
+                    out error,
+                    cancellationToken) ||
+                !TryReadAndValidateAddedSubmoduleHead(
+                    normalizedPath,
+                    firstSnapshot.GitlinkObjectId,
+                    commit,
+                    out string firstHead,
+                    out error,
+                    cancellationToken) ||
+                !TryRunQuietCheck(
+                    "diff --quiet -- .gitmodules",
+                    "The staged and working copies of .gitmodules differ after the add operation.",
+                    out error,
+                    cancellationToken))
+            {
+                if (string.IsNullOrWhiteSpace(error))
+                {
+                    error =
+                        "The staged .gitmodules registration or package gitlink changed during initial add verification.";
+                }
+                return false;
+            }
+
+            beforeAddedSubmoduleTerminalProofForTests?.Invoke(normalizedPath);
+
+            if (!TryReadAddedSubmoduleIndexSnapshot(
+                    normalizedPath,
+                    out AddedSubmoduleIndexSnapshot secondSnapshot,
+                    out error,
+                    cancellationToken) ||
+                !AddedSubmoduleIndexSnapshotsEqual(
+                    firstSnapshot,
+                    secondSnapshot))
+            {
+                if (string.IsNullOrWhiteSpace(error))
+                {
+                    error =
+                        "The staged .gitmodules registration or package gitlink changed during final add verification.";
+                }
+                return false;
+            }
+
+            if (!TryReadAndValidateAddedSubmoduleOrigin(
+                    normalizedPath,
+                    approvedOriginUrl,
+                    out string secondOrigin,
+                    out error,
+                    cancellationToken) ||
+                !string.Equals(
+                    firstOrigin,
+                    secondOrigin,
+                    StringComparison.Ordinal) ||
+                !TryReadAndValidateAddedSubmoduleHead(
+                    normalizedPath,
+                    secondSnapshot.GitlinkObjectId,
+                    commit,
+                    out string secondHead,
+                    out error,
+                    cancellationToken) ||
+                !string.Equals(
+                    firstHead,
+                    secondHead,
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                if (string.IsNullOrWhiteSpace(error))
+                {
+                    error =
+                        "The package origin or HEAD changed during final add verification.";
+                }
+                return false;
+            }
+
+            if (!TryReadAddedSubmoduleIndexSnapshot(
+                    normalizedPath,
+                    out AddedSubmoduleIndexSnapshot terminalOpeningSnapshot,
+                    out error,
+                    cancellationToken) ||
+                !AddedSubmoduleIndexSnapshotsEqual(
+                    firstSnapshot,
+                    terminalOpeningSnapshot) ||
+                !TryReadAndValidateAddedSubmoduleHead(
+                    normalizedPath,
+                    terminalOpeningSnapshot.GitlinkObjectId,
+                    commit,
+                    out string terminalOpeningHead,
+                    out error,
+                    cancellationToken) ||
+                !string.Equals(
+                    firstHead,
+                    terminalOpeningHead,
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                if (string.IsNullOrWhiteSpace(error))
+                {
+                    error =
+                        "The staged registration or package commit changed before the terminal origin proof.";
+                }
+                return false;
+            }
+
+            beforeAddedSubmoduleTerminalOriginForTests?.Invoke(normalizedPath);
+
+            if (!TryReadAndValidateAddedSubmoduleOrigin(
+                    normalizedPath,
+                    approvedOriginUrl,
+                    out string terminalOrigin,
+                    out error,
+                    cancellationToken) ||
+                !string.Equals(
+                    firstOrigin,
+                    terminalOrigin,
+                    StringComparison.Ordinal))
+            {
+                if (string.IsNullOrWhiteSpace(error))
+                    error = "The package origin changed at the terminal add-verification boundary.";
+                return false;
+            }
+
+            beforeAddedSubmoduleClosingProofForTests?.Invoke(normalizedPath);
+
+            if (!TryGetInterruptedRepositoryOperation(
+                    normalizedPath,
+                    out string closingInterruptedOperation,
+                    out error,
+                    cancellationToken))
+            {
+                return false;
+            }
+            if (!string.IsNullOrEmpty(closingInterruptedOperation))
+            {
+                error =
+                    $"The added package entered an unfinished {closingInterruptedOperation} operation during final verification.";
+                return false;
+            }
+            if (!TryVerifySubmoduleClean(
+                    normalizedPath,
+                    out error,
+                    cancellationToken))
+            {
+                return false;
+            }
+
+            if (!TryReadAddedSubmoduleIndexSnapshot(
+                    normalizedPath,
+                    out AddedSubmoduleIndexSnapshot closingSnapshot,
+                    out error,
+                    cancellationToken) ||
+                !AddedSubmoduleIndexSnapshotsEqual(
+                    firstSnapshot,
+                    closingSnapshot) ||
+                !TryReadAndValidateAddedSubmoduleHead(
+                    normalizedPath,
+                    closingSnapshot.GitlinkObjectId,
+                    commit,
+                    out string closingHead,
+                    out error,
+                    cancellationToken) ||
+                !string.Equals(
+                    firstHead,
+                    closingHead,
+                    StringComparison.OrdinalIgnoreCase) ||
+                !TryReadAndValidateAddedSubmoduleOrigin(
+                    normalizedPath,
+                    approvedOriginUrl,
+                    out string closingOrigin,
+                    out error,
+                    cancellationToken) ||
+                !string.Equals(
+                    firstOrigin,
+                    closingOrigin,
+                    StringComparison.Ordinal) ||
+                !TryValidateAddedSubmoduleWorktreeGitModules(
+                    closingSnapshot,
+                    out error,
+                    cancellationToken) ||
+                !TryRunQuietCheck(
+                    "diff --quiet -- .gitmodules",
+                    "The staged and working copies of .gitmodules changed during final add verification.",
+                    out error,
+                    cancellationToken))
+            {
+                if (string.IsNullOrWhiteSpace(error))
+                {
+                    error =
+                        "The staged registration, package commit, or .gitmodules worktree changed while closing final add verification.";
+                }
+                return false;
+            }
+
+            return true;
+        }
+
+        internal static bool TryReadAddedSubmoduleIndexSnapshot(
+            string normalizedPath,
+            out AddedSubmoduleIndexSnapshot snapshot,
+            out string error,
+            CancellationToken cancellationToken)
+        {
+            snapshot = null;
+            error = string.Empty;
+            normalizedPath = NormalizePath(normalizedPath);
+            if (!IsPackagePath(normalizedPath))
+            {
+                error = "The package path for final add verification is invalid.";
+                return false;
+            }
+
+            var result = RunGit(
+                $"ls-files --stage -- .gitmodules {Quote(normalizedPath)}",
+                ProjectRoot,
+                5000,
+                cancellationToken);
+            if (!TryRequireCompleteStructuralOutput(
+                    result,
+                    "Added submodule parent-index snapshot",
+                    out error))
+                return false;
+            if (!result.IsSuccess)
+            {
+                error = BuildCommandError(
+                    "Failed to inspect the added submodule parent-index state",
+                    result);
+                return false;
+            }
+
+            string output = (result.StdOut ?? string.Empty)
+                .TrimEnd('\r', '\n');
+            string[] lines = output.Length == 0
+                ? Array.Empty<string>()
+                : output.Split(new[] { '\n' }, StringSplitOptions.None);
+            if (lines.Length != 2)
+            {
+                error =
+                    "Final add verification requires exactly one stage-0 .gitmodules blob and one package gitlink in the same parent-index snapshot.";
+                return false;
+            }
+
+            var gitModules = new GitModulesIndexEntry();
+            string gitlinkObjectId = string.Empty;
+            foreach (string rawLine in lines)
+            {
+                string line = rawLine.TrimEnd('\r');
+                Match match = Regex.Match(
+                    line,
+                    @"^(100644|100755|160000)\s+([0-9a-fA-F]{40}|[0-9a-fA-F]{64})\s+([0-3])\t(.+)$",
+                    RegexOptions.CultureInvariant);
+                if (!match.Success ||
+                    !string.Equals(
+                        match.Groups[3].Value,
+                        "0",
+                        StringComparison.Ordinal) ||
+                    !IsValidGitObjectId(match.Groups[2].Value))
+                {
+                    error =
+                        "The added package parent-index snapshot contains a conflict, malformed object ID, or unsupported entry mode.";
+                    return false;
+                }
+
+                string entryPath = NormalizePath(match.Groups[4].Value);
+                string mode = match.Groups[1].Value;
+                string objectId = match.Groups[2].Value.ToLowerInvariant();
+                if (string.Equals(entryPath, ".gitmodules", StringComparison.Ordinal) &&
+                    (string.Equals(mode, "100644", StringComparison.Ordinal) ||
+                     string.Equals(mode, "100755", StringComparison.Ordinal)) &&
+                    !gitModules.Exists)
+                {
+                    gitModules.Exists = true;
+                    gitModules.Mode = mode;
+                    gitModules.ObjectId = objectId;
+                    continue;
+                }
+
+                if (string.Equals(entryPath, normalizedPath, StringComparison.Ordinal) &&
+                    string.Equals(mode, "160000", StringComparison.Ordinal) &&
+                    string.IsNullOrEmpty(gitlinkObjectId))
+                {
+                    gitlinkObjectId = objectId;
+                    continue;
+                }
+
+                error =
+                    "The added package parent-index snapshot did not contain exactly the expected .gitmodules entry and package gitlink.";
+                return false;
+            }
+
+            if (!gitModules.Exists || string.IsNullOrEmpty(gitlinkObjectId))
+            {
+                error =
+                    "The staged .gitmodules registration or package gitlink is missing after Git reported a successful add.";
+                return false;
+            }
+
+            snapshot = new AddedSubmoduleIndexSnapshot
+            {
+                GitModules = gitModules,
+                GitlinkObjectId = gitlinkObjectId
+            };
+            return true;
+        }
+
+        internal static bool TryCaptureFailedAddRollbackEvidence(
+            AddSubmodulePlan plan,
+            string expectedGitlinkObjectId,
+            out string error,
+            CancellationToken cancellationToken = default(CancellationToken))
+        {
+            error = string.Empty;
+            if (plan == null ||
+                !IsPackagePath(plan.Path) ||
+                string.IsNullOrWhiteSpace(plan.ExpectedSubmoduleName) ||
+                !IsValidGitObjectId(expectedGitlinkObjectId) ||
+                !IsValidGitModulesIndexEntry(plan.GitModulesIndexBefore))
+            {
+                error =
+                    "The failed-add rollback evidence is incomplete or invalid. " +
+                    "Automatic cleanup was not authorized.";
+                return false;
+            }
+
+            string normalizedPath = NormalizePath(plan.Path);
+            if (!TryReadAddedSubmoduleIndexSnapshot(
+                    normalizedPath,
+                    out AddedSubmoduleIndexSnapshot snapshot,
+                    out error,
+                    cancellationToken))
+            {
+                return false;
+            }
+
+            string expectedGitlink = expectedGitlinkObjectId.Trim();
+            if (!string.Equals(
+                    snapshot.GitlinkObjectId,
+                    expectedGitlink,
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                error =
+                    "The package gitlink does not match the exact commit produced and approved for this add operation. " +
+                    "The current registration was preserved for recovery.";
+                return false;
+            }
+
+            if (!string.Equals(
+                    snapshot.GitModules.Mode,
+                    "100644",
+                    StringComparison.Ordinal))
+            {
+                error =
+                    "The added .gitmodules entry is not a regular non-executable stage-0 file. " +
+                    "Automatic cleanup was not authorized.";
+                return false;
+            }
+
+            string gitModulesPath = Path.Combine(ProjectRoot, ".gitmodules");
+            if (!TryReadBoundedGitModulesBytes(
+                    gitModulesPath,
+                    out byte[] addedContents,
+                    out error,
+                    cancellationToken) ||
+                !TryResolveExactGitModulesIndexBytes(
+                    addedContents,
+                    snapshot.GitModules.ObjectId,
+                    out _,
+                    out error,
+                    cancellationToken))
+            {
+                return false;
+            }
+
+            if (!TryRemoveSubmoduleSectionContents(
+                    addedContents,
+                    plan.ExpectedSubmoduleName,
+                    out byte[] contentsWithoutAddedSection,
+                    out error) ||
+                !contentsWithoutAddedSection.SequenceEqual(
+                    plan.GitModulesContents ?? Array.Empty<byte>()))
+            {
+                if (string.IsNullOrWhiteSpace(error))
+                {
+                    error =
+                        "Removing only the added package registration does not reproduce the exact pre-add .gitmodules bytes. " +
+                        "Concurrent or unrelated registration data was preserved.";
+                }
+                return false;
+            }
+
+            plan.AddedGitModulesContents = addedContents;
+            plan.AddedIndexSnapshot = new AddedSubmoduleIndexSnapshot
+            {
+                GitModules = CloneGitModulesIndexEntry(snapshot.GitModules),
+                GitlinkObjectId = snapshot.GitlinkObjectId
+            };
+            error = string.Empty;
+            return true;
+        }
+
+        private static bool AddedSubmoduleIndexSnapshotsEqual(
+            AddedSubmoduleIndexSnapshot left,
+            AddedSubmoduleIndexSnapshot right)
+        {
+            return left != null &&
+                   right != null &&
+                   GitModulesIndexEntriesEqual(
+                       left.GitModules,
+                       right.GitModules) &&
+                   string.Equals(
+                       left.GitlinkObjectId,
+                       right.GitlinkObjectId,
+                       StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static bool TryValidateAddedSubmoduleStagedRegistration(
+            AddedSubmoduleIndexSnapshot snapshot,
+            string normalizedPath,
+            string expectedSubmoduleName,
+            string expectedUrl,
+            string expectedBranch,
+            out string error,
+            CancellationToken cancellationToken)
+        {
+            error = string.Empty;
+            if (snapshot?.GitModules == null ||
+                !snapshot.GitModules.Exists ||
+                !IsValidGitObjectId(snapshot.GitModules.ObjectId))
+            {
+                error =
+                    "The staged .gitmodules identity is missing from final add verification.";
+                return false;
+            }
+
+            if (!TryReadGitModulesBlobConfig(
+                    snapshot.GitModules.ObjectId,
+                    "Added submodule staged-registration verification",
+                    out Dictionary<string, string> config,
+                    out error,
+                    cancellationToken) ||
+                !TryFindSubmoduleRegistrationForPath(
+                    config,
+                    normalizedPath,
+                    out string stagedSubmoduleName,
+                    out bool found,
+                    out error))
+            {
+                return false;
+            }
+
+            if (!found ||
+                !string.Equals(
+                    stagedSubmoduleName,
+                    expectedSubmoduleName,
+                    StringComparison.Ordinal))
+            {
+                error =
+                    "The staged .gitmodules blob does not contain the exact submodule registration produced for this add operation.";
+                return false;
+            }
+
+            string prefix = "submodule." + stagedSubmoduleName + ".";
+            if (!config.TryGetValue(prefix + "url", out string stagedUrl) ||
+                !TryValidateExistingRepositoryUrl(
+                    stagedUrl,
+                    "The staged added-submodule URL",
+                    out error) ||
+                !AreRepositoryUrlsEquivalent(stagedUrl, expectedUrl))
+            {
+                if (string.IsNullOrWhiteSpace(error))
+                {
+                    error =
+                        "The staged .gitmodules URL does not match the repository approved for this add operation.";
+                }
+                return false;
+            }
+
+            bool hasStagedBranch = config.TryGetValue(
+                prefix + "branch",
+                out string stagedBranch);
+            if (string.IsNullOrEmpty(expectedBranch))
+            {
+                if (hasStagedBranch)
+                {
+                    error =
+                        "The staged .gitmodules registration contains a branch when none was approved.";
+                    return false;
+                }
+            }
+            else if (!hasStagedBranch ||
+                     !string.Equals(
+                         stagedBranch,
+                         expectedBranch,
+                         StringComparison.Ordinal))
+            {
+                error =
+                    "The staged .gitmodules branch does not match the branch approved for this add operation.";
+                return false;
+            }
+
+            return true;
+        }
+
+        private static bool TryValidateAddedSubmoduleWorktreeGitModules(
+            AddedSubmoduleIndexSnapshot snapshot,
+            out string error,
+            CancellationToken cancellationToken)
+        {
+            error = string.Empty;
+            if (snapshot?.GitModules == null ||
+                !snapshot.GitModules.Exists ||
+                !IsValidGitObjectId(snapshot.GitModules.ObjectId))
+            {
+                error =
+                    "The staged .gitmodules identity is missing from worktree verification.";
+                return false;
+            }
+
+            string path = Path.Combine(ProjectRoot, ".gitmodules");
+            if (!TryReadBoundedGitModulesBytes(
+                    path,
+                    out byte[] contents,
+                    out error,
+                    cancellationToken))
+                return false;
+
+            try
+            {
+                StrictUtf8Encoding.GetString(contents);
+            }
+            catch (DecoderFallbackException exception)
+            {
+                error =
+                    ".gitmodules is not valid UTF-8 during final add verification: " +
+                    exception.Message;
+                return false;
+            }
+
+            if (!TryHashGitModulesContentsWithoutFilters(
+                    contents,
+                    out string rawObjectId,
+                    out error,
+                    cancellationToken))
+                return false;
+
+            if (!string.Equals(
+                    rawObjectId,
+                    snapshot.GitModules.ObjectId,
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                error =
+                    "The regular .gitmodules worktree file does not match the exact staged blob, or a clean/smudge filter changes its identity.";
+                return false;
+            }
+
+            return true;
+        }
+
+        private static bool TryReadAndValidateAddedSubmoduleOrigin(
+            string normalizedPath,
+            string approvedOriginUrl,
+            out string originUrl,
+            out string error,
+            CancellationToken cancellationToken)
+        {
+            originUrl = string.Empty;
+            error = string.Empty;
+            var result = RunGit(
+                $"-C {Quote(normalizedPath)} remote get-url --all origin",
+                ProjectRoot,
+                5000,
+                cancellationToken);
+            if (!TryRequireCompleteStructuralOutput(
+                    result,
+                    "Added package origin verification",
+                    out error))
+                return false;
+            if (!result.IsSuccess)
+            {
+                error = BuildCommandError(
+                    "Failed to verify the added package origin URL",
+                    result);
+                return false;
+            }
+
+            string output = (result.StdOut ?? string.Empty).Trim();
+            if (string.IsNullOrWhiteSpace(output) ||
+                output.IndexOf('\r') >= 0 ||
+                output.IndexOf('\n') >= 0 ||
+                !TryValidateExistingRepositoryUrl(
+                    output,
+                    "The added package origin URL",
+                    out error) ||
+                !AreRepositoryUrlsEquivalent(output, approvedOriginUrl))
+            {
+                if (string.IsNullOrWhiteSpace(error))
+                {
+                    error =
+                        "The added package origin URL does not match the repository approved for this add operation.";
+                }
+                return false;
+            }
+
+            originUrl = output;
+            return true;
+        }
+
+        private static bool TryReadAndValidateAddedSubmoduleHead(
+            string normalizedPath,
+            string gitlinkObjectId,
+            string expectedCommit,
+            out string headCommit,
+            out string error,
+            CancellationToken cancellationToken)
+        {
+            headCommit = string.Empty;
+            error = string.Empty;
+            var result = RunGit(
+                $"-C {Quote(normalizedPath)} rev-parse --verify HEAD^{{commit}}",
+                ProjectRoot,
+                5000,
+                cancellationToken);
+            if (!TryRequireCompleteStructuralOutput(
+                    result,
+                    "Added package commit verification",
+                    out error))
+                return false;
+
+            string output = result.StdOut?.Trim() ?? string.Empty;
+            if (!result.IsSuccess || !IsValidGitObjectId(output))
+            {
+                error = "The package worktree HEAD is not a valid Git commit.";
+                return false;
+            }
+
+            if (!string.Equals(
+                    output,
+                    gitlinkObjectId,
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                error =
+                    "The package worktree HEAD does not match the commit staged in the parent gitlink.";
+                return false;
+            }
+
+            if (!string.IsNullOrEmpty(expectedCommit) &&
+                !string.Equals(
+                    output,
+                    expectedCommit,
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                error =
+                    "The package worktree HEAD and parent gitlink do not match the exact inspected Git commit.";
+                return false;
+            }
+
+            headCommit = output.ToLowerInvariant();
+            return true;
         }
 
         private static bool TryRollbackAddedSubmodule(
@@ -2860,56 +4820,87 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         {
             warning = string.Empty;
             string normalizedPath = NormalizePath(plan.Path);
-            if (!TryFindSubmoduleNameForPath(
+            AddedSubmoduleIndexSnapshot addedSnapshot = plan.AddedIndexSnapshot;
+            byte[] addedGitModulesContents =
+                plan.AddedGitModulesContents ?? Array.Empty<byte>();
+            if (addedSnapshot?.GitModules == null ||
+                !addedSnapshot.GitModules.Exists ||
+                !IsValidGitObjectId(addedSnapshot.GitlinkObjectId) ||
+                addedGitModulesContents.Length == 0)
+            {
+                warning =
+                    "The exact add-produced gitlink and .gitmodules evidence is missing. " +
+                    "The current registration was preserved for manual recovery.";
+                return false;
+            }
+
+            if (!TryRemoveSubmoduleSectionContents(
+                    addedGitModulesContents,
+                    plan.ExpectedSubmoduleName,
+                    out byte[] contentsWithoutAddedSection,
+                    out warning) ||
+                !contentsWithoutAddedSection.SequenceEqual(
+                    plan.GitModulesContents ?? Array.Empty<byte>()))
+            {
+                if (string.IsNullOrWhiteSpace(warning))
+                {
+                    warning =
+                        "Removing only the add-produced package registration no longer reproduces the exact pre-add .gitmodules bytes. " +
+                        "Unrelated registration data was preserved.";
+                }
+                return false;
+            }
+
+            string submoduleName = plan.ExpectedSubmoduleName;
+            if (string.IsNullOrWhiteSpace(submoduleName))
+            {
+                warning =
+                    "The prepared add operation did not retain its exact submodule identity. " +
+                    "The current registration was preserved for manual recovery.";
+                return false;
+            }
+
+            if (!TryPrepareExactSubmoduleRegistrationRemoval(
                     normalizedPath,
-                    out string submoduleName,
-                    out _,
+                    addedSnapshot.GitlinkObjectId,
+                    addedGitModulesContents,
+                    addedSnapshot.GitModules,
+                    plan.GitModulesContents,
+                    plan.GitModulesIndexBefore,
+                    true,
+                    "failed-add rollback",
+                    out ExactSubmoduleRegistrationRemovalPlan exactRollbackPlan,
                     out warning,
                     cancellationToken))
                 return false;
 
-            cancellationToken.ThrowIfCancellationRequested();
-            if (!TryQuarantineFailedWorktree(
-                    normalizedPath,
-                    out string worktreeNotice,
+            if (!TryApplyExactSubmoduleRegistrationRemoval(
+                    exactRollbackPlan,
+                    "failed-add rollback",
+                    out string recoveryNotice,
+                    out warning,
                     cancellationToken))
             {
-                warning = worktreeNotice;
+                warning = JoinRecoveryNotices(recoveryNotice, warning);
                 return false;
             }
 
-            cancellationToken.ThrowIfCancellationRequested();
-            var removeResult = RunGit(
-                $"rm -f -- {Quote(normalizedPath)}",
-                ProjectRoot,
-                CliCommandRunner.DefaultTimeoutMs,
-                cancellationToken);
-            if (!removeResult.IsSuccess)
-            {
-                warning = BuildCommandError(
-                    "Failed to roll back the submodule registration. The worktree was preserved for recovery",
-                    removeResult) + " " + worktreeNotice;
-                return false;
-            }
-
-            cancellationToken.ThrowIfCancellationRequested();
-            if (!TryRestoreGitModulesBaseline(plan, out string baselineError, cancellationToken))
-            {
-                warning = JoinRecoveryNotices(worktreeNotice, baselineError);
-                return false;
-            }
+            // The exact mutation quarantined recovery data and changed the
+            // parent index. Complete all postconditions and metadata handoff
+            // even if the caller cancelled during that critical section.
+            CancellationToken postMutationToken = CancellationToken.None;
 
             var pathStatus = RunGit(
                 $"status --porcelain=v2 --untracked-files=all -- {Quote(normalizedPath)}",
                 ProjectRoot,
                 CliCommandRunner.DefaultTimeoutMs,
-                cancellationToken);
+                postMutationToken);
             if (!TryRequireCompleteStructuralOutput(
                     pathStatus,
                     "Failed-add rollback path inspection",
                     out warning))
             {
-                warning = JoinRecoveryNotices(worktreeNotice, warning);
+                warning = JoinRecoveryNotices(recoveryNotice, warning);
                 return false;
             }
 
@@ -2918,7 +4909,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 warning = !pathStatus.IsSuccess
                     ? BuildCommandError("The add rollback could not verify the parent index", pathStatus)
                     : "The add rollback left an unexpected parent-index or worktree change at the package path.";
-                warning = JoinRecoveryNotices(worktreeNotice, warning);
+                warning = JoinRecoveryNotices(recoveryNotice, warning);
                 return false;
             }
 
@@ -2926,13 +4917,13 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             if (!TryQuarantineSubmoduleMetadata(
                     metadataName,
                     out string metadataNotice,
-                    cancellationToken))
+                    postMutationToken))
             {
-                warning = JoinRecoveryNotices(worktreeNotice, metadataNotice);
+                warning = JoinRecoveryNotices(recoveryNotice, metadataNotice);
                 return false;
             }
 
-            warning = JoinRecoveryNotices(worktreeNotice, metadataNotice);
+            warning = JoinRecoveryNotices(recoveryNotice, metadataNotice);
             return true;
         }
 
@@ -2948,26 +4939,21 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 cancellationToken.ThrowIfCancellationRequested();
                 if (plan.GitModulesExisted)
                 {
-                    if (!File.Exists(gitModulesPath) ||
-                        !File.ReadAllBytes(gitModulesPath).SequenceEqual(plan.GitModulesContents ?? Array.Empty<byte>()))
+                    if (!TryReadBoundedGitModulesBytes(
+                            gitModulesPath,
+                            out byte[] currentContents,
+                            out error,
+                            cancellationToken) ||
+                        !currentContents.SequenceEqual(
+                            plan.GitModulesContents ?? Array.Empty<byte>()))
                     {
-                        error =
-                            ".gitmodules no longer matches its pre-add contents. It may contain a concurrent edit, so it was not overwritten.";
+                        if (string.IsNullOrWhiteSpace(error))
+                        {
+                            error =
+                                ".gitmodules no longer matches its pre-add contents. It may contain a concurrent edit, so it was not overwritten.";
+                        }
                         return false;
                     }
-                }
-                else if (File.Exists(gitModulesPath))
-                {
-                    cancellationToken.ThrowIfCancellationRequested();
-                    byte[] current = File.ReadAllBytes(gitModulesPath);
-                    if (current.Any(value => !char.IsWhiteSpace((char)value)))
-                    {
-                        error =
-                            ".gitmodules was created with unexpected non-empty content during rollback. It was preserved for manual review.";
-                        return false;
-                    }
-
-                    File.Delete(gitModulesPath);
                 }
             }
             catch (OperationCanceledException)
@@ -2980,17 +4966,24 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 return false;
             }
 
-            cancellationToken.ThrowIfCancellationRequested();
-            var resetResult = RunGit(
-                "reset -- .gitmodules",
-                ProjectRoot,
-                CliCommandRunner.DefaultTimeoutMs,
-                cancellationToken);
-            if (!resetResult.IsSuccess)
+            if (!plan.GitModulesExisted &&
+                !TryQuarantineGitModulesCleanupEntry(
+                    plan.GitModulesContents ?? Array.Empty<byte>(),
+                    "failed-add rollback",
+                    out error,
+                    cancellationToken))
             {
-                error = BuildCommandError("Failed to restore the pre-add .gitmodules index state", resetResult);
                 return false;
             }
+
+            if (!TryCompareAndRestoreGitModulesIndexEntry(
+                    plan.ExpectedGitProducedGitModulesIndex,
+                    plan.GitModulesIndexBefore,
+                    !plan.GitModulesExisted,
+                    "failed-add rollback",
+                    out error,
+                    cancellationToken))
+                return false;
 
             var statusResult = RunGit(
                 "status --porcelain=v2 --untracked-files=all -- .gitmodules",
@@ -3023,6 +5016,19 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             out string notice,
             CancellationToken cancellationToken)
         {
+            return TryQuarantineSubmoduleWorktree(
+                normalizedPath,
+                "failed-add cleanup",
+                out notice,
+                cancellationToken);
+        }
+
+        private static bool TryQuarantineSubmoduleWorktree(
+            string normalizedPath,
+            string operationDescription,
+            out string notice,
+            CancellationToken cancellationToken)
+        {
             notice = string.Empty;
             try
             {
@@ -3035,14 +5041,15 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                     : StringComparison.Ordinal;
                 if (!packagePath.StartsWith(packagesRoot + Path.DirectorySeparatorChar, comparison))
                 {
-                    notice = "Refusing to move a failed-add worktree that resolves outside the project's Packages directory.";
+                    notice =
+                        $"Refusing to move the package worktree during {operationDescription} because it resolves outside the project's Packages directory.";
                     return false;
                 }
 
                 if (HasReparsePointBetween(packagesRoot, packagePath))
                 {
                     notice =
-                        "Refusing to move a failed-add worktree through a symbolic link or junction. Preserve and inspect it manually.";
+                        $"Refusing to move the package worktree during {operationDescription} through a symbolic link or junction. Preserve and inspect it manually.";
                     return false;
                 }
 
@@ -3059,6 +5066,12 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                     return false;
                 }
                 Directory.CreateDirectory(recoveryRoot);
+                if (HasReparsePointBetween(projectRoot, fullRecoveryRoot))
+                {
+                    notice =
+                        "The recovery directory changed to a symbolic link or junction while it was being prepared.";
+                    return false;
+                }
                 string safeName = Regex.Replace(normalizedPath, @"[^A-Za-z0-9._-]+", "-").Trim('-');
                 if (string.IsNullOrEmpty(safeName))
                     safeName = "submodule";
@@ -3066,12 +5079,15 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                     recoveryRoot,
                     $"{DateTime.UtcNow:yyyyMMdd-HHmmssfff}-{safeName}-{Guid.NewGuid():N}-worktree");
                 cancellationToken.ThrowIfCancellationRequested();
+                if (!TryValidateProjectOwnedPath(destination, out notice))
+                    return false;
                 if (Directory.Exists(packagePath))
                     Directory.Move(packagePath, destination);
                 else
                     File.Move(packagePath, destination);
 
-                notice = $"The failed-add worktree was preserved at {destination}.";
+                notice =
+                    $"The package worktree from {operationDescription} was preserved at {destination}.";
                 return true;
             }
             catch (OperationCanceledException)
@@ -3080,7 +5096,8 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             }
             catch (Exception ex)
             {
-                notice = $"The failed-add worktree could not be preserved safely: {ex.Message}";
+                notice =
+                    $"The package worktree could not be preserved safely during {operationDescription}: {ex.Message}";
                 return false;
             }
         }
@@ -3223,16 +5240,15 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                     Path.AltDirectorySeparatorChar) + Path.DirectorySeparatorChar;
                 if (!candidate.StartsWith(prefix, comparison))
                 {
-                    error = "The recovery path resolves outside the Unity project root.";
+                    error = "The path resolves outside the Unity project root.";
                     return false;
                 }
 
                 if (HasReparsePointBetween(projectRoot, candidate))
                 {
                     error =
-                        "The recovery path contains a symbolic link, junction, or other reparse point. " +
-                        "Repository operations are blocked until the Git Submodule Manager recovery directory " +
-                        "under Library is a normal project-local directory.";
+                        "The path contains a symbolic link, junction, or other reparse point. " +
+                        "Repository operations are blocked until it is a normal project-local path.";
                     return false;
                 }
 
@@ -3240,7 +5256,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             }
             catch (Exception ex)
             {
-                error = $"Failed to validate the project recovery path: {ex.Message}";
+                error = $"Failed to validate the project-owned path: {ex.Message}";
                 return false;
             }
         }
@@ -3320,14 +5336,55 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                     return false;
                 }
                 Directory.CreateDirectory(recoveryRoot);
+                afterSubmoduleMetadataRecoveryRootCreateForTests?.Invoke(
+                    recoveryRoot);
+                if (HasReparsePointBetween(
+                        fullProjectRoot,
+                        fullRecoveryRoot))
+                {
+                    warning =
+                        "The recovery directory changed to a symbolic link or junction while metadata quarantine was being prepared.";
+                    return false;
+                }
                 string safeName = Regex.Replace(submoduleName, @"[^A-Za-z0-9._-]+", "-").Trim('-');
                 if (string.IsNullOrEmpty(safeName))
                     safeName = "submodule";
                 string destination = Path.Combine(
                     recoveryRoot,
-                    $"{DateTime.UtcNow:yyyyMMdd-HHmmssfff}-{safeName}");
+                    $"{DateTime.UtcNow:yyyyMMdd-HHmmssfff}-{safeName}-{Guid.NewGuid():N}-metadata");
                 cancellationToken.ThrowIfCancellationRequested();
+                if (HasReparsePointBetween(modulesRoot, moduleGitDir) ||
+                    !TryValidateSubmoduleMetadataPath(
+                        moduleGitDir,
+                        out warning,
+                        cancellationToken))
+                {
+                    if (string.IsNullOrWhiteSpace(warning))
+                    {
+                        warning =
+                            "The submodule metadata path changed while recovery quarantine was being prepared.";
+                    }
+                    return false;
+                }
+
+                beforeSubmoduleMetadataMoveForTests?.Invoke(recoveryRoot);
+                cancellationToken.ThrowIfCancellationRequested();
+                if (HasReparsePointBetween(
+                        fullProjectRoot,
+                        fullRecoveryRoot) ||
+                    !TryValidateProjectOwnedPath(destination, out warning))
+                {
+                    if (string.IsNullOrWhiteSpace(warning))
+                    {
+                        warning =
+                            "The recovery directory changed to a symbolic link or junction immediately before metadata quarantine.";
+                    }
+                    return false;
+                }
+
                 Directory.Move(moduleGitDir, destination);
+                warning =
+                    $"Recoverable Git metadata was preserved at {destination}.";
                 return true;
             }
             catch (OperationCanceledException)
@@ -3367,12 +5424,39 @@ namespace MartinCalander.GitSubmoduleManager.Editor
 
             try
             {
-                string modulesRootValue = modulesRootResult.StdOut.Trim();
-                string modulesRoot = Path.GetFullPath(
+                if (!TryParseSingleStructuralPath(
+                        modulesRootResult.StdOut,
+                        out string modulesRootValue,
+                        out error))
+                {
+                    return false;
+                }
+
+                string lexicalModulesRoot = Path.GetFullPath(
                     Path.IsPathRooted(modulesRootValue)
                         ? modulesRootValue
                         : Path.Combine(ProjectRoot, modulesRootValue));
-                string candidate = Path.GetFullPath(moduleGitDir);
+                string lexicalCandidate = Path.GetFullPath(moduleGitDir);
+                if (!TryCanonicalizePathThroughExistingAncestor(
+                        lexicalModulesRoot,
+                        out string modulesRoot,
+                        cancellationToken) ||
+                    !TryCanonicalizePathThroughExistingAncestor(
+                        lexicalCandidate,
+                        out string candidate,
+                        cancellationToken))
+                {
+                    error =
+                        "The Git modules directory and submodule metadata path could not be resolved to existing filesystem locations.";
+                    return false;
+                }
+
+                modulesRoot = modulesRoot.TrimEnd(
+                    Path.DirectorySeparatorChar,
+                    Path.AltDirectorySeparatorChar);
+                candidate = candidate.TrimEnd(
+                    Path.DirectorySeparatorChar,
+                    Path.AltDirectorySeparatorChar);
                 string prefix = modulesRoot.TrimEnd(
                     Path.DirectorySeparatorChar,
                     Path.AltDirectorySeparatorChar) + Path.DirectorySeparatorChar;
@@ -3385,7 +5469,33 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                     return false;
                 }
 
-                if (HasReparsePointBetween(modulesRoot, candidate))
+                // Git can canonicalize an OS alias above the repository (for
+                // example macOS /var -> /private/var) in --absolute-git-dir.
+                // Compare canonical identities, but reconstruct the candidate
+                // below the lexical modules root before checking links so an
+                // internal symlink/junction is not hidden by realpath.
+                string relativeCandidate = candidate.Substring(prefix.Length);
+                string lexicalTraversalCandidate = Path.GetFullPath(
+                    Path.Combine(lexicalModulesRoot, relativeCandidate));
+                if (!TryCanonicalizePathThroughExistingAncestor(
+                        lexicalTraversalCandidate,
+                        out string reconstructedCandidate,
+                        cancellationToken) ||
+                    !string.Equals(
+                        reconstructedCandidate.TrimEnd(
+                            Path.DirectorySeparatorChar,
+                            Path.AltDirectorySeparatorChar),
+                        candidate,
+                        comparison))
+                {
+                    error =
+                        "The submodule metadata path could not be reproduced safely below Git's modules directory.";
+                    return false;
+                }
+
+                if (HasReparsePointBetween(
+                        lexicalModulesRoot,
+                        lexicalTraversalCandidate))
                 {
                     error =
                         "The submodule metadata path contains a symbolic link, junction, or other reparse point. " +
@@ -3400,6 +5510,75 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             }
 
             return true;
+        }
+
+        private static bool TryCanonicalizePathThroughExistingAncestor(
+            string path,
+            out string canonicalPath,
+            CancellationToken cancellationToken)
+        {
+            canonicalPath = string.Empty;
+            try
+            {
+                string current = Path.GetFullPath(path);
+                var missingSegments = new Stack<string>();
+                while (!PathExists(current))
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    if (!TryInspectFileSystemEntryPresence(
+                            current,
+                            out bool entryExists,
+                            out _,
+                            cancellationToken) ||
+                        entryExists)
+                    {
+                        // An entry that exists lexically but cannot be followed
+                        // can be a broken link or inaccessible reparse point.
+                        return false;
+                    }
+
+                    string segment = Path.GetFileName(current);
+                    string parent = Path.GetDirectoryName(current);
+                    if (string.IsNullOrEmpty(segment) ||
+                        string.IsNullOrEmpty(parent) ||
+                        string.Equals(parent, current, StringComparison.Ordinal))
+                    {
+                        return false;
+                    }
+
+                    missingSegments.Push(segment);
+                    current = parent;
+                }
+
+                if (!Directory.Exists(current) ||
+                    !ProcessCommandRunner.TryCanonicalizeExistingPath(
+                        current,
+                        out canonicalPath))
+                {
+                    canonicalPath = string.Empty;
+                    return false;
+                }
+
+                while (missingSegments.Count > 0)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    canonicalPath = Path.Combine(
+                        canonicalPath,
+                        missingSegments.Pop());
+                }
+
+                canonicalPath = Path.GetFullPath(canonicalPath);
+                return Path.IsPathRooted(canonicalPath);
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch
+            {
+                canonicalPath = string.Empty;
+                return false;
+            }
         }
 
         internal static bool TryResolveSubmoduleGitDir(
@@ -4396,6 +6575,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 @"^160000\s+([0-9a-fA-F]{40,64})\s+0\t(.+)$",
                 RegexOptions.CultureInvariant);
             if (!match.Success ||
+                !IsValidGitObjectId(match.Groups[1].Value) ||
                 !string.Equals(
                     NormalizePath(match.Groups[2].Value),
                     normalizedPath,
@@ -4434,6 +6614,11 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         internal static string BuildReadSubmoduleHeadArguments(string path)
         {
             return $"-C {Quote(NormalizePath(path))} rev-parse --verify HEAD";
+        }
+
+        internal static string BuildReadSubmoduleHeadCommitArguments(string path)
+        {
+            return $"-C {Quote(NormalizePath(path))} rev-parse --verify HEAD^{{commit}}";
         }
 
         internal static bool TryResolveSubmoduleRemoteTarget(
@@ -5318,7 +7503,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 }
 
                 string objectId = objectIdResult.StdOut?.Trim() ?? string.Empty;
-                if (!CommitObjectIdRegex.IsMatch(objectId))
+                if (!IsValidGitObjectId(objectId))
                 {
                     error = "Git returned an invalid .gitmodules blob identifier.";
                     return false;
@@ -5677,20 +7862,42 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 return false;
             }
 
-            byte[] currentContents;
-            try
+            if (!TryReadGitModulesIndexEntry(
+                    out GitModulesIndexEntry gitModulesIndexBefore,
+                    out error,
+                    cancellationToken) ||
+                !gitModulesIndexBefore.Exists)
             {
-                cancellationToken.ThrowIfCancellationRequested();
-                currentContents = File.ReadAllBytes(Path.Combine(ProjectRoot, ".gitmodules"));
-                cancellationToken.ThrowIfCancellationRequested();
+                if (string.IsNullOrWhiteSpace(error))
+                {
+                    error =
+                        ".gitmodules is not a regular stage-0 entry in the parent index.";
+                }
+                return false;
             }
-            catch (OperationCanceledException)
+
+            if (!TryReadBoundedGitModulesBytes(
+                    Path.Combine(ProjectRoot, ".gitmodules"),
+                    out byte[] currentContents,
+                    out error,
+                    cancellationToken))
+                return false;
+
+            if (!TryHashGitModulesContents(
+                    currentContents,
+                    out string currentBlobId,
+                    out error,
+                    cancellationToken) ||
+                !string.Equals(
+                    gitModulesIndexBefore.ObjectId,
+                    currentBlobId,
+                    StringComparison.OrdinalIgnoreCase))
             {
-                throw;
-            }
-            catch (Exception ex)
-            {
-                error = $"Failed to capture .gitmodules before removal: {ex.Message}";
+                if (string.IsNullOrWhiteSpace(error))
+                {
+                    error =
+                        "The staged and working copies of .gitmodules changed while removal was being prepared.";
+                }
                 return false;
             }
 
@@ -5698,6 +7905,18 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                     currentContents,
                     submoduleName,
                     out byte[] expectedContents,
+                    out error))
+                return false;
+
+            var gitlinkResult = RunGit(
+                $"ls-files --stage -- {Quote(normalizedPath)}",
+                ProjectRoot,
+                5000,
+                cancellationToken);
+            if (!TryParseGitlink(
+                    gitlinkResult,
+                    normalizedPath,
+                    out string expectedGitlinkObjectId,
                     out error))
                 return false;
 
@@ -5734,12 +7953,48 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 return false;
             }
 
+            bool desiredGitModulesExists =
+                expectedContents.Length != 0 ||
+                string.Equals(headEntry, ".gitmodules", StringComparison.Ordinal);
+            GitModulesIndexEntry desiredGitModulesIndex;
+            if (desiredGitModulesExists)
+            {
+                if (!TryHashGitModulesContents(
+                        expectedContents,
+                        out string desiredBlobId,
+                        out error,
+                        cancellationToken))
+                    return false;
+
+                desiredGitModulesIndex = new GitModulesIndexEntry
+                {
+                    Exists = true,
+                    Mode = gitModulesIndexBefore.Mode,
+                    ObjectId = desiredBlobId
+                };
+            }
+            else
+            {
+                desiredGitModulesIndex = new GitModulesIndexEntry();
+            }
+
             plan = new RemoveSubmoduleGitModulesPlan
             {
+                Path = normalizedPath,
+                ExpectedGitlinkObjectId = expectedGitlinkObjectId,
                 ExistedInHead = string.Equals(headEntry, ".gitmodules", StringComparison.Ordinal),
+                OriginalContents = currentContents,
                 ExpectedContents = expectedContents,
                 ExpectedGitProducedContents = expectedGitProducedContents,
-                ExpectedGitProducedBlobId = expectedGitProducedBlobId
+                ExpectedGitProducedBlobId = expectedGitProducedBlobId,
+                GitModulesIndexBefore = gitModulesIndexBefore,
+                DesiredGitModulesIndex = desiredGitModulesIndex,
+                ExpectedGitProducedGitModulesIndex = new GitModulesIndexEntry
+                {
+                    Exists = true,
+                    Mode = gitModulesIndexBefore.Mode,
+                    ObjectId = expectedGitProducedBlobId
+                }
             };
             return true;
         }
@@ -5772,7 +8027,8 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                     lockedWorktreeStream?.Dispose();
                     lockedWorktreeStream = null;
                     if (!TryQuarantineGitModulesCleanupEntry(
-                            plan,
+                            plan.ExpectedGitProducedContents,
+                            "last-submodule removal",
                             out error,
                             cancellationToken))
                         return false;
@@ -5795,16 +8051,14 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                         return false;
                     }
 
-                    var resetResult = RunGit(
-                        "reset -- .gitmodules",
-                        ProjectRoot,
-                        CliCommandRunner.DefaultTimeoutMs,
-                        cancellationToken);
-                    if (!resetResult.IsSuccess)
-                    {
-                        error = BuildCommandError("Failed to remove the newly-created empty .gitmodules entry", resetResult);
+                    if (!TryCompareAndRestoreGitModulesIndexEntry(
+                            plan.ExpectedGitProducedGitModulesIndex,
+                            new GitModulesIndexEntry(),
+                            true,
+                            "last-submodule removal",
+                            out error,
+                            cancellationToken))
                         return false;
-                    }
 
                     var trackedResult = RunGit(
                         "ls-files --error-unmatch -- .gitmodules",
@@ -5875,9 +8129,15 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             try
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                if (!File.ReadAllBytes(gitModulesPath).SequenceEqual(plan.ExpectedContents))
+                if (!TryReadBoundedGitModulesBytes(
+                        gitModulesPath,
+                        out byte[] currentContents,
+                        out error,
+                        cancellationToken) ||
+                    !currentContents.SequenceEqual(plan.ExpectedContents))
                 {
-                    error = ".gitmodules changed while its verified removal result was being staged.";
+                    if (string.IsNullOrWhiteSpace(error))
+                        error = ".gitmodules changed while its verified removal result was being staged.";
                     return false;
                 }
             }
@@ -5898,6 +8158,628 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 cancellationToken);
         }
 
+        private static bool TryPrepareExactSubmoduleRegistrationRemoval(
+            string normalizedPath,
+            string expectedGitlinkObjectId,
+            byte[] expectedGitModulesContents,
+            GitModulesIndexEntry expectedGitModulesIndex,
+            byte[] desiredGitModulesContents,
+            GitModulesIndexEntry desiredGitModulesIndex,
+            bool requireInitializedHeadMatch,
+            string operationDescription,
+            out ExactSubmoduleRegistrationRemovalPlan plan,
+            out string error,
+            CancellationToken cancellationToken)
+        {
+            plan = null;
+            error = string.Empty;
+            normalizedPath = NormalizePath(normalizedPath);
+            expectedGitModulesContents = expectedGitModulesContents ?? Array.Empty<byte>();
+            desiredGitModulesContents = desiredGitModulesContents ?? Array.Empty<byte>();
+            if (!IsPackagePath(normalizedPath) ||
+                !IsValidGitModulesIndexEntry(expectedGitModulesIndex) ||
+                !expectedGitModulesIndex.Exists ||
+                !IsValidGitModulesIndexEntry(desiredGitModulesIndex))
+            {
+                error =
+                    $"The {operationDescription} exact-index evidence is incomplete or invalid. " +
+                    "No registration was changed.";
+                return false;
+            }
+
+            // Recreating executable .gitmodules worktree entries portably would
+            // require a second, platform-specific filesystem mutation. Fail
+            // closed instead; Git creates and stages this file as 100644.
+            if (!string.Equals(
+                    expectedGitModulesIndex.Mode,
+                    "100644",
+                    StringComparison.Ordinal) ||
+                (desiredGitModulesIndex.Exists &&
+                 !string.Equals(
+                     desiredGitModulesIndex.Mode,
+                     "100644",
+                     StringComparison.Ordinal)))
+            {
+                error =
+                    ".gitmodules has an executable index mode. Automatic removal was blocked because its mode cannot be restored portably.";
+                return false;
+            }
+
+            cancellationToken.ThrowIfCancellationRequested();
+            var gitlinkResult = RunGit(
+                $"ls-files --stage -- {Quote(normalizedPath)}",
+                ProjectRoot,
+                5000,
+                cancellationToken);
+            if (!TryParseGitlink(
+                    gitlinkResult,
+                    normalizedPath,
+                    out string currentGitlinkObjectId,
+                    out error))
+                return false;
+
+            if (!string.IsNullOrWhiteSpace(expectedGitlinkObjectId) &&
+                (!IsValidGitObjectId(expectedGitlinkObjectId) ||
+                 !string.Equals(
+                     currentGitlinkObjectId,
+                     expectedGitlinkObjectId,
+                     StringComparison.OrdinalIgnoreCase)))
+            {
+                error =
+                    $"The package gitlink changed while {operationDescription} was being prepared. " +
+                    "The replacement index entry was preserved.";
+                return false;
+            }
+
+            if (requireInitializedHeadMatch)
+            {
+                var headResult = RunGit(
+                    $"-C {Quote(normalizedPath)} rev-parse --verify HEAD^{{commit}}",
+                    ProjectRoot,
+                    5000,
+                    cancellationToken);
+                if (!TryRequireCompleteStructuralOutput(
+                        headResult,
+                        $"{operationDescription} worktree HEAD inspection",
+                        out error))
+                    return false;
+                string headObjectId = headResult.StdOut?.Trim() ?? string.Empty;
+                if (!headResult.IsSuccess ||
+                    !IsValidGitObjectId(headObjectId) ||
+                    !string.Equals(
+                        currentGitlinkObjectId,
+                        headObjectId,
+                        StringComparison.OrdinalIgnoreCase))
+                {
+                    error =
+                        $"The package worktree HEAD no longer matches the exact parent gitlink during {operationDescription}. " +
+                        "Nothing was removed.";
+                    return false;
+                }
+            }
+
+            if (!TryReadGitModulesIndexEntry(
+                    out GitModulesIndexEntry currentGitModulesIndex,
+                    out error,
+                    cancellationToken) ||
+                !GitModulesIndexEntriesEqual(
+                    currentGitModulesIndex,
+                    expectedGitModulesIndex))
+            {
+                if (string.IsNullOrWhiteSpace(error))
+                {
+                    error =
+                        $".gitmodules changed in the parent index while {operationDescription} was being prepared. " +
+                        "The concurrent staged data was preserved.";
+                }
+                return false;
+            }
+
+            string gitModulesPath = Path.Combine(ProjectRoot, ".gitmodules");
+            try
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                if (!File.Exists(gitModulesPath) ||
+                    Directory.Exists(gitModulesPath) ||
+                    (File.GetAttributes(gitModulesPath) & FileAttributes.ReparsePoint) != 0)
+                {
+                    error =
+                        ".gitmodules is no longer one regular worktree file. The registration was preserved.";
+                    return false;
+                }
+
+                if (!TryReadBoundedGitModulesBytes(
+                        gitModulesPath,
+                        out byte[] currentGitModulesContents,
+                        out error,
+                        cancellationToken) ||
+                    !currentGitModulesContents.SequenceEqual(
+                        expectedGitModulesContents))
+                {
+                    if (string.IsNullOrWhiteSpace(error))
+                    {
+                        error =
+                            $".gitmodules changed in the worktree while {operationDescription} was being prepared. " +
+                            "The concurrent bytes were preserved.";
+                    }
+                    return false;
+                }
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (Exception exception)
+            {
+                error =
+                    $"Failed to verify .gitmodules before {operationDescription}: {exception.Message}";
+                return false;
+            }
+
+            if (!TryResolveExactGitModulesIndexBytes(
+                    expectedGitModulesContents,
+                    expectedGitModulesIndex.ObjectId,
+                    out byte[] expectedGitModulesIndexContents,
+                    out error,
+                    cancellationToken))
+            {
+                return false;
+            }
+
+            byte[] desiredGitModulesIndexContents = Array.Empty<byte>();
+            string rawDesiredObjectId;
+            if (desiredGitModulesIndex.Exists)
+            {
+                if (!TryResolveExactGitModulesIndexBytes(
+                        desiredGitModulesContents,
+                        desiredGitModulesIndex.ObjectId,
+                        out desiredGitModulesIndexContents,
+                        out error,
+                        cancellationToken))
+                {
+                    return false;
+                }
+
+                rawDesiredObjectId = desiredGitModulesIndex.ObjectId;
+            }
+            else if (!TryHashGitModulesContentsWithoutFilters(
+                         Array.Empty<byte>(),
+                         out rawDesiredObjectId,
+                         out error,
+                         cancellationToken))
+            {
+                return false;
+            }
+
+            if (!desiredGitModulesIndex.Exists &&
+                desiredGitModulesContents.Length != 0)
+            {
+                error =
+                    $"The {operationDescription} plan would remove a non-empty .gitmodules worktree without a target index entry.";
+                return false;
+            }
+
+            if (!TryBuildExactSubmoduleRegistrationRemovalPatch(
+                    normalizedPath,
+                    currentGitlinkObjectId,
+                    expectedGitModulesIndexContents,
+                    expectedGitModulesIndex,
+                    desiredGitModulesIndexContents,
+                    rawDesiredObjectId,
+                    desiredGitModulesIndex,
+                    out byte[] indexPatch,
+                    out error,
+                    cancellationToken))
+                return false;
+
+            plan = new ExactSubmoduleRegistrationRemovalPlan
+            {
+                Path = normalizedPath,
+                ExpectedGitlinkObjectId = currentGitlinkObjectId,
+                ExpectedGitModulesContents = expectedGitModulesContents,
+                DesiredGitModulesContents = desiredGitModulesContents,
+                ExpectedGitModulesIndex = CloneGitModulesIndexEntry(
+                    expectedGitModulesIndex),
+                DesiredGitModulesIndex = CloneGitModulesIndexEntry(
+                    desiredGitModulesIndex),
+                IndexPatch = indexPatch
+            };
+            return true;
+        }
+
+        private static bool TryApplyExactSubmoduleRegistrationRemoval(
+            ExactSubmoduleRegistrationRemovalPlan plan,
+            string operationDescription,
+            out string recoveryNotice,
+            out string error,
+            CancellationToken cancellationToken)
+        {
+            recoveryNotice = string.Empty;
+            error = string.Empty;
+            if (plan == null ||
+                !IsPackagePath(plan.Path) ||
+                !IsValidGitObjectId(plan.ExpectedGitlinkObjectId) ||
+                plan.IndexPatch == null ||
+                plan.IndexPatch.Length == 0)
+            {
+                error =
+                    $"The exact {operationDescription} mutation plan is missing or invalid.";
+                return false;
+            }
+
+            // Once recovery moves begin, finish or verify the one index
+            // transaction even if the caller cancels. Interrupting between a
+            // quarantine move and materialization would manufacture an
+            // avoidable partial state.
+            cancellationToken.ThrowIfCancellationRequested();
+            CancellationToken mutationToken = CancellationToken.None;
+
+            if (!TryQuarantineSubmoduleWorktree(
+                    plan.Path,
+                    operationDescription,
+                    out string worktreeNotice,
+                    mutationToken))
+            {
+                error = worktreeNotice;
+                return false;
+            }
+
+            recoveryNotice = worktreeNotice;
+            if (!TryQuarantineGitModulesCleanupEntry(
+                    plan.ExpectedGitModulesContents,
+                    operationDescription,
+                    out string gitModulesRecoveryPath,
+                    out string quarantineError,
+                    mutationToken))
+            {
+                error = JoinRecoveryNotices(worktreeNotice, quarantineError);
+                return false;
+            }
+
+            if (!string.IsNullOrWhiteSpace(gitModulesRecoveryPath))
+            {
+                recoveryNotice = JoinRecoveryNotices(
+                    recoveryNotice,
+                    $"The pre-mutation .gitmodules file was preserved at {gitModulesRecoveryPath}.");
+            }
+
+            string packagePath = Path.Combine(ProjectRoot, plan.Path);
+            string patchPath = string.Empty;
+            try
+            {
+                beforeGitModulesIndexCompareAndSwapForTests?.Invoke(
+                    Path.Combine(ProjectRoot, ".gitmodules"));
+
+                string gitModulesPath = Path.Combine(ProjectRoot, ".gitmodules");
+                if (!TryVerifyFileSystemEntryAbsent(
+                        gitModulesPath,
+                        out string gitModulesPresenceError,
+                        mutationToken))
+                {
+                    error =
+                        $"A new .gitmodules filesystem entry appeared during {operationDescription}. " +
+                        "It was preserved and the exact index mutation was not attempted. " +
+                        gitModulesPresenceError + " " + recoveryNotice;
+                    return false;
+                }
+
+                if (!TryVerifyFileSystemEntryAbsent(
+                        packagePath,
+                        out string packagePresenceError,
+                        mutationToken))
+                {
+                    error =
+                        $"A new filesystem entry appeared at the package path during {operationDescription}. " +
+                        "It was preserved and the exact index mutation was not attempted. " +
+                        packagePresenceError + " " + recoveryNotice;
+                    return false;
+                }
+
+                string temporaryDirectory = Path.Combine(
+                    ProjectRoot,
+                    "Library",
+                    "GitSubmoduleManager",
+                    "TemporaryIndexPatches");
+                patchPath = Path.Combine(
+                    temporaryDirectory,
+                    Guid.NewGuid().ToString("N") + ".patch");
+                if (!TryValidateProjectOwnedPath(patchPath, out error))
+                {
+                    error = JoinRecoveryNotices(recoveryNotice, error);
+                    return false;
+                }
+                Directory.CreateDirectory(temporaryDirectory);
+                if (!TryValidateProjectOwnedPath(patchPath, out error))
+                {
+                    error = JoinRecoveryNotices(recoveryNotice, error);
+                    return false;
+                }
+
+                using (var stream = new FileStream(
+                           patchPath,
+                           FileMode.CreateNew,
+                           FileAccess.Write,
+                           FileShare.None))
+                {
+                    stream.Write(plan.IndexPatch, 0, plan.IndexPatch.Length);
+                    stream.Flush(true);
+                }
+
+                CommandResult applyResult = RunGit(
+                    $"apply --cached --binary --whitespace=nowarn -- {Quote(patchPath)}",
+                    ProjectRoot,
+                    CliCommandRunner.DefaultTimeoutMs,
+                    mutationToken);
+                if (!applyResult.IsSuccess)
+                {
+                    error = BuildCommandError(
+                        $"Git rejected the exact {operationDescription} index mutation; concurrent staged data was preserved",
+                        applyResult) + " " + recoveryNotice;
+                    return false;
+                }
+
+                afterExactSubmoduleIndexApplyForTests?.Invoke(packagePath);
+
+                var gitlinkResult = RunGit(
+                    $"ls-files --stage -- {Quote(plan.Path)}",
+                    ProjectRoot,
+                    5000,
+                    mutationToken);
+                if (!TryRequireCompleteStructuralOutput(
+                        gitlinkResult,
+                        $"{operationDescription} gitlink postcondition",
+                        out error))
+                {
+                    error = JoinRecoveryNotices(recoveryNotice, error);
+                    return false;
+                }
+                if (!gitlinkResult.IsSuccess ||
+                    !string.IsNullOrWhiteSpace(gitlinkResult.StdOut))
+                {
+                    error =
+                        $"The exact {operationDescription} patch did not remove only the expected gitlink. " +
+                        recoveryNotice;
+                    return false;
+                }
+
+                if (!TryReadGitModulesIndexEntry(
+                        out GitModulesIndexEntry finalGitModulesIndex,
+                        out error,
+                        mutationToken) ||
+                    !GitModulesIndexEntriesEqual(
+                        finalGitModulesIndex,
+                        plan.DesiredGitModulesIndex))
+                {
+                    if (string.IsNullOrWhiteSpace(error))
+                    {
+                        error =
+                            $"The exact {operationDescription} patch did not reach its required .gitmodules index blob. " +
+                            recoveryNotice;
+                    }
+                    else
+                    {
+                        error = JoinRecoveryNotices(recoveryNotice, error);
+                    }
+                    return false;
+                }
+
+                if (plan.DesiredGitModulesIndex.Exists)
+                {
+                    using (var stream = new FileStream(
+                               gitModulesPath,
+                               FileMode.CreateNew,
+                               FileAccess.Write,
+                               FileShare.None))
+                    {
+                        WriteBytesToLockedStream(
+                            stream,
+                            plan.DesiredGitModulesContents);
+                    }
+
+                    if (!TryReadBoundedGitModulesBytes(
+                            gitModulesPath,
+                            out byte[] materializedGitModulesContents,
+                            out error,
+                            mutationToken) ||
+                        !materializedGitModulesContents.SequenceEqual(
+                            plan.DesiredGitModulesContents) ||
+                        !TryRunQuietCheck(
+                            "diff --quiet -- .gitmodules",
+                            ".gitmodules does not match the exact staged result after removal.",
+                            out error,
+                            mutationToken))
+                    {
+                        if (string.IsNullOrWhiteSpace(error))
+                            error = ".gitmodules changed while the exact result was materialized.";
+                        error += " " + recoveryNotice;
+                        return false;
+                    }
+                }
+                else if (!TryVerifyFileSystemEntryAbsent(
+                             gitModulesPath,
+                             out error,
+                             mutationToken))
+                {
+                    error =
+                        ".gitmodules reappeared while its exact absent result was being materialized. " +
+                        "The new entry was preserved. " + error + " " + recoveryNotice;
+                    return false;
+                }
+
+                if (!TryVerifyFileSystemEntryAbsent(
+                        packagePath,
+                        out error,
+                        mutationToken))
+                {
+                    error =
+                        $"A new filesystem entry appeared at the package path during {operationDescription}. " +
+                        "It was preserved instead of being deleted. " + error + " " + recoveryNotice;
+                    return false;
+                }
+
+                return true;
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (Exception exception)
+            {
+                error =
+                    $"The exact {operationDescription} mutation stopped safely: {exception.Message} " +
+                    recoveryNotice;
+                return false;
+            }
+            finally
+            {
+                if (!string.IsNullOrEmpty(patchPath) && File.Exists(patchPath))
+                {
+                    try
+                    {
+                        File.Delete(patchPath);
+                    }
+                    catch
+                    {
+                        // Non-authoritative patch input under Library may be
+                        // cleaned up later. Never issue a second mutation.
+                    }
+                }
+            }
+        }
+
+        private static bool TryVerifyExactSubmoduleRemovalClosingState(
+            ExactSubmoduleRegistrationRemovalPlan plan,
+            out string error,
+            CancellationToken cancellationToken)
+        {
+            error = string.Empty;
+            if (plan == null ||
+                !IsPackagePath(plan.Path) ||
+                !IsValidGitModulesIndexEntry(plan.DesiredGitModulesIndex))
+            {
+                error = "The exact submodule-removal closing evidence is invalid.";
+                return false;
+            }
+
+            if (!TryVerifyExactGitModulesWorktreeState(
+                    plan,
+                    out error,
+                    cancellationToken))
+            {
+                return false;
+            }
+
+            string packagePath = Path.Combine(ProjectRoot, plan.Path);
+            if (!TryVerifyFileSystemEntryAbsent(
+                    packagePath,
+                    out error,
+                    cancellationToken))
+            {
+                error =
+                    "The managed package path is not absent at the exact removal closing boundary. " +
+                    error;
+                return false;
+            }
+
+            var indexResult = RunGit(
+                $"ls-files --stage -- .gitmodules {Quote(plan.Path)}",
+                ProjectRoot,
+                5000,
+                cancellationToken);
+            if (!TryRequireCompleteStructuralOutput(
+                    indexResult,
+                    "Exact submodule-removal closing index snapshot",
+                    out error))
+            {
+                return false;
+            }
+            if (!indexResult.IsSuccess)
+            {
+                error = BuildCommandError(
+                    "The exact submodule-removal closing index snapshot failed",
+                    indexResult);
+                return false;
+            }
+
+            string output = (indexResult.StdOut ?? string.Empty)
+                .TrimEnd('\r', '\n');
+            if (!plan.DesiredGitModulesIndex.Exists)
+            {
+                if (string.IsNullOrEmpty(output))
+                    return true;
+
+                error =
+                    "The closing parent-index snapshot contains a package gitlink or unexpected .gitmodules entry.";
+                return false;
+            }
+
+            Match match = Regex.Match(
+                output,
+                @"^(100644)\s+([0-9a-fA-F]{40}|[0-9a-fA-F]{64})\s+0\t\.gitmodules$",
+                RegexOptions.CultureInvariant);
+            if (!match.Success ||
+                !string.Equals(
+                    match.Groups[1].Value,
+                    plan.DesiredGitModulesIndex.Mode,
+                    StringComparison.Ordinal) ||
+                !string.Equals(
+                    match.Groups[2].Value,
+                    plan.DesiredGitModulesIndex.ObjectId,
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                error =
+                    "The closing parent-index snapshot does not contain only the exact desired .gitmodules blob.";
+                return false;
+            }
+
+            return true;
+        }
+
+        private static bool TryVerifyExactGitModulesWorktreeState(
+            ExactSubmoduleRegistrationRemovalPlan plan,
+            out string error,
+            CancellationToken cancellationToken)
+        {
+            error = string.Empty;
+            string gitModulesPath = Path.Combine(ProjectRoot, ".gitmodules");
+            if (!plan.DesiredGitModulesIndex.Exists)
+            {
+                return TryVerifyFileSystemEntryAbsent(
+                    gitModulesPath,
+                    out error,
+                    cancellationToken);
+            }
+
+            if (!TryReadBoundedGitModulesBytes(
+                    gitModulesPath,
+                    out byte[] currentContents,
+                    out error,
+                    cancellationToken) ||
+                !currentContents.SequenceEqual(
+                    plan.DesiredGitModulesContents ?? Array.Empty<byte>()) ||
+                !TryResolveExactGitModulesIndexBytes(
+                    currentContents,
+                    plan.DesiredGitModulesIndex.ObjectId,
+                    out _,
+                    out error,
+                    cancellationToken) ||
+                !TryRunQuietCheck(
+                    "diff --quiet -- .gitmodules",
+                    ".gitmodules does not match the exact staged removal result.",
+                    out error,
+                    cancellationToken))
+            {
+                if (string.IsNullOrWhiteSpace(error))
+                {
+                    error =
+                        ".gitmodules changed after the exact removal result was materialized.";
+                }
+                return false;
+            }
+
+            return true;
+        }
+
         private static void WriteBytesToLockedStream(FileStream stream, byte[] contents)
         {
             stream.Position = 0;
@@ -5908,11 +8790,29 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         }
 
         private static bool TryQuarantineGitModulesCleanupEntry(
-            RemoveSubmoduleGitModulesPlan plan,
+            byte[] expectedContents,
+            string operationDescription,
             out string error,
             CancellationToken cancellationToken)
         {
+            return TryQuarantineGitModulesCleanupEntry(
+                expectedContents,
+                operationDescription,
+                out _,
+                out error,
+                cancellationToken);
+        }
+
+        private static bool TryQuarantineGitModulesCleanupEntry(
+            byte[] expectedContents,
+            string operationDescription,
+            out string recoveryPath,
+            out string error,
+            CancellationToken cancellationToken)
+        {
+            recoveryPath = string.Empty;
             error = string.Empty;
+            expectedContents = expectedContents ?? Array.Empty<byte>();
             string gitModulesPath = Path.Combine(ProjectRoot, ".gitmodules");
             string preservedDestination = string.Empty;
             try
@@ -5930,10 +8830,11 @@ namespace MartinCalander.GitSubmoduleManager.Editor
 
                 if (!entryExists)
                 {
-                    if (plan.ExpectedGitProducedContents.Length == 0)
+                    if (expectedContents.Length == 0)
                         return true;
 
-                    error = ".gitmodules disappeared before its verified cleanup state could be quarantined.";
+                    error =
+                        $".gitmodules disappeared before its verified {operationDescription} state could be quarantined.";
                     return false;
                 }
 
@@ -5969,6 +8870,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
 
                 File.Move(gitModulesPath, destination);
                 preservedDestination = destination;
+                recoveryPath = destination;
 
                 byte[] movedContents;
                 using (var movedStream = new FileStream(
@@ -5984,10 +8886,10 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                     }
                 }
 
-                if (!movedContents.SequenceEqual(plan.ExpectedGitProducedContents))
+                if (!movedContents.SequenceEqual(expectedContents))
                 {
                     error =
-                        ".gitmodules was replaced or edited during cleanup. " +
+                        $".gitmodules was replaced or edited during {operationDescription}. " +
                         $"The concurrent data was preserved at {destination}; automatic index cleanup stopped.";
                     return false;
                 }
@@ -6078,7 +8980,12 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 // while retaining the BOM and original line endings. If a Git
                 // version later rewrites BOM-prefixed config, the post-rm CAS
                 // will fail closed without overwriting its unexpected result.
-                expectedContents = File.ReadAllBytes(temporaryPath);
+                if (!TryReadBoundedGitModulesBytes(
+                        temporaryPath,
+                        out expectedContents,
+                        out error,
+                        cancellationToken))
+                    return false;
                 var hashResult = RunGit(
                     $"hash-object --path=.gitmodules -- {Quote(temporaryPath)}",
                     ProjectRoot,
@@ -6091,10 +8998,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                     return false;
                 expectedBlobId = hashResult.StdOut?.Trim() ?? string.Empty;
                 if (!hashResult.IsSuccess ||
-                    !Regex.IsMatch(
-                        expectedBlobId,
-                        "^[0-9a-fA-F]{40,64}$",
-                        RegexOptions.CultureInvariant))
+                    !IsValidGitObjectId(expectedBlobId))
                 {
                     error = BuildCommandError(
                         "Failed to hash Git's predicted .gitmodules result",
@@ -6158,10 +9062,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             lockedWorktreeStream = null;
             error = string.Empty;
             if (plan.ExpectedGitProducedContents == null ||
-                !Regex.IsMatch(
-                    plan.ExpectedGitProducedBlobId ?? string.Empty,
-                    "^[0-9a-fA-F]{40,64}$",
-                    RegexOptions.CultureInvariant))
+                !IsValidGitObjectId(plan.ExpectedGitProducedBlobId))
             {
                 error = "The predicted .gitmodules compare-and-swap state is invalid.";
                 return false;
@@ -6266,9 +9167,10 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         {
             contents = Array.Empty<byte>();
             error = string.Empty;
-            if (stream.Length > int.MaxValue)
+            if (stream.Length > MaxGitModulesBytes)
             {
-                error = ".gitmodules is too large to verify safely.";
+                error =
+                    $".gitmodules exceeds the {MaxGitModulesBytes / 1024} KiB safety limit.";
                 return false;
             }
 
@@ -6292,31 +9194,102 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             return true;
         }
 
+        private static bool TryReadBoundedGitModulesBytes(
+            string path,
+            out byte[] contents,
+            out string error,
+            CancellationToken cancellationToken)
+        {
+            contents = Array.Empty<byte>();
+            error = string.Empty;
+            try
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var fileInfo = new FileInfo(path);
+                fileInfo.Refresh();
+                if (!fileInfo.Exists ||
+                    (fileInfo.Attributes &
+                     (FileAttributes.Directory | FileAttributes.ReparsePoint)) != 0)
+                {
+                    error =
+                        ".gitmodules must be one regular, non-symbolic-link worktree file.";
+                    return false;
+                }
+
+                if (fileInfo.Length > MaxGitModulesBytes)
+                {
+                    error =
+                        $".gitmodules exceeds the {MaxGitModulesBytes / 1024} KiB safety limit.";
+                    return false;
+                }
+
+                var buffer = new byte[MaxGitModulesBytes + 1];
+                int count = 0;
+                using (var stream = new FileStream(
+                           path,
+                           FileMode.Open,
+                           FileAccess.Read,
+                           FileShare.Read))
+                {
+                    while (count < buffer.Length)
+                    {
+                        cancellationToken.ThrowIfCancellationRequested();
+                        int read = stream.Read(
+                            buffer,
+                            count,
+                            buffer.Length - count);
+                        if (read <= 0)
+                            break;
+                        count += read;
+                    }
+                }
+
+                if (count > MaxGitModulesBytes)
+                {
+                    error =
+                        $".gitmodules grew beyond the {MaxGitModulesBytes / 1024} KiB safety limit while it was being read.";
+                    return false;
+                }
+
+                cancellationToken.ThrowIfCancellationRequested();
+                fileInfo.Refresh();
+                if (!fileInfo.Exists ||
+                    (fileInfo.Attributes &
+                     (FileAttributes.Directory | FileAttributes.ReparsePoint)) != 0 ||
+                    fileInfo.Length != count)
+                {
+                    error =
+                        ".gitmodules changed type or length while it was being read.";
+                    return false;
+                }
+
+                contents = new byte[count];
+                Buffer.BlockCopy(buffer, 0, contents, 0, count);
+                return true;
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (Exception exception)
+            {
+                error = $"Failed to read .gitmodules safely: {exception.Message}";
+                return false;
+            }
+        }
+
         private static bool TryVerifyGitProducedGitModulesIndexState(
             RemoveSubmoduleGitModulesPlan plan,
             out string error,
             CancellationToken cancellationToken)
         {
-            error = string.Empty;
-
-            var indexResult = RunGit(
-                "ls-files --stage -- .gitmodules",
-                ProjectRoot,
-                5000,
-                cancellationToken);
-            if (!TryRequireCompleteStructuralOutput(
-                    indexResult,
-                    "Post-removal .gitmodules index inspection",
-                    out error))
+            if (!TryReadGitModulesIndexEntry(
+                    out GitModulesIndexEntry current,
+                    out error,
+                    cancellationToken))
                 return false;
-            if (!indexResult.IsSuccess)
-            {
-                error = BuildCommandError("Failed to inspect .gitmodules after Git removed the package", indexResult);
-                return false;
-            }
 
-            string indexEntry = (indexResult.StdOut ?? string.Empty).Trim();
-            if (string.IsNullOrEmpty(indexEntry))
+            if (!current.Exists)
             {
                 if (plan.ExpectedGitProducedContents.Length == 0)
                     return true;
@@ -6325,15 +9298,9 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 return false;
             }
 
-            Match indexMatch = Regex.Match(
-                indexEntry,
-                @"^100(?:644|755)\s+([0-9a-fA-F]{40,64})\s+0\t\.gitmodules$",
-                RegexOptions.CultureInvariant);
-            if (!indexMatch.Success ||
-                !string.Equals(
-                    indexMatch.Groups[1].Value,
-                    plan.ExpectedGitProducedBlobId,
-                    StringComparison.OrdinalIgnoreCase))
+            if (!GitModulesIndexEntriesEqual(
+                    current,
+                    plan.ExpectedGitProducedGitModulesIndex))
             {
                 error =
                     ".gitmodules changed in the parent index after Git removed the package. " +
@@ -6342,6 +9309,792 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             }
 
             return true;
+        }
+
+        private static bool TryCompareAndRestoreGitModulesIndexEntry(
+            GitModulesIndexEntry expectedCurrent,
+            GitModulesIndexEntry desired,
+            bool expectedCurrentContentsAreEmpty,
+            string operationDescription,
+            out string error,
+            CancellationToken cancellationToken)
+        {
+            error = string.Empty;
+            if (!IsValidGitModulesIndexEntry(expectedCurrent) ||
+                !IsValidGitModulesIndexEntry(desired))
+            {
+                error =
+                    $"The {operationDescription} .gitmodules index compare-and-swap evidence is invalid.";
+                return false;
+            }
+
+            if (!TryReadGitModulesIndexEntry(
+                    out GitModulesIndexEntry current,
+                    out error,
+                    cancellationToken))
+                return false;
+
+            if (GitModulesIndexEntriesEqual(current, desired))
+            {
+                // No write is needed, but give the final seam race regression
+                // the same opportunity and require the desired state again.
+                beforeGitModulesIndexCompareAndSwapForTests?.Invoke(
+                    Path.Combine(ProjectRoot, ".gitmodules"));
+                if (!TryReadGitModulesIndexEntry(
+                        out GitModulesIndexEntry unchanged,
+                        out error,
+                        cancellationToken))
+                    return false;
+
+                if (GitModulesIndexEntriesEqual(unchanged, desired))
+                    return true;
+
+                error =
+                    $".gitmodules changed in the parent index at the final {operationDescription} seam. " +
+                    "The concurrent staged edit was preserved.";
+                return false;
+            }
+
+            if (!GitModulesIndexEntriesEqual(current, expectedCurrent))
+            {
+                error =
+                    $".gitmodules no longer matches the exact Git-produced index state for {operationDescription}. " +
+                    "The concurrent staged edit was preserved.";
+                return false;
+            }
+
+            if (desired.Exists || !expectedCurrentContentsAreEmpty)
+            {
+                // Every currently-supported restore-to-present path already has
+                // the pre-operation entry after Git's inverse mutation. Refuse
+                // an unexpected transition instead of overwriting an index entry
+                // without a Git-locked old-OID condition.
+                error =
+                    $"The {operationDescription} requires an unsupported .gitmodules index transition. " +
+                    "The current staged data was preserved for manual recovery.";
+                return false;
+            }
+
+            return TryDeleteExactGitModulesIndexEntry(
+                expectedCurrent,
+                operationDescription,
+                out error,
+                cancellationToken);
+        }
+
+        private static bool TryDeleteExactGitModulesIndexEntry(
+            GitModulesIndexEntry expectedCurrent,
+            string operationDescription,
+            out string error,
+            CancellationToken cancellationToken)
+        {
+            error = string.Empty;
+            string patchPath = string.Empty;
+            try
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                string temporaryDirectory = Path.Combine(
+                    ProjectRoot,
+                    "Library",
+                    "GitSubmoduleManager",
+                    "TemporaryGitModules");
+                patchPath = Path.Combine(
+                    temporaryDirectory,
+                    Guid.NewGuid().ToString("N") + ".index-delete.patch");
+                if (!TryValidateProjectOwnedPath(patchPath, out error))
+                    return false;
+
+                Directory.CreateDirectory(temporaryDirectory);
+                if (!TryValidateProjectOwnedPath(patchPath, out error))
+                    return false;
+
+                string objectId = expectedCurrent.ObjectId.ToLowerInvariant();
+                string patch =
+                    "diff --git a/.gitmodules b/.gitmodules\n" +
+                    $"deleted file mode {expectedCurrent.Mode}\n" +
+                    $"index {objectId}..{new string('0', objectId.Length)}\n";
+                using (var stream = new FileStream(
+                           patchPath,
+                           FileMode.CreateNew,
+                           FileAccess.Write,
+                           FileShare.None))
+                {
+                    byte[] patchBytes = Encoding.ASCII.GetBytes(patch);
+                    stream.Write(patchBytes, 0, patchBytes.Length);
+                    stream.Flush(true);
+                }
+
+                // The patch carries the exact old mode and full object ID.
+                // `git apply --cached` checks and updates under Git's index
+                // lock, so a staged replacement made here is rejected rather
+                // than overwritten.
+                beforeGitModulesIndexCompareAndSwapForTests?.Invoke(
+                    Path.Combine(ProjectRoot, ".gitmodules"));
+                cancellationToken.ThrowIfCancellationRequested();
+                CommandResult applyResult = RunGit(
+                    $"apply --cached --whitespace=nowarn -- {Quote(patchPath)}",
+                    ProjectRoot,
+                    CliCommandRunner.DefaultTimeoutMs,
+                    cancellationToken);
+                if (!applyResult.IsSuccess)
+                {
+                    if (TryReadGitModulesIndexEntry(
+                            out GitModulesIndexEntry afterFailure,
+                            out _,
+                            cancellationToken) &&
+                        !GitModulesIndexEntriesEqual(
+                            afterFailure,
+                            expectedCurrent))
+                    {
+                        if (!afterFailure.Exists)
+                        {
+                            error = string.Empty;
+                            return true;
+                        }
+
+                        error =
+                            $".gitmodules changed in the parent index at the final {operationDescription} seam. " +
+                            "Git rejected the stale exact-index patch and preserved the concurrent staged edit.";
+                        return false;
+                    }
+
+                    error = BuildCommandError(
+                        $"Git could not apply the exact .gitmodules index deletion for {operationDescription}",
+                        applyResult);
+                    return false;
+                }
+
+                if (!TryReadGitModulesIndexEntry(
+                        out GitModulesIndexEntry finalEntry,
+                        out error,
+                        cancellationToken))
+                    return false;
+                if (finalEntry.Exists)
+                {
+                    error =
+                        $"The exact .gitmodules index deletion for {operationDescription} did not reach its required absent postcondition.";
+                    return false;
+                }
+
+                return true;
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (Exception exception)
+            {
+                error =
+                    $"The exact .gitmodules index deletion for {operationDescription} failed safely: {exception.Message}";
+                return false;
+            }
+            finally
+            {
+                if (!string.IsNullOrEmpty(patchPath) && File.Exists(patchPath))
+                {
+                    try
+                    {
+                        File.Delete(patchPath);
+                    }
+                    catch
+                    {
+                        // The patch is non-authoritative recovery input under
+                        // Library. Never change the proven index outcome or
+                        // attempt another index mutation because its deletion
+                        // failed.
+                    }
+                }
+            }
+        }
+
+        private static bool TryReadGitModulesIndexEntry(
+            out GitModulesIndexEntry entry,
+            out string error,
+            CancellationToken cancellationToken)
+        {
+            entry = new GitModulesIndexEntry();
+            error = string.Empty;
+            CommandResult result = RunGit(
+                "ls-files --stage -- .gitmodules",
+                ProjectRoot,
+                5000,
+                cancellationToken);
+            if (!TryRequireCompleteStructuralOutput(
+                    result,
+                    ".gitmodules index inspection",
+                    out error))
+                return false;
+            if (!result.IsSuccess)
+            {
+                error = BuildCommandError(
+                    "Failed to inspect the .gitmodules index entry",
+                    result);
+                return false;
+            }
+
+            string output = (result.StdOut ?? string.Empty)
+                .TrimEnd('\r', '\n');
+            if (string.IsNullOrEmpty(output))
+                return true;
+
+            Match match = Regex.Match(
+                output,
+                @"^(100644|100755)\s+([0-9a-fA-F]{40}|[0-9a-fA-F]{64})\s+0\t\.gitmodules$",
+                RegexOptions.CultureInvariant);
+            if (!match.Success || !IsValidGitObjectId(match.Groups[2].Value))
+            {
+                error =
+                    ".gitmodules is not one exact regular stage-0 entry in the parent index.";
+                return false;
+            }
+
+            entry.Exists = true;
+            entry.Mode = match.Groups[1].Value;
+            entry.ObjectId = match.Groups[2].Value.ToLowerInvariant();
+            return true;
+        }
+
+        private static bool IsValidGitModulesIndexEntry(
+            GitModulesIndexEntry entry)
+        {
+            if (entry == null)
+                return false;
+            if (!entry.Exists)
+            {
+                return string.IsNullOrEmpty(entry.Mode) &&
+                       string.IsNullOrEmpty(entry.ObjectId);
+            }
+
+            return (string.Equals(entry.Mode, "100644", StringComparison.Ordinal) ||
+                    string.Equals(entry.Mode, "100755", StringComparison.Ordinal)) &&
+                   IsValidGitObjectId(entry.ObjectId);
+        }
+
+        private static bool GitModulesIndexEntriesEqual(
+            GitModulesIndexEntry left,
+            GitModulesIndexEntry right)
+        {
+            if (left == null || right == null || left.Exists != right.Exists)
+                return false;
+            if (!left.Exists)
+                return true;
+
+            return string.Equals(left.Mode, right.Mode, StringComparison.Ordinal) &&
+                   string.Equals(
+                       left.ObjectId,
+                       right.ObjectId,
+                       StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static GitModulesIndexEntry CloneGitModulesIndexEntry(
+            GitModulesIndexEntry entry)
+        {
+            return entry == null
+                ? null
+                : new GitModulesIndexEntry
+                {
+                    Exists = entry.Exists,
+                    Mode = entry.Mode ?? string.Empty,
+                    ObjectId = entry.ObjectId ?? string.Empty
+                };
+        }
+
+        private static bool TryHashGitModulesContents(
+            byte[] contents,
+            out string objectId,
+            out string error,
+            CancellationToken cancellationToken)
+        {
+            objectId = string.Empty;
+            error = string.Empty;
+            string temporaryPath = string.Empty;
+            try
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                string temporaryDirectory = Path.Combine(
+                    ProjectRoot,
+                    "Library",
+                    "GitSubmoduleManager",
+                    "TemporaryGitModules");
+                temporaryPath = Path.Combine(
+                    temporaryDirectory,
+                    Guid.NewGuid().ToString("N") + ".hash.gitmodules");
+                if (!TryValidateProjectOwnedPath(temporaryPath, out error))
+                    return false;
+
+                Directory.CreateDirectory(temporaryDirectory);
+                if (!TryValidateProjectOwnedPath(temporaryPath, out error))
+                    return false;
+
+                using (var stream = new FileStream(
+                           temporaryPath,
+                           FileMode.CreateNew,
+                           FileAccess.Write,
+                           FileShare.None))
+                {
+                    byte[] value = contents ?? Array.Empty<byte>();
+                    stream.Write(value, 0, value.Length);
+                    stream.Flush(true);
+                }
+
+                CommandResult hashResult = RunGit(
+                    $"hash-object --path=.gitmodules -- {Quote(temporaryPath)}",
+                    ProjectRoot,
+                    5000,
+                    cancellationToken);
+                if (!TryRequireCompleteStructuralOutput(
+                        hashResult,
+                        ".gitmodules blob inspection",
+                        out error))
+                    return false;
+
+                objectId = hashResult.StdOut?.Trim() ?? string.Empty;
+                if (!hashResult.IsSuccess || !IsValidGitObjectId(objectId))
+                {
+                    objectId = string.Empty;
+                    error = BuildCommandError(
+                        "Failed to hash the captured .gitmodules contents",
+                        hashResult);
+                    return false;
+                }
+
+                objectId = objectId.ToLowerInvariant();
+                return true;
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (Exception exception)
+            {
+                error =
+                    $"Failed to hash the captured .gitmodules contents safely: {exception.Message}";
+                return false;
+            }
+            finally
+            {
+                if (!string.IsNullOrEmpty(temporaryPath) &&
+                    File.Exists(temporaryPath))
+                {
+                    try
+                    {
+                        File.Delete(temporaryPath);
+                    }
+                    catch
+                    {
+                        // A non-authoritative hash input under Library may be
+                        // cleaned up later. Do not invalidate the captured Git
+                        // object identity or touch repository state again.
+                    }
+                }
+            }
+        }
+
+        private static bool TryHashGitModulesContentsWithoutFilters(
+            byte[] contents,
+            out string objectId,
+            out string error,
+            CancellationToken cancellationToken)
+        {
+            objectId = string.Empty;
+            error = string.Empty;
+            string temporaryPath = string.Empty;
+            try
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                string temporaryDirectory = Path.Combine(
+                    ProjectRoot,
+                    "Library",
+                    "GitSubmoduleManager",
+                    "TemporaryGitModules");
+                temporaryPath = Path.Combine(
+                    temporaryDirectory,
+                    Guid.NewGuid().ToString("N") + ".raw-hash.gitmodules");
+                if (!TryValidateProjectOwnedPath(temporaryPath, out error))
+                    return false;
+
+                Directory.CreateDirectory(temporaryDirectory);
+                if (!TryValidateProjectOwnedPath(temporaryPath, out error))
+                    return false;
+
+                using (var stream = new FileStream(
+                           temporaryPath,
+                           FileMode.CreateNew,
+                           FileAccess.Write,
+                           FileShare.None))
+                {
+                    byte[] value = contents ?? Array.Empty<byte>();
+                    stream.Write(value, 0, value.Length);
+                    stream.Flush(true);
+                }
+
+                CommandResult hashResult = RunGit(
+                    $"hash-object --no-filters -- {Quote(temporaryPath)}",
+                    ProjectRoot,
+                    5000,
+                    cancellationToken);
+                if (!TryRequireCompleteStructuralOutput(
+                        hashResult,
+                        "Raw .gitmodules blob inspection",
+                        out error))
+                    return false;
+
+                objectId = hashResult.StdOut?.Trim() ?? string.Empty;
+                if (!hashResult.IsSuccess || !IsValidGitObjectId(objectId))
+                {
+                    objectId = string.Empty;
+                    error = BuildCommandError(
+                        "Failed to hash the raw .gitmodules bytes",
+                        hashResult);
+                    return false;
+                }
+
+                objectId = objectId.ToLowerInvariant();
+                return true;
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (Exception exception)
+            {
+                error =
+                    $"Failed to hash the raw .gitmodules bytes safely: {exception.Message}";
+                return false;
+            }
+            finally
+            {
+                if (!string.IsNullOrEmpty(temporaryPath) &&
+                    File.Exists(temporaryPath))
+                {
+                    try
+                    {
+                        File.Delete(temporaryPath);
+                    }
+                    catch
+                    {
+                        // Non-authoritative hash input under Library may be
+                        // cleaned up later.
+                    }
+                }
+            }
+        }
+
+        private static bool TryResolveExactGitModulesIndexBytes(
+            byte[] worktreeContents,
+            string expectedObjectId,
+            out byte[] indexContents,
+            out string error,
+            CancellationToken cancellationToken)
+        {
+            indexContents = Array.Empty<byte>();
+            error = string.Empty;
+            byte[] contents = worktreeContents ?? Array.Empty<byte>();
+            if (!IsValidGitObjectId(expectedObjectId))
+            {
+                error = "The expected .gitmodules index object ID is invalid.";
+                return false;
+            }
+
+            try
+            {
+                StrictUtf8Encoding.GetString(contents);
+            }
+            catch (DecoderFallbackException exception)
+            {
+                error =
+                    ".gitmodules is not valid UTF-8 and cannot be bound to its staged blob: " +
+                    exception.Message;
+                return false;
+            }
+
+            if (!TryHashGitModulesContents(
+                    contents,
+                    out string filteredObjectId,
+                    out error,
+                    cancellationToken) ||
+                !string.Equals(
+                    filteredObjectId,
+                    expectedObjectId,
+                    StringComparison.OrdinalIgnoreCase) ||
+                !TryHashGitModulesContentsWithoutFilters(
+                    contents,
+                    out string rawObjectId,
+                    out error,
+                    cancellationToken))
+            {
+                if (string.IsNullOrWhiteSpace(error))
+                {
+                    error =
+                        ".gitmodules no longer matches its exact staged blob after Git's configured conversion.";
+                }
+                return false;
+            }
+
+            if (string.Equals(
+                    rawObjectId,
+                    expectedObjectId,
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                indexContents = contents.ToArray();
+                return true;
+            }
+
+            var normalized = new List<byte>(contents.Length);
+            bool changed = false;
+            for (int index = 0; index < contents.Length; index++)
+            {
+                byte value = contents[index];
+                if (value == (byte)'\r' &&
+                    index + 1 < contents.Length &&
+                    contents[index + 1] == (byte)'\n')
+                {
+                    normalized.Add((byte)'\n');
+                    index++;
+                    changed = true;
+                    continue;
+                }
+
+                normalized.Add(value);
+            }
+
+            byte[] normalizedContents = normalized.ToArray();
+            if (changed &&
+                TryHashGitModulesContentsWithoutFilters(
+                    normalizedContents,
+                    out string normalizedObjectId,
+                    out error,
+                    cancellationToken) &&
+                string.Equals(
+                    normalizedObjectId,
+                    expectedObjectId,
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                indexContents = normalizedContents;
+                return true;
+            }
+
+            if (string.IsNullOrWhiteSpace(error))
+            {
+                error =
+                    ".gitmodules is affected by a clean/smudge or working-tree encoding filter other than exact CRLF-to-LF normalization. " +
+                    "Automatic mutation was blocked to avoid an inexact index change.";
+            }
+            return false;
+        }
+
+        private static bool TryBuildExactSubmoduleRegistrationRemovalPatch(
+            string normalizedPath,
+            string expectedGitlinkObjectId,
+            byte[] expectedGitModulesContents,
+            GitModulesIndexEntry expectedGitModulesIndex,
+            byte[] desiredGitModulesContents,
+            string rawDesiredObjectId,
+            GitModulesIndexEntry desiredGitModulesIndex,
+            out byte[] patchBytes,
+            out string error,
+            CancellationToken cancellationToken)
+        {
+            patchBytes = Array.Empty<byte>();
+            error = string.Empty;
+            string temporaryDirectory = string.Empty;
+            try
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                if (!IsPackagePath(normalizedPath) ||
+                    !IsValidGitObjectId(expectedGitlinkObjectId) ||
+                    !IsValidGitModulesIndexEntry(expectedGitModulesIndex) ||
+                    !expectedGitModulesIndex.Exists ||
+                    !IsValidGitObjectId(rawDesiredObjectId) ||
+                    !IsValidGitModulesIndexEntry(desiredGitModulesIndex) ||
+                    expectedGitModulesIndex.ObjectId.Length !=
+                    expectedGitlinkObjectId.Length ||
+                    expectedGitModulesIndex.ObjectId.Length !=
+                    rawDesiredObjectId.Length)
+                {
+                    error = "The exact submodule index patch evidence is invalid.";
+                    return false;
+                }
+
+                temporaryDirectory = Path.Combine(
+                    ProjectRoot,
+                    "Library",
+                    "GitSubmoduleManager",
+                    "TemporaryIndexPatches",
+                    Guid.NewGuid().ToString("N"));
+                string sourcePath = Path.Combine(
+                    temporaryDirectory,
+                    "source.gsm-index-binary");
+                string targetPath = Path.Combine(
+                    temporaryDirectory,
+                    "target.gsm-index-binary");
+                string attributesPath = Path.Combine(
+                    temporaryDirectory,
+                    "attributes");
+                if (!TryValidateProjectOwnedPath(sourcePath, out error) ||
+                    !TryValidateProjectOwnedPath(targetPath, out error) ||
+                    !TryValidateProjectOwnedPath(attributesPath, out error))
+                    return false;
+
+                Directory.CreateDirectory(temporaryDirectory);
+                if (!TryValidateProjectOwnedPath(sourcePath, out error) ||
+                    !TryValidateProjectOwnedPath(targetPath, out error) ||
+                    !TryValidateProjectOwnedPath(attributesPath, out error))
+                    return false;
+
+                File.WriteAllBytes(
+                    sourcePath,
+                    expectedGitModulesContents ?? Array.Empty<byte>());
+                File.WriteAllBytes(
+                    targetPath,
+                    desiredGitModulesContents ?? Array.Empty<byte>());
+                File.WriteAllText(
+                    attributesPath,
+                    "*.gsm-index-binary binary\n",
+                    new UTF8Encoding(false));
+
+                CommandResult diffResult = RunGit(
+                    $"-c core.attributesFile={Quote(attributesPath)} diff --no-index --binary --full-index --no-ext-diff --no-textconv -- {Quote(sourcePath)} {Quote(targetPath)}",
+                    ProjectRoot,
+                    CliCommandRunner.DefaultTimeoutMs,
+                    cancellationToken);
+                if (!TryRequireCompleteStructuralOutput(
+                        diffResult,
+                        "Exact binary .gitmodules patch generation",
+                        out error))
+                    return false;
+                if (diffResult == null ||
+                    diffResult.ExitCode != 1 ||
+                    !diffResult.TerminationConfirmed ||
+                    !string.IsNullOrWhiteSpace(diffResult.StdErr))
+                {
+                    error = BuildCommandError(
+                        "Git could not generate the exact binary .gitmodules patch",
+                        diffResult);
+                    return false;
+                }
+
+                string generated = (diffResult.StdOut ?? string.Empty)
+                    .Replace("\r\n", "\n");
+                if (generated.IndexOf('\r') >= 0)
+                {
+                    error = "Git returned malformed line endings for the exact binary patch.";
+                    return false;
+                }
+
+                int firstLineEnd = generated.IndexOf('\n');
+                int secondLineEnd = firstLineEnd < 0
+                    ? -1
+                    : generated.IndexOf('\n', firstLineEnd + 1);
+                if (firstLineEnd <= 0 || secondLineEnd <= firstLineEnd + 1)
+                {
+                    error = "Git returned a malformed exact binary patch header.";
+                    return false;
+                }
+
+                string firstLine = generated.Substring(0, firstLineEnd);
+                string secondLine = generated.Substring(
+                    firstLineEnd + 1,
+                    secondLineEnd - firstLineEnd - 1);
+                string expectedIndexLine =
+                    "index " + expectedGitModulesIndex.ObjectId.ToLowerInvariant() +
+                    ".." + rawDesiredObjectId.ToLowerInvariant() +
+                    " 100644";
+                string payload = generated.Substring(secondLineEnd + 1);
+                if (!firstLine.StartsWith("diff --git ", StringComparison.Ordinal) ||
+                    !string.Equals(
+                        secondLine,
+                        expectedIndexLine,
+                        StringComparison.OrdinalIgnoreCase) ||
+                    !payload.StartsWith(
+                        "GIT binary patch\n",
+                        StringComparison.Ordinal))
+                {
+                    error =
+                        "Git did not produce the required full-object binary .gitmodules patch. No index mutation was attempted.";
+                    return false;
+                }
+
+                string zeroObjectId = new string(
+                    '0',
+                    expectedGitModulesIndex.ObjectId.Length);
+                var patch = new StringBuilder(generated.Length + 512);
+                patch.Append("diff --git a/.gitmodules b/.gitmodules\n");
+                if (desiredGitModulesIndex.Exists)
+                {
+                    patch.Append("index ")
+                        .Append(expectedGitModulesIndex.ObjectId.ToLowerInvariant())
+                        .Append("..")
+                        .Append(desiredGitModulesIndex.ObjectId.ToLowerInvariant())
+                        .Append(" 100644\n");
+                }
+                else
+                {
+                    patch.Append("deleted file mode 100644\n")
+                        .Append("index ")
+                        .Append(expectedGitModulesIndex.ObjectId.ToLowerInvariant())
+                        .Append("..")
+                        .Append(zeroObjectId)
+                        .Append('\n');
+                }
+                patch.Append(payload);
+                if (patch.Length == 0 || patch[patch.Length - 1] != '\n')
+                    patch.Append('\n');
+                // Git's binary-patch grammar terminates the reverse literal
+                // with a blank line before the next file patch begins.
+                patch.Append('\n');
+
+                string gitlinkObjectId =
+                    expectedGitlinkObjectId.ToLowerInvariant();
+                patch.Append("diff --git a/")
+                    .Append(normalizedPath)
+                    .Append(" b/")
+                    .Append(normalizedPath)
+                    .Append('\n')
+                    .Append("deleted file mode 160000\n")
+                    .Append("index ")
+                    .Append(gitlinkObjectId)
+                    .Append("..")
+                    .Append(zeroObjectId)
+                    .Append('\n')
+                    .Append("--- a/")
+                    .Append(normalizedPath)
+                    .Append('\n')
+                    .Append("+++ /dev/null\n")
+                    .Append("@@ -1 +0,0 @@\n")
+                    .Append("-Subproject commit ")
+                    .Append(gitlinkObjectId)
+                    .Append('\n');
+
+                patchBytes = Encoding.ASCII.GetBytes(patch.ToString());
+                return true;
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (Exception exception)
+            {
+                error =
+                    $"Failed to prepare the exact submodule index patch safely: {exception.Message}";
+                return false;
+            }
+            finally
+            {
+                if (!string.IsNullOrEmpty(temporaryDirectory) &&
+                    Directory.Exists(temporaryDirectory))
+                {
+                    try
+                    {
+                        Directory.Delete(temporaryDirectory, true);
+                    }
+                    catch
+                    {
+                        // Non-authoritative patch inputs under Library may be
+                        // cleaned up later.
+                    }
+                }
+            }
         }
 
         private static bool TryRemoveSubmoduleSectionContents(
@@ -7058,8 +10811,12 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             if (Uri.TryCreate(first, UriKind.Absolute, out Uri firstUri) &&
                 Uri.TryCreate(second, UriKind.Absolute, out Uri secondUri))
             {
+                // GitHub's canonical HTTPS/SSH forms are intentionally handled
+                // above. On another host, the SSH user is part of the repository
+                // authority and must remain bound to cleanup ownership checks.
                 return string.Equals(firstUri.Scheme, secondUri.Scheme, StringComparison.OrdinalIgnoreCase) &&
                        string.Equals(firstUri.Host, secondUri.Host, StringComparison.OrdinalIgnoreCase) &&
+                       string.Equals(firstUri.UserInfo, secondUri.UserInfo, StringComparison.Ordinal) &&
                        firstUri.Port == secondUri.Port &&
                        string.Equals(firstUri.AbsolutePath.TrimEnd('/'), secondUri.AbsolutePath.TrimEnd('/'), StringComparison.Ordinal);
             }

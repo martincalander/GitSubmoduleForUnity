@@ -1,6 +1,8 @@
 using System;
 using System.Collections.Generic;
 using System.Reflection;
+using System.Security.Cryptography;
+using System.Text;
 using UnityEditor;
 using UnityEditor.UIElements;
 using UnityEngine;
@@ -637,7 +639,9 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             {
                 probeWarning = !string.IsNullOrWhiteSpace(snapshot.ErrorMessage)
                     ? snapshot.ErrorMessage
-                    : snapshot.ManifestMessage;
+                    : CombineMessages(
+                        snapshot.ManifestMessage,
+                        BuildUnityIntentWarning(snapshot));
             }
             string branchManifestWarning = ShouldWarnAboutManifestBranch(
                 branchField.value,
@@ -652,7 +656,8 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             string submissionIdentity = BuildSubmissionIdentity(
                 currentUrl,
                 packageNameField.value,
-                branchField.value);
+                branchField.value,
+                snapshot);
             if (confirmationPending &&
                 !string.Equals(
                     confirmationSubmissionIdentity,
@@ -687,7 +692,8 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 validationHelp.text = BuildTrustConfirmationMessage(
                     currentUrl,
                     packageNameField.value,
-                    branchField.value);
+                    branchField.value,
+                    snapshot);
                 validationHelp.messageType = HelpBoxMessageType.Warning;
                 validationHelp.style.display = DisplayStyle.Flex;
             }
@@ -854,7 +860,8 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             string submissionIdentity = BuildSubmissionIdentity(
                 submittedUrl,
                 submittedPackageName,
-                submittedBranch);
+                submittedBranch,
+                installProbe?.Current);
             if (string.IsNullOrEmpty(submissionIdentity))
             {
                 ShowInlineError(
@@ -892,6 +899,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                     submittedPackageName,
                     PackageManagerGitInstallMode.GitSubmodule,
                     installProbe?.Current,
+                    PackageManifestMetaPolicy.AllowUnverifiedWithWarning,
                     OnInstallPipelineCompleted,
                     out startError);
             }
@@ -931,13 +939,90 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             string packageName,
             string branch)
         {
+            return BuildSubmissionIdentity(
+                repositoryUrl,
+                packageName,
+                branch,
+                null);
+        }
+
+        internal static string BuildSubmissionIdentity(
+            string repositoryUrl,
+            string packageName,
+            string branch,
+            GitSubmoduleInstallProbeSnapshot snapshot)
+        {
             string locationFingerprint =
                 GitUtility.GetRepositoryLocationFingerprint(repositoryUrl);
-            return string.IsNullOrEmpty(locationFingerprint)
+            string probeEvidenceFingerprint =
+                BuildProbeEvidenceFingerprint(snapshot);
+            return string.IsNullOrEmpty(locationFingerprint) ||
+                   string.IsNullOrEmpty(probeEvidenceFingerprint)
                 ? string.Empty
                 : "location-sha256:" + locationFingerprint +
                    "\n" + (packageName?.Trim() ?? string.Empty) +
-                   "\n" + (branch?.Trim() ?? string.Empty);
+                   "\n" + (branch?.Trim() ?? string.Empty) +
+                   "\nsnapshot-revision:" + (snapshot?.Revision ?? -1) +
+                   "\nsnapshot-evidence-sha256:" + probeEvidenceFingerprint +
+                   "\nmeta:" + (snapshot == null
+                       ? PackageManifestMetaVerification.Unverified
+                       : snapshot.PackageManifestMetaVerification) +
+                   "\nmeta-guid:" + (snapshot?.PackageManifestMetaGuid ??
+                                         string.Empty);
+        }
+
+        private static string BuildProbeEvidenceFingerprint(
+            GitSubmoduleInstallProbeSnapshot snapshot)
+        {
+            string dependencyFingerprint = snapshot == null
+                ? string.Empty
+                : GitUtility.ComputePackageDependencyFingerprint(
+                    snapshot.Dependencies);
+            var evidence = new StringBuilder();
+            AppendEvidence(evidence, "revision", snapshot?.Revision.ToString());
+            AppendEvidence(evidence, "status", snapshot?.Status.ToString());
+            AppendEvidence(evidence, "url", snapshot?.Url);
+            AppendEvidence(evidence, "requestedBranch", snapshot?.RequestedBranch);
+            AppendEvidence(evidence, "inspectedBranch", snapshot?.InspectedBranch);
+            AppendEvidence(evidence, "packageName", snapshot?.PackageName);
+            AppendEvidence(evidence, "version", snapshot?.Version);
+            AppendEvidence(evidence, "dependencies", dependencyFingerprint);
+            AppendEvidence(evidence, "error", snapshot?.ErrorMessage);
+            AppendEvidence(evidence, "manifest", snapshot?.ManifestMessage);
+            AppendEvidence(
+                evidence,
+                "metaVerification",
+                snapshot?.PackageManifestMetaVerification.ToString());
+            AppendEvidence(evidence, "metaGuid", snapshot?.PackageManifestMetaGuid);
+            AppendEvidence(evidence, "metaMessage", snapshot?.PackageManifestMetaMessage);
+            try
+            {
+                using SHA256 sha256 = SHA256.Create();
+                byte[] digest = sha256.ComputeHash(
+                    Encoding.UTF8.GetBytes(evidence.ToString()));
+                var result = new StringBuilder(digest.Length * 2);
+                foreach (byte value in digest)
+                    result.Append(value.ToString("x2"));
+                return result.ToString();
+            }
+            catch
+            {
+                return string.Empty;
+            }
+        }
+
+        private static void AppendEvidence(
+            StringBuilder target,
+            string name,
+            string value)
+        {
+            string safeValue = value ?? string.Empty;
+            target.Append(name);
+            target.Append(':');
+            target.Append(safeValue.Length);
+            target.Append(':');
+            target.Append(safeValue);
+            target.Append('\n');
         }
 
         private void ShowInlineError(string title, string message)
@@ -1112,18 +1197,59 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             string declaredPackageName,
             string selectedBranch)
         {
+            return BuildTrustConfirmationMessage(
+                repositoryUrl,
+                declaredPackageName,
+                selectedBranch,
+                null);
+        }
+
+        internal static string BuildTrustConfirmationMessage(
+            string repositoryUrl,
+            string declaredPackageName,
+            string selectedBranch,
+            GitSubmoduleInstallProbeSnapshot snapshot)
+        {
             string branchDescription = string.IsNullOrWhiteSpace(selectedBranch)
                 ? "the repository default"
                 : selectedBranch.Trim();
             string destination = BuildDestinationPreview(declaredPackageName);
             string safeUrl = GitUtility.FormatRepositoryUrlForDisplay(
                 repositoryUrl?.Trim() ?? string.Empty);
-            return
+            string message =
                 $"Repository:\n{safeUrl}\n\n" +
                 $"Branch: {branchDescription}\n" +
                 $"Destination: {destination}\n\n" +
                 "Unity packages can contain Editor code that executes inside " +
                 "the Unity Editor. Only install repositories you trust.";
+            string unityIntentWarning = BuildUnityIntentWarning(snapshot);
+            return string.IsNullOrWhiteSpace(unityIntentWarning)
+                ? message
+                : "Unity package intent warning:\n" + unityIntentWarning +
+                  "\n\n" + message;
+        }
+
+        internal static string BuildUnityIntentWarning(
+            GitSubmoduleInstallProbeSnapshot snapshot)
+        {
+            if (snapshot?.PackageManifestMetaVerification ==
+                    PackageManifestMetaVerification.Verified &&
+                GitSubmoduleInstallProbeSnapshot.IsValidMetaGuid(
+                    snapshot.PackageManifestMetaGuid))
+            {
+                return string.Empty;
+            }
+
+            if (!string.IsNullOrWhiteSpace(
+                    snapshot?.PackageManifestMetaMessage))
+            {
+                return snapshot.PackageManifestMetaMessage.Trim();
+            }
+
+            return
+                "Unity package intent is unverified. package.json is also used " +
+                "by npm, and this branch does not contain a valid root " +
+                "package.json.meta.";
         }
 
         internal static string ResolveProbedValue(

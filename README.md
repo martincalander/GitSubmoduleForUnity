@@ -31,8 +31,8 @@ modes.
 - Add a repository directly with **+ > Install package as Git Submodule...**.
 - Convert eligible packages or uninstall submodules from Package Manager's
   native **Manage** menu.
-- Validate root `package.json` files and resolve missing dependencies before
-  making changes.
+- Validate root `package.json` files and Unity `package.json.meta` markers, then
+  resolve missing dependencies before making changes.
 
 ## Requirements
 
@@ -57,8 +57,11 @@ In **Window > Package Management > Package Manager**, choose **+ > Install
 package from git URL...** and enter:
 
 ```text
-https://github.com/martincalander/GitSubmoduleManager.git
+https://github.com/martincalander/GitSubmoduleManager.git#v2.0.0
 ```
+
+An unqualified repository URL follows the mutable `main` branch and is intended
+only for development or pre-release testing.
 
 ## Quick Start
 
@@ -70,9 +73,13 @@ https://github.com/martincalander/GitSubmoduleManager.git
    menu to install a submodule directly from a secure Git URL or local repository.
 
 GitHub catalogue discovery uses `gh`; direct URL probing and package operations
-use Git. A repository must contain a valid UPM `package.json` at its root to be
-discovered or installed by this tool. Read-only packages using a repository
-subdirectory cannot be converted to submodules.
+use Git. Automatic catalogue eligibility requires both a valid UPM
+`package.json` and a valid Unity `package.json.meta` at the repository root.
+Because `package.json` is also used outside Unity, direct URL installation shows
+a mandatory warning when the Unity marker is missing or invalid, but still lets
+the user install an otherwise valid root UPM package they explicitly trust.
+Read-only packages using a repository subdirectory cannot be converted to
+submodules.
 
 ## Safety
 

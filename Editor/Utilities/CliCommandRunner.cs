@@ -26,6 +26,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         public int TimeoutMs = CliCommandRunner.DefaultTimeoutMs;
         public CancellationToken CancellationToken;
         public CommandTerminationScope TerminationScope = CommandTerminationScope.CompleteProcessTree;
+        public bool RequireStrictUtf8StdOut;
     }
 
     internal sealed class CommandResult
@@ -39,6 +40,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         public bool TerminationConfirmed;
         public bool StdOutTruncated;
         public bool StdErrTruncated;
+        public bool StdOutInvalidUtf8;
         public bool BlockedByGitHubAuthentication;
         public string CompletionWarning;
 
@@ -360,7 +362,8 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             string workingDir,
             int timeoutMs = DefaultTimeoutMs,
             CommandTerminationScope terminationScope = CommandTerminationScope.CompleteProcessTree,
-            bool isGitHubAuthenticationCommand = false)
+            bool isGitHubAuthenticationCommand = false,
+            bool requireStrictUtf8StdOut = false)
         {
             if (!TryBeginGitHubCommand(
                     fileName,
@@ -377,7 +380,8 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 ArgumentList = arguments,
                 WorkingDirectory = workingDir,
                 TimeoutMs = timeoutMs,
-                TerminationScope = terminationScope
+                TerminationScope = terminationScope,
+                RequireStrictUtf8StdOut = requireStrictUtf8StdOut
             }, tracksGitHubCommand ? (Action<AsyncCommandHandle>)CompleteGitHubCommand : null);
             try
             {
@@ -603,6 +607,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         private int characterCount;
         private bool hasData;
         private bool isTruncated;
+        private bool hasEncodingError;
 
         internal BoundedTextBuffer(int maximumCharacters)
         {
@@ -619,6 +624,15 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             {
                 lock (syncRoot)
                     return isTruncated;
+            }
+        }
+
+        internal bool HasEncodingError
+        {
+            get
+            {
+                lock (syncRoot)
+                    return hasEncodingError;
             }
         }
 
@@ -665,6 +679,12 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         {
             lock (syncRoot)
                 isTruncated = true;
+        }
+
+        internal void MarkEncodingError()
+        {
+            lock (syncRoot)
+                hasEncodingError = true;
         }
 
         private void AppendFragment(string value)
@@ -722,6 +742,8 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         private const int ProcessTreeTerminationTimeoutMs = 5000;
         private const int OutputDrainTimeoutMs = 1000;
         private const int MaximumEnumeratedProcesses = 100000;
+        private static readonly Encoding StrictUtf8Encoding =
+            new UTF8Encoding(false, true);
 
         public CommandResult Run(CommandSpec spec)
         {
@@ -759,7 +781,8 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 var startInfo = BuildProcessStartInfo(
                     resolution.ResolvedPath,
                     arguments,
-                    spec.WorkingDirectory);
+                    spec.WorkingDirectory,
+                    spec.RequireStrictUtf8StdOut);
                 process = new Process { StartInfo = startInfo };
                 var stdOut = new BoundedTextBuffer(CliCommandRunner.MaxCapturedCharactersPerStream);
                 var stdErr = new BoundedTextBuffer(CliCommandRunner.MaxCapturedCharactersPerStream);
@@ -769,11 +792,17 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 if (!process.Start())
                     return Failure($"Failed to start process: {spec.FileName}", resolution.ResolvedPath);
                 processStarted = true;
-                Thread stdOutReader = StartBoundedReader(
-                    process.StandardOutput,
-                    stdOut,
-                    stdOutCompleted,
-                    "Git Submodule Manager stdout reader");
+                Thread stdOutReader = spec.RequireStrictUtf8StdOut
+                    ? StartBoundedStrictUtf8Reader(
+                        process.StandardOutput.BaseStream,
+                        stdOut,
+                        stdOutCompleted,
+                        "Git Submodule Manager stdout reader")
+                    : StartBoundedReader(
+                        process.StandardOutput,
+                        stdOut,
+                        stdOutCompleted,
+                        "Git Submodule Manager stdout reader");
                 Thread stdErrReader = StartBoundedReader(
                     process.StandardError,
                     stdErr,
@@ -874,7 +903,8 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         internal static ProcessStartInfo BuildProcessStartInfo(
             string resolvedExecutablePath,
             IReadOnlyList<string> arguments,
-            string workingDirectory)
+            string workingDirectory,
+            bool requireStrictUtf8StdOut = false)
         {
             var startInfo = new ProcessStartInfo
             {
@@ -887,6 +917,8 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 UseShellExecute = false,
                 CreateNoWindow = true
             };
+            if (requireStrictUtf8StdOut)
+                startInfo.StandardOutputEncoding = StrictUtf8Encoding;
             SanitizeInheritedEnvironment(startInfo, resolvedExecutablePath);
             startInfo.EnvironmentVariables["GIT_TERMINAL_PROMPT"] = "0";
             startInfo.EnvironmentVariables["GCM_INTERACTIVE"] = "Never";
@@ -1542,6 +1574,11 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 {
                     // Expected when a timed-out process has its pipe closed.
                 }
+                catch (DecoderFallbackException)
+                {
+                    destination.MarkEncodingError();
+                    DrainUnreadBytes(reader);
+                }
                 finally
                 {
                     completed.Set();
@@ -1553,6 +1590,149 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             };
             thread.Start();
             return thread;
+        }
+
+        private static Thread StartBoundedStrictUtf8Reader(
+            Stream stream,
+            BoundedTextBuffer destination,
+            ManualResetEventSlim completed,
+            string threadName)
+        {
+            var thread = new Thread(() =>
+            {
+                var bytes = new byte[4096];
+                var characters = new char[StrictUtf8Encoding.GetMaxCharCount(bytes.Length)];
+                Decoder decoder = StrictUtf8Encoding.GetDecoder();
+                bool isFirstCharacter = true;
+                try
+                {
+                    int bytesRead;
+                    while ((bytesRead = stream.Read(bytes, 0, bytes.Length)) > 0)
+                    {
+                        decoder.Convert(
+                            bytes,
+                            0,
+                            bytesRead,
+                            characters,
+                            0,
+                            characters.Length,
+                            false,
+                            out int bytesUsed,
+                            out int charactersUsed,
+                            out bool completedChunk);
+                        if (bytesUsed != bytesRead || !completedChunk)
+                        {
+                            destination.MarkTruncated();
+                            DrainUnreadBytes(stream);
+                            return;
+                        }
+
+                        AppendStrictUtf8Characters(
+                            destination,
+                            characters,
+                            charactersUsed,
+                            ref isFirstCharacter);
+                    }
+
+                    decoder.Convert(
+                        Array.Empty<byte>(),
+                        0,
+                        0,
+                        characters,
+                        0,
+                        characters.Length,
+                        true,
+                        out _,
+                        out int finalCharactersUsed,
+                        out bool completedOutput);
+                    if (!completedOutput)
+                    {
+                        destination.MarkTruncated();
+                        return;
+                    }
+
+                    AppendStrictUtf8Characters(
+                        destination,
+                        characters,
+                        finalCharactersUsed,
+                        ref isFirstCharacter);
+                }
+                catch (IOException)
+                {
+                    // Expected when a timed-out process has its pipe closed.
+                }
+                catch (ObjectDisposedException)
+                {
+                    // Expected when a timed-out process has its pipe closed.
+                }
+                catch (DecoderFallbackException)
+                {
+                    destination.MarkEncodingError();
+                    DrainUnreadBytes(stream);
+                }
+                finally
+                {
+                    completed.Set();
+                }
+            })
+            {
+                IsBackground = true,
+                Name = threadName
+            };
+            thread.Start();
+            return thread;
+        }
+
+        private static void AppendStrictUtf8Characters(
+            BoundedTextBuffer destination,
+            char[] characters,
+            int characterCount,
+            ref bool isFirstCharacter)
+        {
+            if (characterCount <= 0)
+                return;
+
+            int characterOffset = 0;
+            if (isFirstCharacter)
+            {
+                isFirstCharacter = false;
+                if (characters[0] == '\ufeff')
+                    characterOffset = 1;
+            }
+
+            if (characterOffset < characterCount)
+            {
+                destination.Append(new string(
+                    characters,
+                    characterOffset,
+                    characterCount - characterOffset));
+            }
+        }
+
+        private static void DrainUnreadBytes(StreamReader reader)
+        {
+            DrainUnreadBytes(reader.BaseStream);
+        }
+
+        private static void DrainUnreadBytes(Stream stream)
+        {
+            var buffer = new byte[4096];
+            try
+            {
+                while (stream.Read(buffer, 0, buffer.Length) > 0)
+                {
+                    // Invalid text is discarded, but the pipe must keep draining
+                    // so a large blob cannot block the child process on stdout.
+                }
+            }
+            catch (IOException)
+            {
+                // Expected when timeout cleanup closes the pipe.
+            }
+            catch (ObjectDisposedException)
+            {
+                // Expected when timeout cleanup closes the pipe.
+            }
         }
 
         private static void DrainRedirectedOutput(
@@ -1630,7 +1810,8 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 Cancelled = cancelled,
                 TerminationConfirmed = terminationConfirmed,
                 StdOutTruncated = stdOut.IsTruncated,
-                StdErrTruncated = stdErr.IsTruncated
+                StdErrTruncated = stdErr.IsTruncated,
+                StdOutInvalidUtf8 = stdOut.HasEncodingError
             };
         }
 
