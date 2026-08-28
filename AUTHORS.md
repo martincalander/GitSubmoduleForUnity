@@ -2,7 +2,7 @@
 
 ## Creator and Maintainer
 
-- **Martin Calander** — original concept, design, implementation, and maintenance
+- **Martin Calander** — creator and maintainer
   - [GitHub](https://github.com/martincalander)
   - [Website](https://martincalander.com)
 
@@ -11,5 +11,5 @@
 Community contributions are credited through the repository's
 [contributors page](https://github.com/martincalander/GitSubmoduleManager/graphs/contributors).
 
-By contributing, you agree that your work is distributed under the project's
-[MIT License](LICENSE.md).
+Contributors retain authorship of their work. The combined project is
+distributed under the [MIT License](LICENSE.md).

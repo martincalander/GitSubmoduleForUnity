@@ -9,7 +9,7 @@ compatibility, and a native Unity Editor experience over feature count.
   Unity `6000.5.*f1` final patch releases;
 - expand Windows, macOS, and Linux CI coverage where Unity licensing permits;
 - improve update-state visibility without performing implicit network work;
-- add focused integration tests around temporary Git repositories;
+- continue expanding integration coverage with temporary Git repositories;
 - improve accessibility, keyboard navigation, and narrow-window behavior.
 
 ## Candidate Work
@@ -27,6 +27,6 @@ compatibility, and a native Unity Editor experience over feature count.
 - managing subtrees, registries, or arbitrary project folders;
 - storing GitHub tokens or Git credentials.
 
-The roadmap is directional, not a delivery commitment. Discuss proposals before
-starting large implementations so design and compatibility constraints can be
-agreed first.
+The roadmap is directional rather than a delivery schedule. Before starting a
+large change, follow the [contribution guide](../.github/CONTRIBUTING.md) so its
+design and compatibility impact can be discussed first.

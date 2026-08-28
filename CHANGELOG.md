@@ -7,80 +7,45 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-### Security
-
-- Structural command output that requires UTF-8 is now decoded from raw bytes
-  with BOM auto-detection disabled and the strict decoder flushed at EOF. This
-  prevents UTF-16 BOM content from being accepted as a package manifest or
-  Unity meta marker while retaining bounded, concurrent stream draining.
-- Registry fallback for custom dependencies is now bound to the exact complete
-  GitHub catalogue revision that proved package absence. If discovery revision
-  or coverage changes while a registry search is pending, the stale result is
-  discarded and the requirement is resolved again against current evidence.
-- Submodule add completion now binds the package gitlink and immutable staged
-  `.gitmodules` blob in one index snapshot, verifies the initialized child
-  `origin`, exact `HEAD`, and regular bounded worktree file, and repeats the
-  terminal proof around the origin read. Stage-only redirects, late origin or
-  commit swaps, late dirty or interrupted child state, linked `.gitmodules`
-  files, and unstable evidence fail closed.
-- Dependency-step completion now requires each fresh worktree `.gitmodules`
-  proof to be one regular, non-linked, strict-UTF-8 file no larger than 128 KiB
-  whose raw Git blob identity equals the staged registration, including at the
-  terminal acceptance boundary.
-- Failed-add rollback is now bound to the exact add-produced gitlink and staged
-  `.gitmodules` identity and proceeds only when target-section removal exactly
-  reproduces the pre-add baseline. Recovery postconditions are non-cancellable,
-  and unsafe outcomes report the exact preserved worktree and metadata paths.
-- Submodule removal now closes on the exact desired index, regular worktree
-  identity, quiet diff, and package absence after late hooks. Concurrent regular
-  or linked replacements are preserved; CRLF worktrees are accepted only when
-  exact CRLF-to-LF normalization hashes to the staged blob.
-- Reload journals are now read through bounded strict-UTF-8 regular-file
-  snapshots with nonblocking, no-follow POSIX opens. Replacement and deletion
-  use exact identity checks, and quarantined journal bytes remain recoverable so
-  a late writer can never be unlinked as cleanup-owned data.
-- Manifest compare-and-swap cleanup now atomically quarantines and retains each
-  exact randomized sibling instead of deleting it after a mutable byte read.
-  Late or ambiguous writer bytes therefore remain recoverable under their
-  unique sibling path.
-
-## [2.0.0] - 2026-08-27
+## [2.0.0] - 2026-08-29
 
 ### Security
 
-- GitHub catalogue discovery now requires a valid regular root
-  `package.json.meta`, fetched with `package.json` from the same commit, before a
-  repository is classified as a Unity package. The marker is bounded and must
-  contain `fileFormatVersion: 2` plus one nonzero root GUID.
-- Explicit direct-URL installs still accept a valid root UPM manifest when the
-  Unity meta marker is missing or invalid, but now show a mandatory warning;
-  verified marker identity is carried into post-install validation. Git tree
-  modes and exact blob IDs are checked so symbolic-link entries cannot satisfy
-  manifest or verified-meta validation.
-- Read-only catalogue and dependency installs now pin the exact commit whose
-  root manifest and meta marker were inspected, retain that commit across
-  reload, and require Unity's resolved Git hash to match before succeeding.
-- Submodule-to-read-only conversion now requires exact-commit regular root
-  `package.json` and `package.json.meta` blobs, a matching valid UPM package
-  identity, and a bounded canonical Unity meta marker before either the project
-  manifest or source submodule can change.
-- Read-only-to-submodule conversion now validates the regular root
-  `package.json` blob and declared package name directly from Unity's exact
-  resolved commit before removing the source dependency.
-- Submodule installs now require the checked-out `HEAD` to match the exact
-  commit inspected during preflight and bind root tree-mode validation to that
-  immutable commit before the transaction can succeed.
-- Dependency-aware submodule steps no longer advance from the presentation
-  snapshot's cached commit alone. A fresh operation- and step-scoped worker
-  verifies the current origin, exact worktree and staged `.gitmodules`
-  registration, and repeated parent stage-0 gitlink plus initialized submodule
-  `HEAD` reads. The terminal stability sequence rechecks commit state, origin,
-  then commit state again; pending, stale, unstable, truncated, or unconfirmed
-  evidence fails closed.
-- Hardened destructive operations with exact Git-root/worktree/origin checks,
-  ignored-file protection, cancellable transactions, and recovery ownership.
-- Hardened CI and releases so pull-request code cannot access Unity credentials
-  and published archives are the exact bytes tested in Unity.
+- Catalogue discovery now requires regular root `package.json` and
+  `package.json.meta` blobs from the same commit. Direct URL installation still
+  permits a valid manifest without the Unity marker, but only after a mandatory
+  warning. Verified file identities are checked again after installation.
+- Installs and conversions are tied to the commit inspected during preflight.
+  The manager checks the resulting package identity, Git revision, and root file
+  types before accepting an install or removing the original package source.
+- Structural Git output, manifests, meta files, and recovery journals use
+  bounded strict-UTF-8 reads. Malformed, truncated, linked, replaced, or
+  oversized data is rejected instead of being treated as repository state.
+- Process creation is serialized only across the redirected-pipe setup window,
+  preventing concurrent commands from inheriting one another's output handles
+  under Unity's Mono runtime. Normally completed commands then share a bounded
+  five-second drain window, while inherited or stuck handles still fail closed.
+- Submodule completion no longer trusts cached Package Manager state. Fresh
+  checks bind the parent gitlink, staged and worktree `.gitmodules`, child
+  origin, and `HEAD` to the current operation. The final stability check repeats
+  those reads around the origin lookup; `.gitmodules` is capped at 128 KiB.
+- Registry fallback for a custom dependency is tied to the complete GitHub
+  catalogue revision that found no match. If catalogue coverage changes while a
+  registry request is pending, resolution starts again with current data.
+- Destructive operations check dirty and ignored files, exact Git index state,
+  and cleanup ownership. Rollback removes only state created by the operation;
+  concurrent changes and ambiguous files are kept with recovery instructions.
+  Once recovery mutation starts, its closing checks cannot be cancelled.
+- Submodule removal verifies the final index, worktree identity, diff, and path
+  absence. Exact CRLF-to-LF normalization is supported, while linked or
+  concurrently replaced files are preserved.
+- Manifest edits and reload journals use identity-checked replacement and
+  quarantine paths, so a late writer's bytes are recoverable rather than
+  deleted. Pull-request code cannot access Unity credentials, and releases
+  publish the same archive bytes tested in Unity.
+
+The exact Git proof sequences and recovery boundaries are documented in the
+[architecture and safety model](Documentation~/architecture.md).
 
 ### Added
 
@@ -105,8 +70,8 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   Git dependencies. Per-user Preferences provide the initial visibility,
   organization, and install-mode defaults: all repositories, all owners, and Git
   submodule respectively.
-- Package Manager presentation for installed package submodules, including a
-  **Submodule** tag and **GitHub** source with the existing themed Git icon.
+- Package Manager now presents installed submodules with a **Submodule** tag and
+  a **GitHub** source using the existing themed Git icon.
 - A fully native **GitHub** page under Package Manager's **Sources** section on
   Editors with extension-page support. It uses Unity's package list, search,
   sort, selection, and details UI for installed GitHub submodules and valid UPM
@@ -115,12 +80,11 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   _owner_**, carry **Public** or **Private** repository badges, and use Package
   Manager's native loading message and spinner while discovery is running.
 - Native discovered-package details with a **Repository** website link, Git-based
-  branch selector that prefers `main` and otherwise uses the repository's default
-  branch, and a primary **Install** action outside Unity's **Extensions**
-  overflow. Installation uses
-  the shared validated add transaction and rolls back failed clones or
-  postcondition checks when process termination and cleanup ownership can be
-  proven.
+  branch selector that prefers `main` and otherwise uses the repository's
+  default branch, and a primary **Install** action outside Unity's **Extensions**
+  overflow. Installation uses the shared validated add transaction and rolls
+  back failed clones or postcondition failures when process termination and
+  cleanup ownership can be proven.
 - A Package Manager **+ > Install package as Git Submodule...** command that is
   available from every Package Manager page. A Git-only remote probe discovers
   branches, the default branch, and the exact root `package.json` name before
@@ -180,7 +144,7 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   GraphQL request, automatically bisects oversized responses, and avoids
   redundant Package Manager projection, list rebuilds, and package lookup work
   during loading-only progress updates. Refreshes retain the last completed
-  catalogue atomically for a bounded safety window, so installed-package
+  catalogue atomically for up to 15 minutes, so installed-package
   actions remain available while replacement results load.
 - Current management now lives exclusively at **Window > Package Management >
   Package Manager > Sources > GitHub** and in Package Manager's native details,
@@ -284,48 +248,51 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Release validation now behaves consistently on Windows, includes required
   attribution in package archives, and checks out and revalidates the exact
   annotated tag without persisting repository credentials.
-- Resolve native actions from Package Manager's exact active-page selection
+- Resolved native actions from Package Manager's exact active-page selection
   after package resolves or script reloads, preventing a recycled stale toolbar
   package from disabling an installed submodule's **Manage** actions.
 - Reset retained-catalogue inspection throttling with each discovery lifecycle,
   so an earlier host timestamp cannot postpone expiry after refresh or teardown.
-- Make the native GitHub package **Install** action and the Package Manager **+**
+- Made the native GitHub package **Install** action and the Package Manager **+**
   installer use inline confirmation, progress, and error states so they remain
   responsive in automated GUI Editors where Unity suppresses modal dialogs.
-- Block submodule removal when modified, untracked, conflicted, unpushed, staged,
+- Blocked submodule removal when modified, untracked, conflicted, unpushed, staged,
   or otherwise ambiguous work could be lost; recovery metadata is preserved.
-- Preserve staged and unstaged `.gitmodules` state by refusing ambiguous parent
+- Preserved staged and unstaged `.gitmodules` state by refusing ambiguous parent
   mutations and validating index locks before changes.
-- Accept valid UPM package names containing hyphens or underscores while
+- Accepted valid UPM package names containing hyphens or underscores while
   requiring the exact case-sensitive `Packages/` directory.
-- Reject executable Git remote helpers, embedded URL credentials, unsafe browser
+- Rejected executable Git remote helpers, embedded URL credentials, unsafe browser
   schemes, plaintext `http://`/`git://` transports, and mismatched stale
   submodule metadata.
-- Resolve module metadata through Git so remove/re-add works in linked worktrees.
-- Validate bounded regular UTF-8 manifests after cloning, reject duplicate
-  submodule registrations, and discard truncated structural Git output.
-- Verify the exact package name, version, and dependency map captured during
+- Resolved module metadata through Git so remove/re-add works in linked worktrees.
+- Validated bounded regular UTF-8 manifests after cloning, rejected duplicate
+  submodule registrations, and discarded truncated structural Git output.
+- Verified the exact package name, version, and dependency map captured during
   preflight after each dependency-aware submodule or read-only Git install.
   Mismatches trigger owned rollback or removal; incomplete cleanup reports that
   the checkout or `Packages/manifest.json` entry may remain.
-- Preserve repository-default branch semantics instead of silently forcing or
-  displaying `main` when no branch is configured.
-- Keep installed navigation usable during optional GitHub failures, prevent
-  stale GitHub account data after re-authentication, and clamp virtualized list
+- Preserved the remote-default branch for direct URL installation when no branch
+  is configured, instead of silently forcing or displaying `main`.
+- Kept installed navigation usable during optional GitHub failures, prevented
+  stale GitHub account data after re-authentication, and clamped virtualized list
   scrolling after result changes.
-- Finalize recovery journals from worker-owned safety outcomes so a closed
+- Finalized recovery journals from worker-owned safety outcomes so a closed
   EditorWindow or notification exception cannot turn a verified operation into
   a false unsafe-recovery state.
-- Declare the Unity JSON serialization module used by manifest and recovery
+- Declared the Unity JSON serialization module used by manifest and recovery
   journal parsing so minimal Unity projects receive every required module.
-- Roll back in-memory user preferences when Unity cannot save `UserSettings`,
-  and report the failure inside Preferences instead of throwing through IMGUI.
-- Count a manually opened first-time welcome page as shown, preventing an
+- Rolled back in-memory user preferences when Unity cannot save `UserSettings`,
+  and reported the failure inside Preferences instead of throwing through IMGUI.
+- Counted a manually opened first-time welcome page as shown, preventing an
   unexpected second automatic presentation on the next window open.
-- Keep the notification-safety regression test from writing its intentional
+- Kept the notification-safety regression test from writing its intentional
   callback exception to Unity's Console while preserving production reporting.
 
 ## [1.0.0] - 2026-07-12
+
+This was a development snapshot; no `v1.0.0` tag or GitHub release was
+published.
 
 ### Added
 
@@ -356,11 +323,11 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
-- Use GitHub clone URLs instead of REST API endpoint URLs for discovered
+- Used GitHub clone URLs instead of REST API endpoint URLs for discovered
   repositories.
-- Prevent stale owner, page, or search responses from replacing newer results.
-- Apply installed-state marking and sorting after discovery completes.
-- Preserve Windows backslashes in quoted process arguments.
+- Prevented stale owner, page, or search responses from replacing newer results.
+- Applied installed-state marking and sorting after discovery completed.
+- Preserved Windows backslashes in quoted process arguments.
 
 ## [0.1.0] - 2025
 

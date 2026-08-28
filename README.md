@@ -14,10 +14,10 @@ Manage Git-hosted Unity packages from Unity's native Package Manager.
   <a href="LICENSE.md"><img alt="MIT License" src="https://img.shields.io/badge/license-MIT-blue"></a>
 </p>
 
-Git Submodule Manager adds GitHub discovery and Git workflows directly to
-Unity's Package Manager. Install root UPM repositories as editable submodules or
-normal read-only Git dependencies, and convert eligible packages between the two
-modes.
+Git Submodule Manager brings Git-hosted Unity packages into Unity's own Package
+Manager. Browse GitHub repositories, install a root UPM package as an editable
+submodule or read-only Git dependency, and switch eligible packages between the
+two modes without leaving the Editor.
 
 ## Highlights
 
@@ -53,8 +53,8 @@ Windows, macOS, and Linux.
 
 ## Installation
 
-In **Window > Package Management > Package Manager**, choose **+ > Install
-package from git URL...** and enter:
+Install the tagged `v2.0.0` release from **Window > Package Management > Package
+Manager > + > Install package from git URL...**:
 
 ```text
 https://github.com/martincalander/GitSubmoduleManager.git#v2.0.0
@@ -73,13 +73,11 @@ only for development or pre-release testing.
    menu to install a submodule directly from a secure Git URL or local repository.
 
 GitHub catalogue discovery uses `gh`; direct URL probing and package operations
-use Git. Automatic catalogue eligibility requires both a valid UPM
-`package.json` and a valid Unity `package.json.meta` at the repository root.
-Because `package.json` is also used outside Unity, direct URL installation shows
-a mandatory warning when the Unity marker is missing or invalid, but still lets
-the user install an otherwise valid root UPM package they explicitly trust.
-Read-only packages using a repository subdirectory cannot be converted to
-submodules.
+use Git. Catalogue entries need a valid root UPM `package.json` and Unity
+`package.json.meta`, which helps keep ordinary npm repositories out of automatic
+discovery. Direct URL installs may proceed without a valid meta file, but only
+after a mandatory warning. Read-only dependencies that point to a repository
+subdirectory cannot be converted to submodules.
 
 ## Safety
 
@@ -88,11 +86,11 @@ submodules.
   are also supported.
 - Commands run without a shell, hidden credential prompts are disabled, and the
   package never installs CLI tools or stores credentials.
-- Local, staged, untracked, unpushed, or unverified work is never silently
-  discarded. Changes require confirmation when they can be assessed safely;
+- The manager never silently deletes local, staged, untracked, unpushed, or
+  unverified work. Changes require confirmation when their state can be checked;
   ambiguous states are blocked.
-- Mutations verify Git and package state, roll back only when cleanup ownership
-  is proven, and otherwise provide recovery instructions.
+- Rollback removes only state that can be tied to the current operation. Anything
+  uncertain is left in place with recovery instructions.
 
 See the [architecture and safety model](Documentation~/architecture.md) and
 [security policy](https://github.com/martincalander/GitSubmoduleManager/blob/main/.github/SECURITY.md)

@@ -6,11 +6,10 @@ settings are not stored in Git and must be configured in GitHub.
 ## General
 
 - [ ] Confirm the repository owner and default branch are correct.
-- [ ] Add the description: `A safe, cross-platform Unity Editor workflow for managing Git submodules as UPM packages.`
+- [ ] Add the description: `Manage Git-hosted UPM packages in Unity as editable submodules or read-only dependencies.`
 - [ ] Add topics: `unity`, `unity-editor`, `upm`, `git`, `submodule`,
   `package-manager`, `developer-tools`.
-- [ ] Leave the social preview unset unless a human-designed, project-specific
-  image is available; do not use a generic generated banner.
+- [ ] Use a project-specific social preview, or leave it unset.
 - [ ] Confirm GitHub recognizes the MIT license.
 - [ ] Enable Issues so the bundled forms become available.
 
@@ -19,8 +18,8 @@ settings are not stored in Git and must be configured in GitHub.
 Protect `main` with:
 
 - [ ] pull requests required before merging;
-- [ ] at least one approving review;
-- [ ] review from the package Code Owner required;
+- [ ] one approving review and Code Owner review when a second active maintainer
+  is available;
 - [ ] stale approvals dismissed when new commits are pushed;
 - [ ] conversation resolution required;
 - [ ] `Required sanity gate` required from the **Sanity Checks** workflow, with
@@ -54,9 +53,10 @@ Protect release tags with a `v*` tag ruleset:
 - [ ] Enable immutable releases before publishing the first release.
 - [ ] Enable GitHub private vulnerability reporting and keep the security email
   in `.github/SECURITY.md` monitored as a fallback.
-- [ ] Create the referenced labels (`needs-triage`, `support`, `dependencies`,
-  `automation`, `maintenance`, `feature`, and `fix`) before enabling Issues or
-  release automation, then confirm both issue forms can be submitted.
+- [ ] Create the referenced labels (`needs-triage`, `support`, `bug`,
+  `enhancement`, `documentation`, `dependencies`, `automation`, `maintenance`,
+  `feature`, and `fix`) before enabling Issues or release automation, then
+  confirm all three issue forms can be submitted.
 
 ## Release
 

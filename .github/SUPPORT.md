@@ -3,27 +3,36 @@
 ## Before Asking for Help
 
 Check the [troubleshooting guide](../Documentation~/troubleshooting.md), then
-confirm these commands work in the same user account that launches Unity:
+confirm that Git works in the same user account that launches Unity:
 
 ```bash
 git --version
+```
+
+If the problem involves **Sources > GitHub**, also check the optional GitHub
+CLI and its authentication:
+
+```bash
 gh --version
 gh auth status -h github.com
 ```
 
-Only Git is required. GitHub CLI (`gh`) is optional and powers repository
-discovery.
+GitHub CLI (`gh`) is not required for direct URL installation or other Git-only
+package operations.
 
 ## Where to Ask
 
-- Use the [support request form](https://github.com/martincalander/GitSubmoduleManager/issues/new?template=support_request.yml)
-  for setup questions and usage help.
-- Use the [bug report form](https://github.com/martincalander/GitSubmoduleManager/issues/new?template=bug_report.yml)
-  for reproducible defects.
-- Use the [feature request form](https://github.com/martincalander/GitSubmoduleManager/issues/new?template=feature_request.yml)
-  for scoped enhancements.
-- Follow [SECURITY.md](SECURITY.md) for vulnerabilities. Do not publish
-  security-sensitive details in a public issue.
+Open the repository's **Issues** tab and choose the form that fits:
+
+- **Support request** for setup questions and usage help;
+- **Bug report** for reproducible defects;
+- **Feature request** for scoped enhancements.
+
+If the **Issues** tab is unavailable, the repository owner has not finished the
+[publication setup](REPOSITORY_SETUP.md).
+
+For vulnerabilities, follow [SECURITY.md](SECURITY.md). Do not publish
+security-sensitive details in a public issue.
 
 ## Useful Diagnostic Information
 

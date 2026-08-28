@@ -10,10 +10,13 @@ below. Git and GitHub CLI remain external tools supplied separately by the user.
 - File: `ThirdParty/GitSubmoduleManager.Harmony.dll`
 - Project: [Harmony](https://github.com/pardeike/Harmony)
 - License: MIT License
-- Copyright: Copyright (c) Andreas Pardeike
-- Role: defensive Editor-only patching of Unity Package Manager presentation
+- Copyright holder: Andreas Pardeike
+- Role: Editor-only patches for specific Unity Package Manager presentation
+  methods
 
 #### MIT License
+
+Copyright (c) 2017 Andreas Pardeike
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -42,10 +45,9 @@ SOFTWARE.
 - Creator: Jason Long
 - Source: [Git logo downloads](https://git-scm.com/community/logos)
 - License: [Creative Commons Attribution 3.0 Unported](https://creativecommons.org/licenses/by/3.0/)
-- Use: the official full-color Git icon for package artwork and one-color
-  variants recolored to Unity's built-in dark- and light-skin icon values for
-  the standalone Welcome window, Package Manager Sources row, and source
-  presentation
+- Use: the official full-color Git icon for package artwork. One-color variants
+  are recolored for Unity's dark and light skins and appear in the Welcome
+  window, Package Manager Sources row, and source presentation.
 
 ## External Tools
 

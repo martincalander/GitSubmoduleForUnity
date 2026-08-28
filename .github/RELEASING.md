@@ -1,8 +1,8 @@
 # Releasing Git Submodule Manager
 
-This guide is for maintainers publishing a GitHub and UPM release. Releases
-follow [Semantic Versioning](https://semver.org/) and are produced by the
-[Publish Release workflow](workflows/release.yml).
+This guide is for maintainers publishing a GitHub release for the UPM package.
+Releases follow [Semantic Versioning](https://semver.org/) and are produced by
+the [Publish Release workflow](workflows/release.yml).
 
 ## Release Authority
 
@@ -25,9 +25,14 @@ Before enabling credentialed CI, configure two protected GitHub environments:
 
 Do not store Unity credentials as general repository secrets. Set the repository
 variable `UNITY_CI_ENABLED=true` only after `unity-ci` is protected. Protect
-`main` from direct/force pushes, require pull-request review and sanity checks,
-and add a tag protection rule for `v*` before publishing. These settings are
-repository controls and cannot be enforced by workflow YAML alone.
+`main` from direct and force pushes, require pull requests and sanity checks,
+and require independent review when another maintainer is available. Add a tag
+protection rule for `v*` before publishing. These settings are repository
+controls and cannot be enforced by workflow YAML alone.
+
+Keep the GameCI action and each release-matrix Editor image pinned to reviewed
+commit and image digests. Adding another Unity patch to CI requires recording
+its exact image digest in both workflows before it can become a release gate.
 
 ## Version Policy
 
@@ -46,7 +51,8 @@ The version in [`package.json`](../package.json) and the tag without its leading
 1. Work from a clean branch based on the latest `main`.
 2. Update `package.json` to the intended version.
 3. Move relevant entries from **Unreleased** into a dated version section in
-   [`CHANGELOG.md`](../CHANGELOG.md).
+   [`CHANGELOG.md`](../CHANGELOG.md), remove any unpublished-version note, and
+   update its comparison links for the intended tag.
 4. Confirm installation, compatibility, and troubleshooting documentation are
    still accurate.
 5. Run the repository checks:
@@ -54,15 +60,17 @@ The version in [`package.json`](../package.json) and the tag without its leading
    ```bash
    python3 .github/scripts/validate_repository.py
    npx --yes markdownlint-cli2@0.23.0 "**/*.md" "#Library" "#Temp"
-   npm pack --dry-run
+   npm pack --ignore-scripts --dry-run
    ```
 
 6. In a clean Unity project, install the package from the exact release commit,
-   run `MartinCalander.GitSubmoduleManager.Editor.Tests` in EditMode, and exercise add, update,
-   and remove behavior.
+   run `MartinCalander.GitSubmoduleManager.Editor.Tests` in EditMode, then test
+   submodule and read-only installation, both eligible conversions, and
+   submodule removal.
 7. Record any platform or Unity version that could not be tested in the release
    pull request.
-8. Merge the release pull request only after required checks and review pass.
+8. Merge the release pull request only after required checks pass and the
+   applicable review policy is satisfied.
 
 Fork pull requests never receive Unity credentials. A maintainer must inspect
 the contribution and manually dispatch **Sanity Checks** with its reviewed,
@@ -101,9 +109,9 @@ Pushing the tag starts the Publish Release workflow. The workflow:
 Pre-release SemVer tags are published as GitHub pre-releases.
 
 The workflow can also be started manually for an existing tag. Manual dispatch
-does not create or move a tag. Run the workflow itself from the same exact
-protected tag that is supplied as its input so the protected `release`
-environment evaluates the reviewed release ref:
+does not create or move a tag. Start the workflow from the same protected tag
+provided as its input so the `release` environment evaluates the reviewed
+release ref:
 
 ```bash
 gh workflow run release.yml --ref v2.0.0 -f tag=v2.0.0
@@ -134,8 +142,8 @@ Do not rewrite or reuse a published version or tag. If a release is defective:
 1. document the impact;
 2. prepare a new patch version;
 3. repeat the normal validation and publication process;
-4. mark the affected GitHub release as deprecated only when that context helps
-   users.
+4. update the affected release notes to point users to the fixed version when
+   that context is useful.
 
 For a security release, coordinate timing and disclosure through
 [SECURITY.md](SECURITY.md).

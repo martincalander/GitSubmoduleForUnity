@@ -32,20 +32,15 @@ practical, the reason should be stated clearly.
 
 ## Becoming a Maintainer
 
-Maintainers are appointed by the project lead based on sustained, constructive
-participation. Useful signals include sound technical judgment, respectful
-reviews, reliable follow-through, cross-platform awareness, and careful
-handling of failure and security cases.
-
-There is no required number of commits and no automatic promotion. Repository
-permissions are granted gradually and should remain no broader than necessary.
+Martin Calander appoints maintainers after sustained contributions demonstrate
+sound technical judgment, reliable follow-through, cross-platform awareness,
+and careful handling of Git, Unity, and security failures. There is no commit
+quota. Repository permissions are granted gradually and remain no broader than
+necessary.
 
 ## Inactivity and Removal
 
-A maintainer may step down at any time. The project lead may move an inactive
-maintainer to emeritus status, reduce permissions that are no longer needed, or
-remove a maintainer for security, conduct, or trust reasons.
-
-Before a planned departure, maintainers should transfer open security work,
-release responsibilities, and access that would otherwise leave the project
-without an accountable owner.
+A maintainer may step down at any time. The project lead may reduce or remove
+access that is no longer needed, including after prolonged inactivity or for
+security, conduct, or trust reasons. Before leaving, a maintainer should hand
+off open security reports, release work, and any access that only they control.

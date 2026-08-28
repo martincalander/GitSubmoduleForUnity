@@ -14,7 +14,7 @@ The package also probes common installation directories on Windows, macOS, and
 Linux.
 
 If the installer finishes but the tool remains unavailable, click **Check
-again**. Restart Unity if the operating system updated the GUI application's
+Again**. Restart Unity if the operating system updated the GUI application's
 environment only after launch.
 
 ## GitHub Discovery Is Disabled
@@ -81,14 +81,15 @@ destination package name, for example:
 
 Automatic GitHub catalogue discovery also requires a regular root
 `package.json.meta` containing `fileFormatVersion: 2` and exactly one nonzero
-32-hexadecimal root GUID. Unity normally creates this file when the manifest is
-tracked as an asset. The importer section may vary and is not used for
-eligibility. A direct URL can still install an otherwise valid root UPM package
-without this marker, but the installer shows a mandatory unverified-package
-warning.
+32-character hexadecimal GUID. Unity normally creates this file when the
+manifest is tracked as an asset. The importer section may vary and is not used
+for eligibility. A direct URL can still install an otherwise valid root UPM
+package without this marker, but the installer shows a mandatory warning that
+the Unity marker could not be verified.
 
-Monorepos that keep the UPM package below the repository root are not currently
-supported by discovery or installation.
+Discovery and the manager's install flows do not support a UPM package below
+the repository root. An existing read-only UPM dependency may continue using a
+repository subdirectory, but it cannot be converted to a submodule.
 
 ## A GitHub Package Is Missing from Sources
 
@@ -100,18 +101,17 @@ updated outside Unity.
 
 Discovery publishes only repositories whose root `package.json` contains a
 valid reverse-domain `name` and SemVer 2.0 `version` and whose sibling
-`package.json.meta` has a valid Unity meta header and GUID. A missing, malformed,
-unavailable, symlinked, oversized, or nested manifest or marker is intentionally
-excluded. Correct the repository or access issue, then choose **Refresh** in
-Package Manager to rescan the account and organizations.
+`package.json.meta` has a valid Unity meta header and GUID. A repository is left
+out if either file is missing, nested, linked, too large, malformed, or
+unavailable to the authenticated account. Correct the repository or access
+issue, then choose **Refresh** in Package Manager to rescan.
 
 ## Dependency Resolution Says GitHub Coverage Is Incomplete
 
-For package names outside `com.unity.*`, configured registries are searched only
-after a successful scan of the authenticated user's repositories and every
-visible organization proves that GitHub has no matching package. A failed owner
-page, coverage warning, or unavailable `package.json` therefore blocks the root
-install instead of guessing that registry fallback is safe.
+For package names outside `com.unity.*`, GitHub must be scanned completely
+before a configured registry can be used as a fallback. A failed organization
+scan, coverage warning, or unavailable `package.json` therefore stops the root
+install instead of guessing.
 
 Restore GitHub CLI authentication and repository access, correct the unavailable
 manifest if you control it, then choose **Refresh** and retry. If GitHub does
@@ -119,14 +119,13 @@ contain the package, that source has priority; a duplicate match, version
 mismatch, or incomplete repository identity must be corrected rather than
 bypassed through a registry.
 
-## An Installed Manifest Did Not Match Preflight
+## Installed Files Changed During Installation
 
-Dependency-aware installation compares the resulting root `package.json` with
-the exact name, version, and dependency map inspected before mutation. For a
-catalogue package, it also compares the resulting `package.json.meta` GUID with
-the verified marker. When a branch changes during installation or Unity resolves
-an unexpected direct Git entry, the new install is rejected and automatic
-rollback or removal is attempted only when ownership is proven.
+The manager compares the installed `package.json` with the name, version, and
+dependencies inspected before it changed the project. For a catalogue package,
+it also checks the installed `package.json.meta` GUID. If the branch moves or
+Unity resolves a different Git entry, installation stops. Cleanup removes only
+state tied to that operation.
 
 If the diagnostic says cleanup was incomplete, inspect `git status`, the package
 path, and `Packages/manifest.json` before retrying. The mismatched checkout or
@@ -142,7 +141,7 @@ com.author.package
 
 Spaces, uppercase letters, path separators, and traversal segments are rejected.
 
-## An Update Changed Files but Unity Still Shows the Old State
+## Git Changed a Submodule but Unity Still Shows the Old State
 
 Wait for Unity's package import to finish, then choose **Refresh** in Package
 Manager.
@@ -158,9 +157,9 @@ git submodule status
 
 Do not dismiss the recovery warning until you have inspected `git status`,
 `.gitmodules`, the package path, and any Git or SSH processes that may still be
-running. The warning is retained when process termination, rollback, or a
-postcondition cannot be proven. Once the repository is safe, open **Preferences
-> Git Submodule Manager**, review the retained warning again, choose
+running. The warning remains when process termination, rollback, or a final
+safety check could not be completed. Once the repository is safe, open
+**Preferences > Git Submodule Manager**, review the retained warning again, choose
 **Acknowledge Inspected Recovery State...**, and refresh Package Manager.
 
 ## A Teammate Cannot Clone a Private Package
@@ -172,6 +171,5 @@ repository and configure credentials before initializing submodules.
 ## Reporting a Problem
 
 Follow the [support guide](https://github.com/martincalander/GitSubmoduleManager/blob/main/.github/SUPPORT.md)
-and include Unity version, operating system,
-package commit, CLI versions, the exact operation, and complete sanitized error
-text.
+and include the Unity version, operating system, package commit, CLI versions,
+operation, and complete sanitized error text.

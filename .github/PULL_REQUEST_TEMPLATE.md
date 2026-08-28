@@ -8,14 +8,18 @@ Describe the user-facing change and why it is needed.
 - [ ] Unity compiles with no new warnings or errors.
 - [ ] Focused EditMode tests pass.
 - [ ] The changed workflow was tested manually.
-- [ ] Relevant Windows, macOS, and Linux impact was considered.
+- [ ] I tested every affected platform, or listed below any platform I could not
+  test.
 
 List exact commands, Unity versions, operating systems, and any skipped checks.
 
 ## Safety and Compatibility
 
-- [ ] Mutations remain restricted to direct packages under `Packages/`.
-- [ ] No shell evaluation, credential storage, system installer, or implicit startup mutation was introduced.
+- [ ] Submodule filesystem changes stay within validated direct
+  `Packages/<reverse-domain-name>` children.
+- [ ] User input is not passed through a shell.
+- [ ] No credential storage, system installer execution, or implicit startup
+  mutation was introduced.
 - [ ] Documentation and `CHANGELOG.md` were updated when behavior changed.
 - [ ] New Unity assets were imported and include generated `.meta` files.
 
