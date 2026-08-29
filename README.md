@@ -112,3 +112,29 @@ for implementation details and recovery behavior.
 Distributed under the [MIT License](LICENSE.md). See
 [Third Party Notices](Third%20Party%20Notices.md), [NOTICE.md](NOTICE.md), and
 [AUTHORS.md](AUTHORS.md) for attribution.
+
+## Games Made Using This Package
+
+<!-- markdownlint-disable MD033 -->
+
+<iframe
+  src="https://store.steampowered.com/widget/4372950/"
+  title="Cave Expedition on Steam"
+  frameborder="0"
+  width="646"
+  height="190">
+</iframe>
+
+[View Cave Expedition on Steam](https://store.steampowered.com/app/4372950/Cave_Expedition/)
+
+<iframe
+  src="https://store.steampowered.com/widget/1680780/"
+  title="Big Boy Boxing on Steam"
+  frameborder="0"
+  width="646"
+  height="190">
+</iframe>
+
+[View Big Boy Boxing on Steam](https://store.steampowered.com/app/1680780/Big_Boy_Boxing/)
+
+<!-- markdownlint-enable MD033 -->

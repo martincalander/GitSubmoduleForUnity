@@ -7,6 +7,11 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- Added a README showcase for Cave Expedition and Big Boy Boxing using Steam
+  store widgets.
+
 ### Fixed
 
 - GitHub discovery now keeps valid Unity packages from a GraphQL batch when
