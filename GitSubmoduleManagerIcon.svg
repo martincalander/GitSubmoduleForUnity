@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" fill="none" role="img" aria-labelledby="title description">
+  <title id="title">Git Submodule Manager logo</title>
+  <desc id="description">The orange Git branch mark peeking from an open package box.</desc>
+
+  <!-- The rear rim sits behind the Git mark so the package reads as open. -->
+  <path d="M54 238 256 184 458 238" stroke="#3D3533" stroke-width="16" stroke-linecap="round" stroke-linejoin="round"/>
+
+  <!-- Git logomark adapted from Jason Long's CC BY 3.0 artwork. -->
+  <path fill="#3D3533" d="m135.139 184.352 99.213-99.213a30.615 30.615 0 0 1 43.297 0l99.213 99.213a30.615 30.615 0 0 1 0 43.297l-99.213 99.213a30.615 30.615 0 0 1-43.297 0l-99.213-99.213a30.615 30.615 0 0 1 0-43.297Z"/>
+  <path fill="#F03C2E" d="M266.335 315.547c-5.708 5.708-14.962 5.708-20.67 0l-99.212-99.212c-5.708-5.708-5.708-14.962 0-20.67l68.208-68.208 25.928 25.927c-2.31 6.23-.962 13.507 4.043 18.512a17.5 17.5 0 0 0 5.094 3.547v63.181a17.5 17.5 0 0 0-5.094 3.547c-6.85 6.85-6.85 17.954 0 24.803s17.954 6.85 24.803 0 6.85-17.954 0-24.803a17.5 17.5 0 0 0-5.094-3.547v-61.488l23.787 23.788c-2.31 6.228-.962 13.506 4.043 18.511 6.85 6.85 17.954 6.85 24.803 0s6.85-17.954 0-24.803c-5.005-5.005-12.282-6.353-18.51-4.043l-24.986-24.985c2.31-6.229.962-13.506-4.043-18.511s-12.283-6.353-18.511-4.043l-25.928-25.928 20.67-20.67c5.707-5.707 14.961-5.707 20.669 0l99.212 99.213c5.708 5.708 5.708 14.962 0 20.67Z"/>
+
+  <!-- The foreground faces hide the lower point of the mark cleanly. -->
+  <path fill="#FFFDFC" stroke="#3D3533" stroke-width="16" stroke-linecap="round" stroke-linejoin="round" d="m54 238 202 49v185L54 418V238Z"/>
+  <path fill="#F4ECE9" stroke="#3D3533" stroke-width="16" stroke-linecap="round" stroke-linejoin="round" d="m256 287 202-49v180l-202 54V287Z"/>
+</svg>

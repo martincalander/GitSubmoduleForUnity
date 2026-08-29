@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="GitSubmoduleManagerIcon.png" alt="Git Submodule Manager" width="80" height="80">
+  <img src="GitSubmoduleManagerIcon.svg" alt="Git Submodule Manager logo" width="80" height="80">
 </p>
 
 # Git Submodule Manager
