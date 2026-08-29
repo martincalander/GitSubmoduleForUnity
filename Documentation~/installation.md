@@ -44,6 +44,7 @@ accepts or stores a GitHub token.
 
 | Method | Best for | Uses the signed release artifact | Updates |
 | --- | --- | :---: | --- |
+| Unity bootstrap `.unitypackage` | Familiar Unity asset import | Yes, through OpenUPM | Through Package Manager |
 | [OpenUPM](https://openupm.com/packages/com.martincalander.gitsubmodulemanager/) | Normal project use | Yes | Through Package Manager |
 | GitHub Release `.tgz` | Manual or offline installation | Yes | Install a newer tarball manually |
 | Git URL | Direct source installation | No | Change or update the Git reference |
@@ -55,13 +56,49 @@ installs use repository source and do not contain the release-only attestation.
 Unity verifies the signature on supported tarball packages, although users
 outside the signing Unity organization might see a limited-trust status.
 
-OpenUPM currently serves signed version `0.8.0`. If a future release is still
+OpenUPM currently serves signed version `0.8.1`. If a future release is still
 being imported, use its signed GitHub Release tarball for the same packaged
 payload, or use its pinned Git URL when a source installation is acceptable.
 
 Tarball and local-folder installs are recorded as local `file:` dependencies.
 When sharing a project manifest, keep those files at a stable project-relative
 path or avoid committing a machine-specific dependency path.
+
+### Unity Bootstrap Installer
+
+The GitHub Release includes
+[`GitSubmoduleManagerInstaller-0.8.1.unitypackage`](https://github.com/martincalander/GitSubmoduleForUnity/releases/download/v0.8.1/GitSubmoduleManagerInstaller-0.8.1.unitypackage)
+for users who prefer Unity's custom-package import workflow:
+
+1. Download the installer and the release
+   [`SHA256SUMS`](https://github.com/martincalander/GitSubmoduleForUnity/releases/download/v0.8.1/SHA256SUMS).
+2. Optionally compare the installer SHA-256 with the matching checksum entry.
+3. In Unity, choose **Assets > Import Package > Custom Package** and import all
+   files from the installer.
+4. Review the installer window. It shows the exact version, registry URL,
+   package scope, and `Packages/manifest.json` path.
+5. Choose **Install 0.8.1** to authorize the manifest change and network
+   package resolution.
+
+Import alone does not change the manifest or contact OpenUPM. After consent,
+the bootstrap adds only the exact package scope and dependency. It then requires
+Unity to report `0.8.1` as a direct registry package from
+`https://package.openupm.com`, with no package errors and a loaded Editor
+assembly. Only then does it move its own unchanged files to the operating
+system Trash.
+
+If installation or verification stops, the installer keeps its window,
+manifest recovery evidence, and the exact original manifest bytes. Reopen it
+with **Tools > Git Submodule Manager > Installer** to retry or restore. A later
+manifest edit is never overwritten by automatic recovery.
+
+OpenUPM can take a few minutes to import a newly published GitHub release. If
+the installer is downloaded during that interval, it stops safely with its
+recovery evidence intact. Use **Retry safely** after the matching version
+appears on OpenUPM, or restore the original manifest.
+
+The `.unitypackage` is a checksummed bootstrap, not the signed UPM payload. The
+package it installs is the same signed `.tgz` served by OpenUPM.
 
 ### OpenUPM Registry (Recommended)
 
@@ -86,7 +123,7 @@ To configure the registry in Unity instead:
 3. Apply the registry settings.
 4. Open **Window > Package Management > Package Manager**.
 5. Choose **+ > Install package by name...**.
-6. Enter `com.martincalander.gitsubmodulemanager` and version `0.8.0`, then
+6. Enter `com.martincalander.gitsubmodulemanager` and version `0.8.1`, then
    choose **Install**. Leave the version blank to use the latest compatible
    release instead.
 
@@ -106,7 +143,7 @@ dependencies:
     }
   ],
   "dependencies": {
-    "com.martincalander.gitsubmodulemanager": "0.8.0"
+    "com.martincalander.gitsubmodulemanager": "0.8.1"
   }
 }
 ```
@@ -117,9 +154,9 @@ The exact package-name scope avoids routing unrelated
 ### Signed GitHub Release Tarball
 
 1. Download
-   [`com.martincalander.gitsubmodulemanager-0.8.0.tgz`](https://github.com/martincalander/GitSubmoduleForUnity/releases/download/v0.8.0/com.martincalander.gitsubmodulemanager-0.8.0.tgz)
-   from the [`v0.8.0` release](https://github.com/martincalander/GitSubmoduleForUnity/releases/tag/v0.8.0).
-2. Optionally download [`SHA256SUMS`](https://github.com/martincalander/GitSubmoduleForUnity/releases/download/v0.8.0/SHA256SUMS)
+   [`com.martincalander.gitsubmodulemanager-0.8.1.tgz`](https://github.com/martincalander/GitSubmoduleForUnity/releases/download/v0.8.1/com.martincalander.gitsubmodulemanager-0.8.1.tgz)
+   from the [`v0.8.1` release](https://github.com/martincalander/GitSubmoduleForUnity/releases/tag/v0.8.1).
+2. Optionally download [`SHA256SUMS`](https://github.com/martincalander/GitSubmoduleForUnity/releases/download/v0.8.1/SHA256SUMS)
    and compare its SHA-256 value with the tarball before installation.
 3. Open **Window > Package Management > Package Manager**.
 4. Choose **+ > Install package from tarball** and select the `.tgz` file.
@@ -133,10 +170,10 @@ Open **Window > Package Management > Package Manager**, choose **+ > Install
 package from git URL...**, and enter:
 
 ```text
-https://github.com/martincalander/GitSubmoduleForUnity.git#v0.8.0
+https://github.com/martincalander/GitSubmoduleForUnity.git#v0.8.1
 ```
 
-This URL pins the published `0.8.0` release. Omitting `#v0.8.0` follows the
+This URL pins the published `0.8.1` release. Omitting `#v0.8.1` follows the
 mutable `main` branch and is intended only for development. Git must be visible
 to the Unity Editor process. This method installs the tagged repository source
 instead of the signed release tarball.
@@ -146,7 +183,7 @@ The equivalent dependency entry is:
 ```json
 {
   "dependencies": {
-    "com.martincalander.gitsubmodulemanager": "https://github.com/martincalander/GitSubmoduleForUnity.git#v0.8.0"
+    "com.martincalander.gitsubmodulemanager": "https://github.com/martincalander/GitSubmoduleForUnity.git#v0.8.1"
   }
 }
 ```
@@ -262,7 +299,7 @@ changing only the revision is not sufficient:
 ```json
 {
   "dependencies": {
-    "com.martincalander.gitsubmodulemanager": "https://github.com/martincalander/GitSubmoduleForUnity.git#v0.8.0"
+    "com.martincalander.gitsubmodulemanager": "https://github.com/martincalander/GitSubmoduleForUnity.git#v0.8.1"
   }
 }
 ```

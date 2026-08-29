@@ -7,6 +7,31 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.8.1] - 2026-08-29
+
+### Added
+
+- Added a downloadable `GitSubmoduleManagerInstaller-0.8.1.unitypackage`
+  bootstrap for users who prefer Unity's familiar custom-package import flow.
+- Added deterministic, license-free CI creation and byte-level verification of
+  the bootstrap, with both release artifacts covered by `SHA256SUMS`.
+
+### Security
+
+- Importing the bootstrap does not contact the network or modify the project.
+  It displays the exact OpenUPM URL, scope, package version, and manifest path
+  before requiring explicit confirmation.
+- The bootstrap rejects malformed or duplicate-key manifests, conflicting
+  dependency sources, ambiguous OpenUPM entries, linked project paths, and
+  unsupported Unity versions before writing anything.
+- Manifest changes use an atomic compare-and-swap with exact displaced-byte
+  recovery. The installed package must match the exact direct registry version,
+  trusted OpenUPM endpoint, clean package state, and loaded Editor assembly
+  before cleanup begins.
+- Cleanup rechecks the imported asset GUIDs and hashes, moves only unchanged
+  installer-owned assets to the operating system Trash, and preserves unknown
+  or modified files.
+
 ### Changed
 
 - Replaced the README logo with a 600 by 300 package cover and moved the
@@ -376,6 +401,7 @@ No tag or GitHub release was published.
 - Basic project submodule listing, update, remove, and branch operations.
 - Early GitHub discovery and direct URL installation.
 
-[Unreleased]: https://github.com/martincalander/GitSubmoduleForUnity/compare/v0.8.0...HEAD
+[Unreleased]: https://github.com/martincalander/GitSubmoduleForUnity/compare/v0.8.1...HEAD
+[0.8.1]: https://github.com/martincalander/GitSubmoduleForUnity/releases/tag/v0.8.1
 [0.8.0]: https://github.com/martincalander/GitSubmoduleForUnity/releases/tag/v0.8.0
 [0.1.0]: https://github.com/martincalander/GitSubmoduleForUnity/tree/49bac435

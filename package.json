@@ -1,6 +1,6 @@
 {
   "name": "com.martincalander.gitsubmodulemanager",
-  "version": "0.8.0",
+  "version": "0.8.1",
   "displayName": "Git Submodule Manager",
   "description": "Manage Git-hosted UPM packages in Unity as editable submodules or read-only dependencies.",
   "unity": "6000.3",

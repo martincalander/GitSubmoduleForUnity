@@ -86,3 +86,11 @@ node_modules/
 # it even when a developer's global ignore file treats editor backup files as `*~`.
 !Documentation~/
 !Documentation~/**
+
+# The release bootstrap source is hidden from Unity while remaining tracked.
+!Installer~/
+!Installer~/**
+
+# Python validation cache
+__pycache__/
+*.pyc

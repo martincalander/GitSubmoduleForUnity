@@ -166,9 +166,26 @@ def check_required_files() -> None:
         "Tests/Editor/MartinCalander.GitSubmoduleManager.Editor.Tests.asmdef",
         ".github/workflows/ci.yml",
         ".github/workflows/release.yml",
+        ".github/scripts/build_installer.py",
+        ".github/scripts/verify_installer.py",
+        ".github/scripts/tests/test_installer_archive.py",
         ".github/ISSUE_TEMPLATE/support_request.yml",
         ".github/REPOSITORY_SETUP.md",
         ".npmignore",
+        "Installer~/Assets/GitSubmoduleManagerInstaller.meta",
+        "Installer~/Assets/GitSubmoduleManagerInstaller/README.txt",
+        "Installer~/Assets/GitSubmoduleManagerInstaller/README.txt.meta",
+        "Installer~/Assets/GitSubmoduleManagerInstaller/InstallerMarker.txt",
+        "Installer~/Assets/GitSubmoduleManagerInstaller/InstallerMarker.txt.meta",
+        "Installer~/Assets/GitSubmoduleManagerInstaller/Editor.meta",
+        "Installer~/Assets/GitSubmoduleManagerInstaller/Editor/MartinCalander.GitSubmoduleManager.Installer.asmdef",
+        "Installer~/Assets/GitSubmoduleManagerInstaller/Editor/MartinCalander.GitSubmoduleManager.Installer.asmdef.meta",
+        "Installer~/Assets/GitSubmoduleManagerInstaller/Editor/StrictJson.cs",
+        "Installer~/Assets/GitSubmoduleManagerInstaller/Editor/StrictJson.cs.meta",
+        "Installer~/Assets/GitSubmoduleManagerInstaller/Editor/GitSubmoduleManagerInstallerManifest.cs",
+        "Installer~/Assets/GitSubmoduleManagerInstaller/Editor/GitSubmoduleManagerInstallerManifest.cs.meta",
+        "Installer~/Assets/GitSubmoduleManagerInstaller/Editor/GitSubmoduleManagerInstaller.cs",
+        "Installer~/Assets/GitSubmoduleManagerInstaller/Editor/GitSubmoduleManagerInstaller.cs.meta",
     ]
     for relative in required:
         path = ROOT / relative
@@ -193,6 +210,8 @@ def check_required_files() -> None:
     for attribution_file in ("AUTHORS.md", "LICENSE.md", "NOTICE.md", "Third Party Notices.md"):
         if attribution_file in npmignore_lines or f"/{attribution_file}" in npmignore_lines:
             fail(f".npmignore must not exclude required attribution file: {attribution_file}")
+    if "/Installer~/" not in npmignore_lines:
+        fail(".npmignore must exclude the release-only /Installer~/ source")
 
 
 def ignored_by_unity(path: Path) -> bool:
@@ -200,7 +219,7 @@ def ignored_by_unity(path: Path) -> bool:
     return any(part.startswith(".") or part.endswith("~") for part in relative.parts)
 
 
-def check_unity_meta_files() -> None:
+def check_unity_meta_files() -> dict[str, Path]:
     guids: dict[str, Path] = {}
     for path in ROOT.rglob("*"):
         if path == ROOT / ".git" or ".git" in path.parts:
@@ -226,6 +245,7 @@ def check_unity_meta_files() -> None:
                 f"{guid}: {guids[guid].relative_to(ROOT)} and {meta.relative_to(ROOT)}"
             )
         guids[guid] = meta
+    return guids
 
 
 def check_editor_only_layout() -> None:
@@ -235,9 +255,108 @@ def check_editor_only_layout() -> None:
             fail(f"Assembly is not Editor-only: {assembly_path.relative_to(ROOT)}")
 
     for source in ROOT.rglob("*.cs"):
+        if ignored_by_unity(source):
+            continue
         relative = source.relative_to(ROOT)
         if relative.parts[0] not in {"Editor", "Tests"}:
             fail(f"C# source exists outside Editor/ or Tests/: {relative}")
+
+
+def check_installer_source(package_guids: dict[str, Path]) -> None:
+    installer_root = ROOT / "Installer~" / "Assets" / "GitSubmoduleManagerInstaller"
+    expected_assets = {
+        "": "ba976416d36a1e4d24ac906d76321da7",
+        "README.txt": "97049358981d788a10c82f217444047b",
+        "InstallerMarker.txt": "22b5bef57d5f086a76a51a8147025a15",
+        "Editor": "792d07690fa4ffbfecb326555afc5d8b",
+        "Editor/MartinCalander.GitSubmoduleManager.Installer.asmdef":
+            "5b963c5e4a8731920905448812f54103",
+        "Editor/StrictJson.cs": "81580cbe9c63724e241fd1e1bea78917",
+        "Editor/GitSubmoduleManagerInstallerManifest.cs":
+            "a8a6002061ced0c6e5b37e1dc6158fcd",
+        "Editor/GitSubmoduleManagerInstaller.cs":
+            "9d4031aff5460cd8f65fedb455e99409",
+    }
+    actual_assets = {""}
+    if installer_root.is_dir():
+        actual_assets.update(
+            path.relative_to(installer_root).as_posix()
+            for path in installer_root.rglob("*")
+            if not path.name.endswith(".meta")
+        )
+    if actual_assets != set(expected_assets):
+        missing = sorted(set(expected_assets) - actual_assets)
+        extra = sorted(actual_assets - set(expected_assets))
+        fail(f"Installer asset allowlist mismatch: missing={missing} extra={extra}")
+
+    seen_guids: set[str] = set()
+    for relative, expected_guid in expected_assets.items():
+        asset = installer_root if not relative else installer_root / relative
+        meta = Path(f"{asset}.meta")
+        if not asset.exists() or asset.is_symlink() or not meta.is_file() or meta.is_symlink():
+            fail(f"Installer asset/meta pair is missing or linked: {relative or '<root>'}")
+            continue
+        matches = re.findall(
+            r"(?m)^guid:\s*([0-9a-f]{32})$",
+            meta.read_text(encoding="utf-8"),
+        )
+        if matches != [expected_guid]:
+            fail(f"Installer GUID changed for {relative or '<root>'}")
+        if expected_guid in seen_guids:
+            fail(f"Duplicate installer GUID: {expected_guid}")
+        if expected_guid in package_guids:
+            fail(
+                "Installer GUID collides with packaged Unity asset "
+                f"{package_guids[expected_guid].relative_to(ROOT)}: {expected_guid}"
+            )
+        seen_guids.add(expected_guid)
+
+    asmdef_path = installer_root / "Editor" / "MartinCalander.GitSubmoduleManager.Installer.asmdef"
+    asmdef = read_json(asmdef_path)
+    if asmdef.get("name") != "MartinCalander.GitSubmoduleManager.Installer":
+        fail("Installer assembly identity changed")
+    if asmdef.get("includePlatforms") != ["Editor"]:
+        fail("Installer assembly must remain Editor-only")
+    if asmdef.get("references") or asmdef.get("precompiledReferences"):
+        fail("Installer assembly must remain self-contained before package installation")
+
+    sources = sorted(
+        path.relative_to(installer_root).as_posix()
+        for path in installer_root.rglob("*.cs")
+    )
+    expected_sources = sorted(
+        path for path in expected_assets if path.endswith(".cs")
+    )
+    if sources != expected_sources or any(not path.startswith("Editor/") for path in sources):
+        fail("Installer C# sources must match the exact Editor-only allowlist")
+
+    token_count = 0
+    for path in installer_root.rglob("*"):
+        if path.is_file() and not path.name.endswith(".meta"):
+            token_count += path.read_bytes().count(b"__PACKAGE_VERSION__")
+    if token_count != 2:
+        fail("Installer source must contain exactly two package-version tokens")
+
+    package = read_json(ROOT / "package.json")
+    version = package.get("version")
+    checksums_path = ROOT / "Installer~" / "SHA256SUMS"
+    if not checksums_path.is_file() or checksums_path.is_symlink():
+        fail("Installer~/SHA256SUMS must be a regular committed file")
+        return
+    try:
+        checksums = checksums_path.read_text(encoding="ascii", errors="strict")
+    except (OSError, UnicodeError) as exc:
+        fail(f"Installer~/SHA256SUMS is not strict ASCII: {exc}")
+        return
+    checksum_pattern = re.compile(
+        r"^(?P<sha256>[0-9a-f]{64})  "
+        r"GitSubmoduleManagerInstaller-(?P<version>[^/\r\n]+)\.unitypackage\n$"
+    )
+    checksum_match = checksum_pattern.fullmatch(checksums)
+    if checksum_match is None:
+        fail("Installer~/SHA256SUMS must contain exactly one strict checksum line")
+    elif checksum_match.group("version") != version:
+        fail("Installer checksum filename must match package.json version")
 
 
 def check_assembly_identities() -> None:
@@ -381,8 +500,9 @@ def main() -> int:
 
     check_package_json()
     check_required_files()
-    check_unity_meta_files()
+    package_guids = check_unity_meta_files()
     check_editor_only_layout()
+    check_installer_source(package_guids)
     check_assembly_identities()
     check_harmony_plugin_contract()
     check_markdown_links()

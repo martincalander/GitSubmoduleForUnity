@@ -56,10 +56,23 @@ Windows, macOS, and Linux.
 
 | Method | Best for | Uses the signed release artifact |
 | --- | --- | :---: |
+| [Unity bootstrap `.unitypackage`](#unity-bootstrap-installer) | Familiar Unity asset import | Yes, through OpenUPM |
 | [OpenUPM](https://openupm.com/packages/com.martincalander.gitsubmodulemanager/) | Normal installation and updates | Yes |
 | [GitHub Release `.tgz`](#signed-github-release-tarball) | Manual or offline installation | Yes |
 | [Git URL](#git-url) | Installing source directly from a tag | No |
 | [Local folder](Documentation~/installation.md#local-folder-for-development) | Package development | No |
+
+### Unity Bootstrap Installer
+
+Download
+[`GitSubmoduleManagerInstaller-0.8.1.unitypackage`](https://github.com/martincalander/GitSubmoduleForUnity/releases/download/v0.8.1/GitSubmoduleManagerInstaller-0.8.1.unitypackage)
+from the [`v0.8.1` release](https://github.com/martincalander/GitSubmoduleForUnity/releases/tag/v0.8.1),
+then import it with **Assets > Import Package > Custom Package**.
+
+Importing the bootstrap does not change the project or contact the network.
+Review its exact plan, then choose **Install 0.8.1**. It configures only the
+exact OpenUPM package scope, installs the signed registry package, verifies its
+version and source, and moves its own unchanged bootstrap files to Trash.
 
 ### OpenUPM (Recommended)
 
@@ -75,12 +88,12 @@ openupm add com.martincalander.gitsubmodulemanager
 Without the CLI, add `https://package.openupm.com` as a scoped registry for
 `com.martincalander.gitsubmodulemanager`. Then open **Window > Package
 Management > Package Manager**, choose **+ > Install package by name...**, and
-enter the package name and version `0.8.0`.
+enter the package name and version `0.8.1`.
 
 ### Signed GitHub Release Tarball
 
 Download the
-[signed `0.8.0` `.tgz`](https://github.com/martincalander/GitSubmoduleForUnity/releases/download/v0.8.0/com.martincalander.gitsubmodulemanager-0.8.0.tgz),
+[signed `0.8.1` `.tgz`](https://github.com/martincalander/GitSubmoduleForUnity/releases/download/v0.8.1/com.martincalander.gitsubmodulemanager-0.8.1.tgz),
 open Unity's Package Manager, and choose **+ > Install package from tarball**.
 Select the downloaded file. Install newer releases manually in the same way.
 
@@ -90,10 +103,10 @@ In Unity's Package Manager, choose **+ > Install package from git URL...** and
 enter:
 
 ```text
-https://github.com/martincalander/GitSubmoduleForUnity.git#v0.8.0
+https://github.com/martincalander/GitSubmoduleForUnity.git#v0.8.1
 ```
 
-This URL pins the published `0.8.0` release. Omitting `#v0.8.0` follows the
+This URL pins the published `0.8.1` release. Omitting `#v0.8.1` follows the
 mutable `main` branch and is intended only for development. A Git URL installs
 the repository source, not the signed release tarball.
 

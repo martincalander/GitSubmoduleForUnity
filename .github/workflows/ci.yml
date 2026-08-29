@@ -28,6 +28,20 @@ jobs:
       - name: Validate repository structure and links
         run: python3 .github/scripts/validate_repository.py
 
+      - name: Test and build bootstrap installer
+        run: |
+          set -euo pipefail
+          python3 -m unittest discover \
+            -s .github/scripts/tests -p 'test_*.py' -v
+          version="$(jq -er '.version' package.json)"
+          mkdir -p artifacts
+          python3 .github/scripts/build_installer.py \
+            --version "$version" \
+            --output "artifacts/GitSubmoduleManagerInstaller-$version.unitypackage"
+          python3 .github/scripts/verify_installer.py \
+            "artifacts/GitSubmoduleManagerInstaller-$version.unitypackage" \
+            --version "$version"
+
       - name: Lint Markdown
         run: >-
           npx --yes markdownlint-cli2@0.23.0
@@ -54,7 +68,11 @@ jobs:
             exit 1
           fi
           archive_name="$(basename "${archives[0]}")"
-          (cd artifacts && sha256sum -- "./$archive_name" > SHA256SUMS)
+          version="$(jq -er '.version' package.json)"
+          installer_name="GitSubmoduleManagerInstaller-$version.unitypackage"
+          test -f "artifacts/$installer_name"
+          (cd artifacts && \
+            sha256sum -- "./$archive_name" "./$installer_name" | sort -k2 > SHA256SUMS)
           (cd artifacts && sha256sum --check SHA256SUMS)
 
       - name: Upload package preview
@@ -95,6 +113,9 @@ jobs:
 
       - name: Validate repository structure and links
         run: python .github/scripts/validate_repository.py
+
+      - name: Test deterministic installer builder
+        run: python -m unittest discover -s .github/scripts/tests -p "test_*.py" -v
 
       - name: Verify package contents on this platform
         run: npm pack --ignore-scripts --dry-run

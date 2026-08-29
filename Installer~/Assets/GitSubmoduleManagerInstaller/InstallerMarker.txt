@@ -1,0 +1,1 @@
+Git Submodule Manager bootstrap installer owned asset set, schema 1.

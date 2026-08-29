@@ -61,13 +61,18 @@ The version in [`package.json`](../package.json) and the tag without its leading
    npm pack --ignore-scripts --dry-run
    ```
 
-6. In a clean Unity project, install the package from the exact release commit,
+6. Build the deterministic bootstrap, import that exact file into a clean
+   supported Unity project, and exercise its recovery path. After the test,
+   replace `Installer~/SHA256SUMS` with the exact SHA-256 and filename printed by
+   the builder. Repository validation and the release workflow require the
+   published bootstrap to match those locally tested bytes.
+7. In a clean Unity project, install the package from the exact release commit,
    run `MartinCalander.GitSubmoduleManager.Editor.Tests` in EditMode, then test
    submodule and read-only installation, both eligible conversions, and
    submodule removal.
-7. Record any platform or Unity version that could not be tested in the release
+8. Record any platform or Unity version that could not be tested in the release
    pull request.
-8. Merge the release pull request only after required checks pass and the
+9. Merge the release pull request only after required checks pass and the
    applicable review policy is satisfied.
 
 Hosted workflows do not launch the Unity Editor or run EditMode tests. Complete
@@ -105,8 +110,8 @@ Create an annotated tag on the reviewed release commit:
 ```bash
 git switch main
 git pull --ff-only
-git tag -a v0.8.0 -m "Git Submodule Manager 0.8.0"
-git push origin v0.8.0
+git tag -a v0.8.1 -m "Git Submodule Manager 0.8.1"
+git push origin v0.8.1
 ```
 
 Pushing the tag starts the Publish Release workflow. The workflow:
@@ -119,8 +124,11 @@ Pushing the tag starts the Publish Release workflow. The workflow:
 6. signs that validated payload with the pinned Unity UPM CLI;
 7. requires the signing attestation and verifies every other packaged file is
    unchanged;
-8. creates the GitHub release with the signed archive and its new checksum;
-9. when enabled, asks OpenUPM to publish those exact bytes and verifies it
+8. independently builds and byte-verifies the license-free Unity bootstrap,
+   including its committed locally tested SHA-256;
+9. creates the GitHub release with the signed archive, bootstrap installer, and
+   combined checksum manifest;
+10. when enabled, asks OpenUPM to publish the signed `.tgz` and verifies it
    recognizes the signature.
 
 Pre-release SemVer tags are published as GitHub pre-releases.
@@ -134,13 +142,15 @@ immutable release.
 - Confirm the workflow completed successfully.
 - Confirm the GitHub release points to the intended commit.
 - Download the `.tgz` and compare it with `SHA256SUMS`.
+- Download the `.unitypackage`, compare it with `SHA256SUMS`, and import it in
+  a clean supported Unity project.
 - Confirm the archive contains the nonempty signing attestation
   `package/.attestation.p7m`.
 - Inspect the archive and confirm development-only `.github` files are absent.
 - Install the tag from a clean Unity project:
 
   ```text
-  https://github.com/martincalander/GitSubmoduleForUnity.git#v0.8.0
+  https://github.com/martincalander/GitSubmoduleForUnity.git#v0.8.1
   ```
 
 - Confirm the package imports, **Package Manager > Sources > GitHub** opens, and
