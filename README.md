@@ -53,15 +53,15 @@ Windows, macOS, and Linux.
 
 ## Installation
 
-Install the tagged `v2.0.0` release from **Window > Package Management > Package
-Manager > + > Install package from git URL...**:
+In **Window > Package Management > Package Manager**, choose **+ > Install
+package from git URL...** and enter:
 
 ```text
-https://github.com/martincalander/GitSubmoduleManager.git#v2.0.0
+https://github.com/martincalander/GitSubmoduleManager.git
 ```
 
-An unqualified repository URL follows the mutable `main` branch and is intended
-only for development or pre-release testing.
+This URL follows `main`. To pin a published release instead, append its tag to
+the URL.
 
 ## Quick Start
 
