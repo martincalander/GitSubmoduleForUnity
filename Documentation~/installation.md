@@ -40,6 +40,129 @@ When it is installed but unauthenticated, the window provides a copyable
 in a visible terminal, then choose **Check Again**. Git Submodule Manager never
 accepts or stores a GitHub token.
 
+## Installation Options
+
+| Method | Best for | Uses the signed release artifact | Updates |
+| --- | --- | :---: | --- |
+| [OpenUPM](https://openupm.com/packages/com.martincalander.gitsubmodulemanager/) | Normal project use | Yes | Through Package Manager |
+| GitHub Release `.tgz` | Manual or offline installation | Yes | Install a newer tarball manually |
+| Git URL | Direct source installation | No | Change or update the Git reference |
+| Local folder | Package development | No | Uses the files on disk |
+
+The release workflow adds `package/.attestation.p7m` while producing the signed
+`.tgz`. OpenUPM publishes that exact release archive. Git URL and local-folder
+installs use repository source and do not contain the release-only attestation.
+Unity verifies the signature on supported tarball packages, although users
+outside the signing Unity organization might see a limited-trust status.
+
+OpenUPM currently serves signed version `0.8.0`. If a future release is still
+being imported, use its signed GitHub Release tarball for the same packaged
+payload, or use its pinned Git URL when a source installation is acceptable.
+
+Tarball and local-folder installs are recorded as local `file:` dependencies.
+When sharing a project manifest, keep those files at a stable project-relative
+path or avoid committing a machine-specific dependency path.
+
+### OpenUPM Registry (Recommended)
+
+The [OpenUPM package page](https://openupm.com/packages/com.martincalander.gitsubmodulemanager/)
+shows available versions and registry build status.
+
+The OpenUPM CLI configures the scoped registry and package dependency from the
+Unity project root:
+
+```bash
+npm install -g openupm-cli
+openupm add com.martincalander.gitsubmodulemanager
+```
+
+To configure the registry in Unity instead:
+
+1. Open **Edit > Project Settings > Package Manager**.
+2. Add a scoped registry with these values:
+   - **Name:** `OpenUPM`
+   - **URL:** `https://package.openupm.com`
+   - **Scope:** `com.martincalander.gitsubmodulemanager`
+3. Apply the registry settings.
+4. Open **Window > Package Management > Package Manager**.
+5. Choose **+ > Install package by name...**.
+6. Enter `com.martincalander.gitsubmodulemanager` and version `0.8.0`, then
+   choose **Install**. Leave the version blank to use the latest compatible
+   release instead.
+
+The equivalent manifest entries are shown below. Merge them into the project's
+existing `Packages/manifest.json` instead of replacing unrelated registries or
+dependencies:
+
+```json
+{
+  "scopedRegistries": [
+    {
+      "name": "OpenUPM",
+      "url": "https://package.openupm.com",
+      "scopes": [
+        "com.martincalander.gitsubmodulemanager"
+      ]
+    }
+  ],
+  "dependencies": {
+    "com.martincalander.gitsubmodulemanager": "0.8.0"
+  }
+}
+```
+
+The exact package-name scope avoids routing unrelated
+`com.martincalander` packages through OpenUPM.
+
+### Signed GitHub Release Tarball
+
+1. Download
+   [`com.martincalander.gitsubmodulemanager-0.8.0.tgz`](https://github.com/martincalander/GitSubmoduleForUnity/releases/download/v0.8.0/com.martincalander.gitsubmodulemanager-0.8.0.tgz)
+   from the [`v0.8.0` release](https://github.com/martincalander/GitSubmoduleForUnity/releases/tag/v0.8.0).
+2. Optionally download [`SHA256SUMS`](https://github.com/martincalander/GitSubmoduleForUnity/releases/download/v0.8.0/SHA256SUMS)
+   and compare its SHA-256 value with the tarball before installation.
+3. Open **Window > Package Management > Package Manager**.
+4. Choose **+ > Install package from tarball** and select the `.tgz` file.
+
+Unity lists a tarball installation as a local package. To upgrade it, download
+and install the signed tarball from the newer GitHub Release.
+
+### Git URL
+
+Open **Window > Package Management > Package Manager**, choose **+ > Install
+package from git URL...**, and enter:
+
+```text
+https://github.com/martincalander/GitSubmoduleForUnity.git#v0.8.0
+```
+
+This URL pins the published `0.8.0` release. Omitting `#v0.8.0` follows the
+mutable `main` branch and is intended only for development. Git must be visible
+to the Unity Editor process. This method installs the tagged repository source
+instead of the signed release tarball.
+
+The equivalent dependency entry is:
+
+```json
+{
+  "dependencies": {
+    "com.martincalander.gitsubmodulemanager": "https://github.com/martincalander/GitSubmoduleForUnity.git#v0.8.0"
+  }
+}
+```
+
+### Local Folder for Development
+
+Clone or check out the repository to a stable location outside the Unity
+project's `Assets` and `Packages` folders. In Package Manager, choose **+ >
+Install package from disk...** and select the repository's root `package.json`.
+
+Unity reads changes directly from that local folder. This method is intended
+for package development and does not use the signed release artifact. A clone
+placed directly at
+`Packages/com.martincalander.gitsubmodulemanager` is an embedded package and is
+also mutable.
+
 ## First Open
 
 On a supported Unity version, open **Window > Package Management > Package
@@ -79,18 +202,6 @@ defaults and safety choices:
 
 Both options are off by default. Warnings about dirty, unpushed, changed, or
 unverified work always appear.
-
-## Add the Package with UPM
-
-Open **Window > Package Management > Package Manager**, choose **+ > Install
-package from git URL...**, and enter:
-
-```text
-https://github.com/martincalander/GitSubmoduleForUnity.git#v0.8.0
-```
-
-This URL pins the published `0.8.0` release. Omitting `#v0.8.0` follows the
-mutable `main` branch and is intended only for development.
 
 ## Team Clone Setup
 

@@ -54,15 +54,52 @@ Windows, macOS, and Linux.
 
 ## Installation
 
-In **Window > Package Management > Package Manager**, choose **+ > Install
-package from git URL...** and enter:
+| Method | Best for | Uses the signed release artifact |
+| --- | --- | :---: |
+| [OpenUPM](https://openupm.com/packages/com.martincalander.gitsubmodulemanager/) | Normal installation and updates | Yes |
+| [GitHub Release `.tgz`](#signed-github-release-tarball) | Manual or offline installation | Yes |
+| [Git URL](#git-url) | Installing source directly from a tag | No |
+| [Local folder](Documentation~/installation.md#local-folder-for-development) | Package development | No |
+
+### OpenUPM (Recommended)
+
+View releases and package details on the
+[Git Submodule Manager OpenUPM page](https://openupm.com/packages/com.martincalander.gitsubmodulemanager/).
+
+From the Unity project root, use the OpenUPM CLI:
+
+```bash
+openupm add com.martincalander.gitsubmodulemanager
+```
+
+Without the CLI, add `https://package.openupm.com` as a scoped registry for
+`com.martincalander.gitsubmodulemanager`. Then open **Window > Package
+Management > Package Manager**, choose **+ > Install package by name...**, and
+enter the package name and version `0.8.0`.
+
+### Signed GitHub Release Tarball
+
+Download the
+[signed `0.8.0` `.tgz`](https://github.com/martincalander/GitSubmoduleForUnity/releases/download/v0.8.0/com.martincalander.gitsubmodulemanager-0.8.0.tgz),
+open Unity's Package Manager, and choose **+ > Install package from tarball**.
+Select the downloaded file. Install newer releases manually in the same way.
+
+### Git URL
+
+In Unity's Package Manager, choose **+ > Install package from git URL...** and
+enter:
 
 ```text
 https://github.com/martincalander/GitSubmoduleForUnity.git#v0.8.0
 ```
 
 This URL pins the published `0.8.0` release. Omitting `#v0.8.0` follows the
-mutable `main` branch and is intended only for development.
+mutable `main` branch and is intended only for development. A Git URL installs
+the repository source, not the signed release tarball.
+
+See the [installation and compatibility guide](Documentation~/installation.md)
+for scoped-registry settings, manifest JSON, checksum verification, and local
+development setup.
 
 ## Quick Start
 

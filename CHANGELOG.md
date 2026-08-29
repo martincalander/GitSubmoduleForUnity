@@ -11,6 +11,8 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - Replaced the README logo with a 600 by 300 package cover and moved the
   repository artwork into Unity-hidden documentation assets.
+- Documented OpenUPM, signed tarball, Git URL, and local-folder installation
+  methods together with their update and release-signature tradeoffs.
 
 ## [0.8.0] - 2026-08-29
 
