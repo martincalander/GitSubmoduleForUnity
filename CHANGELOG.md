@@ -12,7 +12,7 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Added scalable package artwork that presents the Git logomark emerging from
   an open package box and now serves as the README logo.
 - Added a README showcase for Cave Expedition and Big Boy Boxing using linked
-  Steam capsule cards.
+  Steam capsule cards, with an email contact for game submissions.
 
 ### Fixed
 
