@@ -531,6 +531,82 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                 Does.Contain("read-only Package Manager Git dependency"));
         }
 
+        [Test]
+        public void InstallAuthority_RequiresEquivalentCurrentNonRetainedRepository()
+        {
+            PackageManagerGitHubRepository projected =
+                CreateRepository("repository", "main");
+            PackageManagerGitHubRepository equivalent =
+                CreateRepository("repository", "main");
+            PackageManagerGitHubRepository changed =
+                CreateRepository("repository", "release");
+
+            Assert.That(
+                PackageManagerGitHubNativeActions
+                    .CanInstallCurrentDiscoveryRepository(
+                        CreateDiscoverySnapshot(equivalent, retained: false),
+                        projected),
+                Is.True,
+                "Equivalent immutable copies from a live projection remain authoritative.");
+            Assert.That(
+                PackageManagerGitHubNativeActions
+                    .CanInstallCurrentDiscoveryRepository(
+                        CreateDiscoverySnapshot(equivalent, retained: true),
+                        projected),
+                Is.False,
+                "Retained and reload-cached rows are presentation-only.");
+            Assert.That(
+                PackageManagerGitHubNativeActions
+                    .CanInstallCurrentDiscoveryRepository(
+                        CreateDiscoverySnapshot(changed, retained: false),
+                        projected),
+                Is.False,
+                "A content-drifted projection must not authorize an install.");
+            Assert.That(
+                PackageManagerGitHubNativeActions
+                    .CanInstallCurrentDiscoveryRepository(
+                        PackageManagerGitHubDiscoverySnapshot.Empty,
+                        projected),
+                Is.False);
+            Assert.That(
+                PackageManagerGitHubNativeActions
+                    .CanInstallCurrentDiscoveryRepository(
+                        CreateDiscoverySnapshot(equivalent, retained: false),
+                        null),
+                Is.False);
+        }
+
+        [Test]
+        public void PendingInstall_BecomesNonExecutableWhenLiveAuthorityIsLost()
+        {
+            int installCount = 0;
+            using PackageManagerGitHubDetails details = CreateDetails(
+                out _,
+                out _,
+                out _,
+                (_, _, _) => installCount++,
+                _ => { });
+            details.Refresh(CreateRepository("repository", "main"));
+            details.SetInstallState(true, true, "Ready");
+            ExecuteInstallMenuAction(
+                details,
+                PackageManagerGitInstallMode.GitSubmodule);
+            Assert.That(details.IsInstallConfirmationPending, Is.True);
+
+            const string liveVerificationRequired =
+                "Wait for live GitHub discovery to verify this repository.";
+            details.SetInstallState(
+                true,
+                false,
+                liveVerificationRequired,
+                false,
+                liveVerificationRequired);
+            details.TriggerInstall();
+
+            Assert.That(installCount, Is.Zero);
+            Assert.That(details.InstallButton.enabledSelf, Is.False);
+        }
+
         [TestCase(
             "git@github.com:example/repository.git",
             "https://github.com/example/repository")]
@@ -2362,6 +2438,23 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                 DeclaredDisplayName = name,
                 DeclaredVersion = "1.0.0"
             });
+        }
+
+        private static PackageManagerGitHubDiscoverySnapshot CreateDiscoverySnapshot(
+            PackageManagerGitHubRepository repository,
+            bool retained)
+        {
+            return new PackageManagerGitHubDiscoverySnapshot(
+                new[] { repository },
+                isLoading: true,
+                statusMessage: string.Empty,
+                errorMessage: string.Empty,
+                completedPages: 0,
+                completedOwners: 0,
+                totalOwners: 1,
+                unavailableManifestCount: 0,
+                revision: 1,
+                isShowingRetainedRepositories: retained);
         }
 
         private static PackageManagerReadOnlyGitInfo CreateReadOnlyInfo(

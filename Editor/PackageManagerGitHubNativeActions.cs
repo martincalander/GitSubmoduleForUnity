@@ -54,6 +54,8 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             new(StringComparer.Ordinal);
         private static SelectionContract supportedSelectionContract;
         private static bool recoveredCompletionPresentationScheduled;
+        private const string LiveDiscoveryRequiredMessage =
+            "Wait for live GitHub discovery to verify this exact repository before installing it.";
 
         static PackageManagerGitHubNativeActions()
         {
@@ -66,6 +68,8 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 OnDependencyInstallPipelineChanged;
             PackageDependencyInstallPipeline.Completed +=
                 OnDependencyInstallPipelineCompleted;
+            PackageManagerGitHubDiscovery.SnapshotChanged +=
+                RefreshAllEntries;
         }
 
         internal static int InstalledRootCount => EntriesByRoot.Count;
@@ -524,24 +528,36 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                         selectedBranch,
                         repository.PackageName);
                 bool canStart = CanStartDependencyInstallPipeline();
+                bool hasLiveDiscoveryAuthority =
+                    CanInstallCurrentDiscoveryRepository(
+                        PackageManagerGitHubDiscovery.Current,
+                        repository);
                 bool gitSubmoduleEnabled =
                     string.IsNullOrWhiteSpace(gitSubmoduleValidationError) &&
+                    hasLiveDiscoveryAuthority &&
                     canStart;
                 bool readOnlyPackageEnabled =
                     string.IsNullOrWhiteSpace(readOnlyPackageValidationError) &&
+                    hasLiveDiscoveryAuthority &&
                     canStart;
                 string gitSubmoduleTooltip = gitSubmoduleEnabled
                     ? BuildEnabledTooltip(
                         repository,
                         selectedBranch,
                         PackageManagerGitInstallMode.GitSubmodule)
-                    : BuildDisabledTooltip(gitSubmoduleValidationError);
+                    : BuildDisabledTooltip(
+                        hasLiveDiscoveryAuthority
+                            ? gitSubmoduleValidationError
+                            : LiveDiscoveryRequiredMessage);
                 string readOnlyPackageTooltip = readOnlyPackageEnabled
                     ? BuildEnabledTooltip(
                         repository,
                         selectedBranch,
                         PackageManagerGitInstallMode.ReadOnlyPackage)
-                    : BuildDisabledTooltip(readOnlyPackageValidationError);
+                    : BuildDisabledTooltip(
+                        hasLiveDiscoveryAuthority
+                            ? readOnlyPackageValidationError
+                            : LiveDiscoveryRequiredMessage);
                 entry.Details.SetInstallState(
                     true,
                     gitSubmoduleEnabled,
@@ -1876,6 +1892,18 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 }
 
                 repository = projectedRepository;
+                if (!CanInstallCurrentDiscoveryRepository(
+                        PackageManagerGitHubDiscovery.Current,
+                        repository))
+                {
+                    ReportInstallError(
+                        feedbackTarget,
+                        "Cannot Install Git Package",
+                        LiveDiscoveryRequiredMessage);
+                    RefreshAllEntries();
+                    return;
+                }
+
                 string branch = selectedBranch?.Trim() ?? string.Empty;
                 string validationError = installMode ==
                                          PackageManagerGitInstallMode.ReadOnlyPackage
@@ -2413,6 +2441,26 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                    !PackageManagerReadOnlyGitInstallService.IsBusy &&
                    !PackageManagerProjectResolutionService.IsBusy &&
                    !AsyncCommandDrainRegistry.RequiresEditorRestart;
+        }
+
+        internal static bool CanInstallCurrentDiscoveryRepository(
+            PackageManagerGitHubDiscoverySnapshot snapshot,
+            PackageManagerGitHubRepository repository)
+        {
+            if (snapshot == null || repository == null ||
+                snapshot.IsShowingRetainedRepositories)
+            {
+                return false;
+            }
+
+            foreach (PackageManagerGitHubRepository currentRepository in
+                     snapshot.Repositories)
+            {
+                if (currentRepository?.HasSameContent(repository) == true)
+                    return true;
+            }
+
+            return false;
         }
 
         /// <summary>

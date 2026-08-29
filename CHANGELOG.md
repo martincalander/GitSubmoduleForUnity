@@ -14,8 +14,24 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Added a README showcase for Cave Expedition and Big Boy Boxing using linked
   Steam capsule cards, with an email contact for game submissions.
 
+### Changed
+
+- Repository links now use the `GitSubmoduleForUnity` GitHub repository name.
+- Successful GitHub catalogues and healthy setup checks now survive script
+  reloads for the time remaining in their existing short-lived cache windows.
+  Cached catalogue entries appear only after the current GitHub account is
+  verified again, and live discovery continues in the background.
+
 ### Fixed
 
+- Closing and reopening Package Manager no longer renews or revives an expired
+  retained GitHub catalogue.
+- A catalogue is now discarded if the authenticated GitHub account changes, or
+  cannot be verified again, between the start and end of discovery.
+- Account-scoped GitHub repository reads now wait until the account's stable ID
+  and login have been resolved, closing a race with concurrent account changes.
+- Reload-cached and retained catalogue rows now keep **Install** disabled until
+  the exact repository is present in the current live discovery snapshot.
 - GitHub discovery now keeps valid Unity packages from a GraphQL batch when
   unrelated repositories simply lack `package.json` or `package.json.meta`.
   Partial responses are accepted only when every reported error exactly matches
@@ -352,7 +368,7 @@ published.
 - Basic project submodule listing, update, remove, and branch operations.
 - Early GitHub discovery and direct URL installation.
 
-[Unreleased]: https://github.com/martincalander/GitSubmoduleManager/compare/v2.0.0...HEAD
-[2.0.0]: https://github.com/martincalander/GitSubmoduleManager/compare/5644e381f90f883aa9d12bbdca9efbf5c2b2eb05...v2.0.0
-[1.0.0]: https://github.com/martincalander/GitSubmoduleManager/tree/5644e381f90f883aa9d12bbdca9efbf5c2b2eb05
-[0.1.0]: https://github.com/martincalander/GitSubmoduleManager/tree/49bac435
+[Unreleased]: https://github.com/martincalander/GitSubmoduleForUnity/compare/v2.0.0...HEAD
+[2.0.0]: https://github.com/martincalander/GitSubmoduleForUnity/compare/5644e381f90f883aa9d12bbdca9efbf5c2b2eb05...v2.0.0
+[1.0.0]: https://github.com/martincalander/GitSubmoduleForUnity/tree/5644e381f90f883aa9d12bbdca9efbf5c2b2eb05
+[0.1.0]: https://github.com/martincalander/GitSubmoduleForUnity/tree/49bac435

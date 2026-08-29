@@ -5,9 +5,9 @@
   "description": "Manage Git-hosted UPM packages in Unity as editable submodules or read-only dependencies.",
   "unity": "6000.3",
   "unityRelease": "22f1",
-  "documentationUrl": "https://github.com/martincalander/GitSubmoduleManager/blob/main/Documentation~/index.md",
-  "changelogUrl": "https://github.com/martincalander/GitSubmoduleManager/blob/main/CHANGELOG.md",
-  "licensesUrl": "https://github.com/martincalander/GitSubmoduleManager/blob/main/LICENSE.md",
+  "documentationUrl": "https://github.com/martincalander/GitSubmoduleForUnity/blob/main/Documentation~/index.md",
+  "changelogUrl": "https://github.com/martincalander/GitSubmoduleForUnity/blob/main/CHANGELOG.md",
+  "licensesUrl": "https://github.com/martincalander/GitSubmoduleForUnity/blob/main/LICENSE.md",
   "license": "MIT",
   "keywords": [
     "GitHub",
@@ -23,10 +23,10 @@
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/martincalander/GitSubmoduleManager.git"
+    "url": "https://github.com/martincalander/GitSubmoduleForUnity.git"
   },
   "bugs": {
-    "url": "https://github.com/martincalander/GitSubmoduleManager/issues"
+    "url": "https://github.com/martincalander/GitSubmoduleForUnity/issues"
   },
   "dependencies": {
     "com.unity.modules.imgui": "1.0.0",

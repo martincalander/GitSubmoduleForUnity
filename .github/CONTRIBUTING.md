@@ -31,7 +31,7 @@ Unity's native Package Manager; it is not a general-purpose Git client.
 Add a fork or working clone below a Unity project's `Packages/` directory:
 
 ```bash
-git clone https://github.com/<your-user>/GitSubmoduleManager.git \
+git clone https://github.com/<your-user>/GitSubmoduleForUnity.git \
   Packages/com.martincalander.gitsubmodulemanager
 ```
 
@@ -51,6 +51,7 @@ Editor/
 │                               native Sources/GitHub page
 ├── PackageManagerGitHubDiscovery.cs
 │                               lazy authenticated catalogue
+├── ReloadSessionCaches.cs     bounded reload presentation caches
 ├── GitSubmoduleAddService.cs
 ├── GitPackageConversionService.cs
 ├── GitSubmoduleRemoveService.cs

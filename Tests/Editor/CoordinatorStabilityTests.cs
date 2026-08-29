@@ -36,6 +36,22 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
         }
 
         [Test]
+        public void AccountIdentityArguments_RequestStableIdAndLoginFromPublicGitHub()
+        {
+            Assert.That(
+                GitHubUtility.BuildAccountIdentityArguments(),
+                Is.EqualTo(new[]
+                {
+                    "api",
+                    "user",
+                    "--jq",
+                    "[(.id | tostring), .login] | @tsv",
+                    "--hostname",
+                    "github.com"
+                }));
+        }
+
+        [Test]
         public void PersonalRepositoryPage_OnlyRequestsRepositoriesOwnedByTheUser()
         {
             var runner = new RecordingRunner(_ => Success("[]"));
@@ -108,10 +124,10 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                     {
                         firstUsernameStarted.Set();
                         releaseFirstUsername.Wait(TimeSpan.FromSeconds(2));
-                        return Success("previous-account");
+                        return Success("1001\tprevious-account");
                     }
 
-                    return Success("replacement-account");
+                    return Success("1002\treplacement-account");
                 }
 
                 if (arguments.Contains("user/orgs"))
@@ -143,6 +159,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                     coordinator.Username == "replacement-account" && coordinator.OrgsLoaded);
 
                 Assert.That(coordinator.Username, Is.EqualTo("replacement-account"));
+                Assert.That(coordinator.AccountId, Is.EqualTo("1002"));
                 Assert.That(coordinator.SelectedOwner, Is.EqualTo("replacement-account"));
                 Assert.That(coordinator.Organizations, Is.EqualTo(new[] { "replacement-org" }));
                 Assert.That(coordinator.Username, Is.Not.EqualTo("previous-account"));
@@ -193,7 +210,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
             {
                 string arguments = GetArguments(spec);
                 if (arguments.Contains("api user --jq"))
-                    return Success("authenticated-owner");
+                    return Success("1003\tauthenticated-owner");
                 if (arguments.Contains("user/orgs"))
                 {
                     return new CommandResult

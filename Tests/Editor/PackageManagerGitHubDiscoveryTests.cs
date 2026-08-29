@@ -11,13 +11,22 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
     [Parallelizable(ParallelScope.None)]
     public sealed class PackageManagerGitHubDiscoveryTests
     {
+        private const string TestUnityVersion = "6000.5.0f1-test";
+        private static readonly string TestProjectFingerprint =
+            Convert.ToBase64String(Enumerable.Repeat((byte)0x5A, 32).ToArray());
+
         private ICommandRunner previousRunner;
         private bool ownsDiscovery;
+        private IDisposable sessionCacheOverride;
+        private IDisposable accountVerificationOverride;
 
         [SetUp]
         public void SetUp()
         {
             previousRunner = CliCommandRunner.CurrentRunner;
+            ownsDiscovery = false;
+            sessionCacheOverride = null;
+            accountVerificationOverride = null;
         }
 
         [TearDown]
@@ -25,6 +34,8 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
         {
             if (ownsDiscovery)
                 PackageManagerGitHubDiscovery.Dispose();
+            accountVerificationOverride?.Dispose();
+            sessionCacheOverride?.Dispose();
             CliCommandRunner.CurrentRunner = previousRunner;
         }
 
@@ -108,6 +119,625 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                 copy.HasSameContent(new PackageManagerGitHubRepository(source)),
                 Is.False,
                 "A changed immutable record must replace the published catalogue collection.");
+        }
+
+        [Test]
+        public void CatalogueSessionCache_RoundTripsCompleteCatalogueWithinOriginalLifetime()
+        {
+            var store = new MemorySessionStringStateStore();
+            var cache = new PackageManagerGitHubCatalogueSessionCache(
+                store,
+                TestProjectFingerprint,
+                TestUnityVersion);
+            PackageManagerGitHubRepository repository = CreateCachedRepository();
+
+            Assert.That(
+                cache.Save(
+                    "3001",
+                    "personal-owner",
+                    new[] { repository },
+                    100d),
+                Is.True);
+            Assert.That(
+                cache.TryLoad(999.999d, out PackageManagerGitHubCachedCatalogue loaded),
+                Is.True);
+            Assert.That(loaded.AccountId, Is.EqualTo("3001"));
+            Assert.That(loaded.AccountLogin, Is.EqualTo("personal-owner"));
+            Assert.That(loaded.VerifiedAt, Is.EqualTo(100d));
+            Assert.That(loaded.ExpiresAt, Is.EqualTo(1000d));
+            Assert.That(loaded.Repositories, Has.Count.EqualTo(1));
+            Assert.That(
+                loaded.Repositories[0].HasSameContent(repository),
+                Is.True);
+            Assert.That(loaded.Repositories[0].Dependencies, Has.Count.EqualTo(1));
+            Assert.That(
+                loaded.MatchesAccount("3001", "PERSONAL-OWNER"),
+                Is.True);
+            Assert.That(
+                loaded.MatchesAccount("3002", "personal-owner"),
+                Is.False);
+
+            Assert.That(cache.TryLoad(1000d, out _), Is.False,
+                "The exact original deadline is expired and must not be renewed by loading.");
+            Assert.That(store.Value, Is.Empty);
+        }
+
+        [TestCase("{\"value\":1}", true)]
+        [TestCase("{\"value\":\"\\ud83d\\ude80\"}", true)]
+        [TestCase("/* leading */{\"value\":1}", false)]
+        [TestCase("{'value':1}", false)]
+        [TestCase("{value:1}", false)]
+        [TestCase("{\"value\":1,}", false)]
+        [TestCase("{\"value\":\"\\ud800\"}", false)]
+        public void StrictSessionCacheJson_AcceptsOnlyStandardJson(
+            string json,
+            bool expected)
+        {
+            Assert.That(
+                StrictSessionCacheJson.IsStrictObjectDocument(
+                    json,
+                    1024,
+                    8),
+                Is.EqualTo(expected));
+        }
+
+        [Test]
+        public void StrictSessionCacheJson_RejectsExcessiveStructuralTokens()
+        {
+            var payload = new StringBuilder("{\"repositories\":[");
+            for (int index = 0;
+                 index < StrictSessionCacheJson.MaximumStructuralTokenCount;
+                 index++)
+            {
+                if (index > 0)
+                    payload.Append(',');
+                payload.Append('0');
+            }
+            payload.Append("]}");
+
+            Assert.That(
+                StrictSessionCacheJson.IsStrictObjectDocument(
+                    payload.ToString(),
+                    PackageManagerGitHubCatalogueSessionCache.MaximumPayloadByteCount,
+                    8),
+                Is.False,
+                "Compact high-token input must be rejected before JObject materialization.");
+        }
+
+        [Test]
+        public void CatalogueSessionCache_RejectsDuplicatePropertiesAndOversizedPayloads()
+        {
+            var store = new MemorySessionStringStateStore();
+            var cache = new PackageManagerGitHubCatalogueSessionCache(
+                store,
+                TestProjectFingerprint,
+                TestUnityVersion);
+            Assert.That(
+                cache.Save(
+                    "3001",
+                    "personal-owner",
+                    new[] { CreateCachedRepository() },
+                    100d),
+                Is.True);
+
+            store.Value = store.Value.Replace(
+                "{\"schemaVersion\":1,",
+                "{\"schemaVersion\":1,\"schemaVersion\":1,");
+            Assert.That(cache.TryLoad(101d, out _), Is.False);
+            Assert.That(store.Value, Is.Empty);
+
+            Assert.That(
+                cache.Save(
+                    "3001",
+                    "personal-owner",
+                    new[] { CreateCachedRepository() },
+                    100d),
+                Is.True);
+            store.Value = "/* leading comment */" + store.Value;
+            Assert.That(cache.TryLoad(101d, out _), Is.False,
+                "Session cache JSON must not accept leading comments.");
+            Assert.That(store.Value, Is.Empty);
+
+            Assert.That(
+                cache.Save(
+                    "3001",
+                    "personal-owner",
+                    new[] { CreateCachedRepository() },
+                    100d),
+                Is.True);
+            store.Value = store.Value.Insert(store.Value.Length - 1, ",");
+            Assert.That(cache.TryLoad(101d, out _), Is.False,
+                "Session cache JSON must not accept trailing commas.");
+            Assert.That(store.Value, Is.Empty);
+
+            store.Value = new string(
+                'x',
+                PackageManagerGitHubCatalogueSessionCache.MaximumPayloadByteCount + 1);
+            Assert.That(cache.TryLoad(101d, out _), Is.False);
+            Assert.That(store.Value, Is.Empty);
+
+            Assert.That(
+                cache.Save(
+                    "3001",
+                    "personal-owner",
+                    new[] { CreateCachedRepository() },
+                    100d),
+                Is.True);
+            store.Value = store.Value
+                .Replace(
+                    "\"owner\":\"personal-owner\"",
+                    "\"owner\":\"foo/bar\"")
+                .Replace(
+                    "https://github.com/personal-owner/cached-package.git",
+                    "https://github.com/foo/bar/cached-package.git");
+            Assert.That(cache.TryLoad(101d, out _), Is.False,
+                "Owner and repository identities must each be one GitHub path segment.");
+            Assert.That(store.Value, Is.Empty);
+        }
+
+        [Test]
+        public void CatalogueSessionCache_RejectsOversizedWriteWithoutPersistingIt()
+        {
+            var store = new MemorySessionStringStateStore();
+            var cache = new PackageManagerGitHubCatalogueSessionCache(
+                store,
+                TestProjectFingerprint,
+                TestUnityVersion);
+            string largeDescription = new string('x', 10000);
+            var repositories = new List<PackageManagerGitHubRepository>();
+            for (int index = 0; index < 420; index++)
+            {
+                string name = "cached-package-" + index;
+                repositories.Add(CreateCachedRepository(
+                    url: "https://github.com/personal-owner/" + name + ".git",
+                    name: name,
+                    nodeId: "NODE-CACHED-" + index,
+                    packageName: "com.example.cached.package" + index,
+                    packageDescription: largeDescription));
+            }
+
+            Assert.That(
+                cache.Save(
+                    "3001",
+                    "personal-owner",
+                    repositories,
+                    100d),
+                Is.False);
+            Assert.That(store.Value, Is.Empty,
+                "A payload beyond the byte budget must never reach SessionState.");
+        }
+
+        [Test]
+        public void ReloadCatalogue_LoadsSessionStateOnlyWhenRefreshBegins()
+        {
+            double verifiedAt = EditorApplication.timeSinceStartup;
+            var store = new MemorySessionStringStateStore();
+            var cache = new PackageManagerGitHubCatalogueSessionCache(
+                store,
+                TestProjectFingerprint,
+                TestUnityVersion);
+            Assert.That(
+                cache.Save(
+                    "3001",
+                    "personal-owner",
+                    new[] { CreateCachedRepository() },
+                    verifiedAt),
+                Is.True);
+            RetainIsolatedDiscoveryOrIgnore(store);
+
+            Assert.That(store.LoadCount, Is.EqualTo(0),
+                "Installing the cache must not parse SessionState eagerly.");
+            var runner = new DelayedAccountIdentityRunner(
+                "3001\tpersonal-owner");
+            CliCommandRunner.CurrentRunner = runner;
+            try
+            {
+                PackageManagerGitHubDiscovery.Refresh();
+                Assert.That(store.LoadCount, Is.EqualTo(1));
+            }
+            finally
+            {
+                runner.ReleaseIdentity();
+                runner.ReleaseAllOrganizations();
+            }
+
+            WaitForCatalogue();
+            Assert.That(store.LoadCount, Is.EqualTo(1),
+                "One discovery lifecycle must load the session catalogue at most once.");
+        }
+
+        [Test]
+        public void Catalogue_WaitsForSharedAuthenticationReservationBeforeStarting()
+        {
+            RetainIsolatedDiscoveryOrIgnore();
+            var runner = new CatalogueRunner
+            {
+                ReturnNoOrganizations = true
+            };
+            CliCommandRunner.CurrentRunner = runner;
+
+            Assert.That(
+                CliCommandRunner.TryReserveGitHubAuthentication(),
+                Is.True,
+                "The test must own the shared authentication reservation.");
+            try
+            {
+                PackageManagerGitHubDiscovery.Refresh();
+                for (int attempt = 0; attempt < 10; attempt++)
+                {
+                    PackageManagerGitHubDiscovery.Tick(
+                        EditorApplication.timeSinceStartup + attempt + 1d);
+                }
+
+                Assert.That(PackageManagerGitHubDiscovery.Current.IsLoading, Is.True);
+                Assert.That(PackageManagerGitHubDiscovery.Current.ErrorMessage, Is.Empty);
+                Assert.That(runner.IdentityRequestCount, Is.Zero,
+                    "Discovery must defer while an exclusive authentication operation owns the gate.");
+                Assert.That(runner.PersonalPageCalls, Is.Zero);
+            }
+            finally
+            {
+                CliCommandRunner.ReleaseGitHubAuthenticationReservation();
+            }
+
+            WaitForCatalogue();
+            Assert.That(runner.IdentityRequestCount, Is.EqualTo(2),
+                "The account must be verified before and after catalogue reads.");
+            Assert.That(PackageManagerGitHubDiscovery.Current.ErrorMessage, Is.Empty);
+            Assert.That(PackageManagerGitHubDiscovery.Current.IsLoading, Is.False);
+        }
+
+        [Test]
+        public void Catalogue_WaitsForRetiredCommandDrainBeforeStartingIdentity()
+        {
+            RetainIsolatedDiscoveryOrIgnore();
+            var runner = new CatalogueRunner
+            {
+                ReturnNoOrganizations = true
+            };
+            CliCommandRunner.CurrentRunner = runner;
+            using var started = new ManualResetEventSlim(false);
+            using var release = new ManualResetEventSlim(false);
+            var retiredHandle = new AsyncCommandHandle(
+                new BlockingRetiredCommandRunner(started, release),
+                new CommandSpec
+                {
+                    FileName = "retired-test-command",
+                    WorkingDirectory = "."
+                });
+
+            try
+            {
+                retiredHandle.Start();
+                Assert.That(started.Wait(2000), Is.True);
+                AsyncCommandDrainRegistry.Retire(retiredHandle);
+                Assert.That(AsyncCommandDrainRegistry.IsDraining, Is.True);
+
+                PackageManagerGitHubDiscovery.Refresh();
+                for (int attempt = 0; attempt < 10; attempt++)
+                {
+                    PackageManagerGitHubDiscovery.Tick(
+                        EditorApplication.timeSinceStartup + attempt + 1d);
+                }
+
+                Assert.That(PackageManagerGitHubDiscovery.Current.IsLoading, Is.True);
+                Assert.That(PackageManagerGitHubDiscovery.Current.ErrorMessage, Is.Empty);
+                Assert.That(runner.IdentityRequestCount, Is.Zero,
+                    "A replacement identity command must wait for retired process ownership to drain.");
+            }
+            finally
+            {
+                release.Set();
+                Assert.That(retiredHandle.WaitForCompletion(2000), Is.True);
+            }
+
+            Assert.That(AsyncCommandDrainRegistry.IsDraining, Is.False);
+            WaitForCatalogue();
+            Assert.That(runner.IdentityRequestCount, Is.EqualTo(2));
+            Assert.That(PackageManagerGitHubDiscovery.Current.ErrorMessage, Is.Empty);
+        }
+
+        [Test]
+        public void CatalogueSessionCache_RejectsProjectMismatchAndRepositoryIdentityMismatch()
+        {
+            var store = new MemorySessionStringStateStore();
+            var cache = new PackageManagerGitHubCatalogueSessionCache(
+                store,
+                TestProjectFingerprint,
+                TestUnityVersion);
+            Assert.That(
+                cache.Save(
+                    "3001",
+                    "personal-owner",
+                    new[] { CreateCachedRepository() },
+                    100d),
+                Is.True);
+
+            string otherFingerprint = Convert.ToBase64String(
+                Enumerable.Repeat((byte)0x6B, 32).ToArray());
+            var otherProjectCache = new PackageManagerGitHubCatalogueSessionCache(
+                store,
+                otherFingerprint,
+                TestUnityVersion);
+            Assert.That(otherProjectCache.TryLoad(101d, out _), Is.False);
+            Assert.That(store.Value, Is.Empty);
+
+            PackageManagerGitHubRepository mismatchedUrl = CreateCachedRepository(
+                url: "https://github.com/another-owner/cached-package.git");
+            Assert.That(
+                cache.Save(
+                    "3001",
+                    "personal-owner",
+                    new[] { mismatchedUrl },
+                    100d),
+                Is.False,
+                "Cached repository URLs must remain bound to the exact owner/name record.");
+            Assert.That(store.Value, Is.Empty);
+        }
+
+        [Test]
+        public void CatalogueSessionCache_RejectsUnsafeUrlAndTextFromStoredPayload()
+        {
+            var store = new MemorySessionStringStateStore();
+            var cache = new PackageManagerGitHubCatalogueSessionCache(
+                store,
+                TestProjectFingerprint,
+                TestUnityVersion);
+            Assert.That(
+                cache.Save(
+                    "3001",
+                    "personal-owner",
+                    new[] { CreateCachedRepository() },
+                    100d),
+                Is.True);
+
+            store.Value = store.Value
+                .Replace(
+                    "\"name\":\"cached-package\"",
+                    "\"name\":\"cached-package?view=private\"")
+                .Replace(
+                    "https://github.com/personal-owner/cached-package.git",
+                    "https://github.com/personal-owner/cached-package?view=private");
+            Assert.That(cache.TryLoad(101d, out _), Is.False);
+            Assert.That(store.Value, Is.Empty);
+
+            Assert.That(
+                cache.Save(
+                    "3001",
+                    "personal-owner",
+                    new[] { CreateCachedRepository() },
+                    100d),
+                Is.True);
+            store.Value = store.Value.Replace(
+                "\"description\":\"Cached package\"",
+                "\"description\":\"Cached\\u001bpackage\"");
+            Assert.That(cache.TryLoad(101d, out _), Is.False);
+            Assert.That(store.Value, Is.Empty);
+
+            Assert.That(
+                cache.Save(
+                    "3001",
+                    "personal-owner",
+                    new[] { CreateCachedRepository() },
+                    100d),
+                Is.True);
+            store.Value = store.Value.Replace(
+                "\"description\":\"Cached package\"",
+                "\"description\":\"Cached\\ud800package\"");
+            Assert.That(cache.TryLoad(101d, out _), Is.False);
+            Assert.That(store.Value, Is.Empty);
+
+            Assert.That(
+                cache.Save(
+                    "3001",
+                    "personal-owner",
+                    new[] { CreateCachedRepository() },
+                    100d),
+                Is.True);
+            store.Value = store.Value.Replace(
+                "https://github.com/personal-owner/cached-package.git",
+                "https://github.com/other/../personal-owner/cached-package.git");
+            Assert.That(cache.TryLoad(101d, out _), Is.False,
+                "Normalized or noncanonical repository URLs must not enter the cache.");
+            Assert.That(store.Value, Is.Empty);
+
+            Assert.That(
+                cache.Save(
+                    "3001",
+                    "personal-owner",
+                    new[] { CreateCachedRepository() },
+                    100d),
+                Is.True);
+            store.Value = store.Value.Replace(
+                "\"nodeId\":\"NODE-CACHED\"",
+                "\"nodeId\":\"NODE CACHED\"");
+            Assert.That(cache.TryLoad(101d, out _), Is.False,
+                "Cached node IDs must follow the same whitespace rule as live results.");
+            Assert.That(store.Value, Is.Empty);
+
+            Assert.That(
+                cache.Save(
+                    "3001",
+                    "personal-owner",
+                    new[] { CreateCachedRepository() },
+                    100d),
+                Is.True);
+            string commitOid = new string('c', 40);
+            store.Value = store.Value.Replace(
+                "\"packageManifestCommitOid\":\"" + commitOid + "\"",
+                "\"packageManifestCommitOid\":\" " + commitOid + " \"");
+            Assert.That(cache.TryLoad(101d, out _), Is.False,
+                "Cached Git object IDs must be canonical, without padding.");
+            Assert.That(store.Value, Is.Empty);
+        }
+
+        [Test]
+        public void ReloadCatalogue_WaitsForMatchingLiveAccountAndRemainsPresentationOnly()
+        {
+            double verifiedAt = EditorApplication.timeSinceStartup;
+            var store = new MemorySessionStringStateStore();
+            var cache = new PackageManagerGitHubCatalogueSessionCache(
+                store,
+                TestProjectFingerprint,
+                TestUnityVersion);
+            Assert.That(
+                cache.Save(
+                    "3001",
+                    "personal-owner",
+                    new[] { CreateCachedRepository() },
+                    verifiedAt),
+                Is.True);
+            RetainIsolatedDiscoveryOrIgnore(store);
+
+            var runner = new DelayedAccountIdentityRunner(
+                "3001\tpersonal-owner");
+            CliCommandRunner.CurrentRunner = runner;
+            try
+            {
+                PackageManagerGitHubDiscovery.Refresh();
+                WaitForCondition(
+                    () => runner.IdentityRequestStarted,
+                    "The live account identity request did not start.");
+                for (int attempt = 0; attempt < 20; attempt++)
+                {
+                    PackageManagerGitHubDiscovery.Tick(
+                        EditorApplication.timeSinceStartup + 1d);
+                    Thread.Sleep(5);
+                }
+                Assert.That(runner.PersonalRepositoryPageCalls, Is.EqualTo(0),
+                    "Account-scoped repository reads must wait for numeric ID and login verification.");
+                Assert.That(PackageManagerGitHubDiscovery.Current.Repositories, Is.Empty);
+                Assert.That(
+                    PackageManagerGitHubDiscovery.Current.Repositories.Any(
+                        repository => repository.PackageName ==
+                                      "com.example.cached"),
+                    Is.False,
+                    "The reload cache must remain hidden before account verification.");
+
+                runner.ReleaseIdentity();
+                WaitForCondition(
+                    () => PackageManagerGitHubDiscovery.Current
+                        .IsShowingRetainedRepositories,
+                    "The reload catalogue was not hydrated after live account verification.");
+
+                PackageManagerGitHubDiscoverySnapshot hydrated =
+                    PackageManagerGitHubDiscovery.Current;
+                Assert.That(hydrated.IsLoading, Is.True);
+                Assert.That(
+                    hydrated.Repositories.Select(repository => repository.PackageName),
+                    Is.EqualTo(new[] { "com.example.cached" }));
+                Assert.That(
+                    PackageDependencyResolutionService
+                        .IsSuccessfulTerminalDiscovery(hydrated),
+                    Is.False,
+                    "Reload presentation data must never become GitHub coverage proof.");
+            }
+            finally
+            {
+                runner.ReleaseIdentity();
+                runner.ReleaseAllOrganizations();
+            }
+
+            WaitForCatalogue();
+            Assert.That(
+                PackageManagerGitHubDiscovery.Current.IsShowingRetainedRepositories,
+                Is.False);
+            Assert.That(
+                PackageManagerGitHubDiscovery.Current.Repositories
+                    .Any(repository => repository.PackageName == "com.example.cached"),
+                Is.False,
+                "A successful live scan must atomically replace the reload catalogue.");
+        }
+
+        [TestCase("3002\tother-owner", false)]
+        [TestCase("3001\tother-owner", false)]
+        [TestCase("malformed identity output", false)]
+        [TestCase("3001\tpersonal-owner", true)]
+        public void ReloadCatalogue_UnverifiedIdentityNeverHydratesCache(
+            string identityOutput,
+            bool invalidUtf8)
+        {
+            double verifiedAt = EditorApplication.timeSinceStartup;
+            var store = new MemorySessionStringStateStore();
+            var cache = new PackageManagerGitHubCatalogueSessionCache(
+                store,
+                TestProjectFingerprint,
+                TestUnityVersion);
+            Assert.That(
+                cache.Save(
+                    "3001",
+                    "personal-owner",
+                    new[] { CreateCachedRepository() },
+                    verifiedAt),
+                Is.True);
+            RetainIsolatedDiscoveryOrIgnore(store);
+
+            bool cachedPackageWasPublished = false;
+            void CaptureSnapshot()
+            {
+                cachedPackageWasPublished |=
+                    PackageManagerGitHubDiscovery.Current.Repositories.Any(
+                        repository => repository.PackageName ==
+                                      "com.example.cached");
+            }
+
+            var runner = new DelayedAccountIdentityRunner(
+                identityOutput,
+                invalidUtf8);
+            CliCommandRunner.CurrentRunner = runner;
+            PackageManagerGitHubDiscovery.SnapshotChanged += CaptureSnapshot;
+            try
+            {
+                PackageManagerGitHubDiscovery.Refresh();
+                WaitForCondition(
+                    () => runner.IdentityRequestStarted,
+                    "The live account identity request did not start.");
+                Assert.That(cachedPackageWasPublished, Is.False);
+
+                runner.ReleaseIdentity();
+                WaitForCondition(
+                    () => string.IsNullOrEmpty(store.Value),
+                    "A mismatched or malformed account did not clear the cache.");
+                Assert.That(cachedPackageWasPublished, Is.False);
+                Assert.That(
+                    PackageManagerGitHubDiscovery.Current
+                        .IsShowingRetainedRepositories,
+                    Is.False);
+            }
+            finally
+            {
+                PackageManagerGitHubDiscovery.SnapshotChanged -= CaptureSnapshot;
+                runner.ReleaseIdentity();
+                runner.ReleaseAllOrganizations();
+            }
+
+            WaitForCatalogue();
+            Assert.That(cachedPackageWasPublished, Is.False);
+        }
+
+        [Test]
+        public void Catalogue_AccountChangeBeforeCompletionDiscardsMixedResults()
+        {
+            var store = new MemorySessionStringStateStore();
+            RetainIsolatedDiscoveryOrIgnore(store);
+            var runner = new SwitchingAccountCatalogueRunner();
+            CliCommandRunner.CurrentRunner = runner;
+
+            PackageManagerGitHubDiscovery.Refresh();
+            WaitForCatalogue();
+
+            PackageManagerGitHubDiscoverySnapshot snapshot =
+                PackageManagerGitHubDiscovery.Current;
+            Assert.That(runner.IdentityRequestCount, Is.EqualTo(2));
+            Assert.That(snapshot.IsLoading, Is.False);
+            Assert.That(snapshot.Repositories, Is.Empty);
+            Assert.That(snapshot.ErrorMessage, Does.Contain("account changed"));
+            Assert.That(snapshot.IsShowingRetainedRepositories, Is.False);
+            Assert.That(store.Value, Is.Empty);
+            Assert.That(
+                PackageDependencyResolutionService
+                    .IsSuccessfulTerminalDiscovery(snapshot),
+                Is.False);
         }
 
         [Test]
@@ -196,6 +826,77 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                 PackageManagerGitHubDiscovery.Current.Repositories,
                 Is.Empty,
                 "An expired suspended catalogue must be cleared before a new host projects it.");
+        }
+
+        [Test]
+        public void Suspend_DoesNotExtendActiveRetentionDeadline()
+        {
+            RetainIsolatedDiscoveryOrIgnore();
+
+            var runner = new CatalogueRunner();
+            CliCommandRunner.CurrentRunner = runner;
+            PackageManagerGitHubDiscovery.Refresh();
+            WaitForCatalogue();
+
+            runner.FailOrganizationRequests = true;
+            PackageManagerGitHubDiscovery.Refresh();
+            double originalExpiry =
+                PackageManagerGitHubDiscovery.RetainedCatalogueExpiresAtForTests;
+            WaitForCatalogue();
+
+            Assert.That(
+                PackageManagerGitHubDiscovery.Current.IsShowingRetainedRepositories,
+                Is.True);
+            PackageManagerGitHubDiscovery.Suspend();
+
+            Assert.That(
+                PackageManagerGitHubDiscovery.RetainedCatalogueExpiresAtForTests,
+                Is.EqualTo(originalExpiry),
+                "Closing Package Manager must not renew an existing retention window.");
+
+            PackageManagerGitHubDiscovery.PrepareForHost(originalExpiry + 1d);
+            Assert.That(
+                PackageManagerGitHubDiscovery.Current.Repositories,
+                Is.Empty,
+                "The original absolute expiry must still retire the suspended catalogue.");
+        }
+
+        [Test]
+        public void Suspend_DoesNotResurrectExpiredEqualPartialCatalogue()
+        {
+            RetainIsolatedDiscoveryOrIgnore();
+
+            var runner = new CatalogueRunner
+            {
+                ReturnNoOrganizations = true
+            };
+            CliCommandRunner.CurrentRunner = runner;
+            PackageManagerGitHubDiscovery.Refresh();
+            WaitForCatalogue();
+
+            runner.FailOrganizationListing = true;
+            PackageManagerGitHubDiscovery.Refresh();
+            WaitForCatalogue();
+
+            double originalExpiry =
+                PackageManagerGitHubDiscovery.RetainedCatalogueExpiresAtForTests;
+            PackageManagerGitHubDiscovery.ProcessEditorUpdate(originalExpiry + 1d);
+
+            PackageManagerGitHubDiscoverySnapshot expired =
+                PackageManagerGitHubDiscovery.Current;
+            Assert.That(expired.IsShowingRetainedRepositories, Is.False);
+            Assert.That(expired.Repositories, Has.Count.EqualTo(1),
+                "The incomplete refresh deliberately has the same visible contents as the old success.");
+
+            PackageManagerGitHubDiscovery.Suspend();
+
+            Assert.That(
+                PackageManagerGitHubDiscovery.Current.Repositories,
+                Is.Empty,
+                "Equal partial contents must not resurrect an expired successful catalogue.");
+            Assert.That(
+                PackageManagerGitHubDiscovery.Current.IsShowingRetainedRepositories,
+                Is.False);
         }
 
         [Test]
@@ -371,7 +1072,8 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
         [Test]
         public void Refresh_CoalescesQueuedAndTerminalSubscriberIntoOneReplacementScan()
         {
-            RetainIsolatedDiscoveryOrIgnore();
+            var store = new MemorySessionStringStateStore();
+            RetainIsolatedDiscoveryOrIgnore(store);
 
             var runner = new ParallelOrganizationCatalogueRunner();
             CliCommandRunner.CurrentRunner = runner;
@@ -383,6 +1085,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
 
             bool terminalRefreshRequested = false;
             bool replacementScanObserved = false;
+            bool cachePresentAtTerminalCallback = false;
             void RefreshFromTerminalSnapshot()
             {
                 if (terminalRefreshRequested ||
@@ -392,9 +1095,9 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                 }
 
                 terminalRefreshRequested = true;
+                cachePresentAtTerminalCallback =
+                    !string.IsNullOrWhiteSpace(store.Value);
                 PackageManagerGitHubDiscovery.Refresh();
-                replacementScanObserved =
-                    runner.WaitForReplacementPersonalRepositoryPage();
             }
 
             PackageManagerGitHubDiscovery.SnapshotChanged +=
@@ -405,6 +1108,8 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                 PackageManagerGitHubDiscovery.Refresh();
                 runner.ReleaseAllOrganizations();
                 WaitForCatalogue();
+                replacementScanObserved =
+                    runner.PersonalRepositoryPageCalls >= 2;
             }
             finally
             {
@@ -414,13 +1119,75 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
             }
 
             Assert.That(terminalRefreshRequested, Is.True);
+            Assert.That(cachePresentAtTerminalCallback, Is.True,
+                "A verified catalogue must be cached before terminal subscribers run.");
             Assert.That(replacementScanObserved, Is.True,
-                "The terminal callback must start the coalesced replacement scan.");
+                "The terminal callback must queue one coalesced replacement scan.");
             Assert.That(runner.PersonalRepositoryPageCalls, Is.EqualTo(2),
                 "The queued request and synchronous terminal callback must share one replacement scan.");
             Assert.That(runner.OrganizationRepositoryPageCalls, Is.EqualTo(8));
             Assert.That(PackageManagerGitHubDiscovery.Current.IsLoading, Is.False);
             Assert.That(PackageManagerGitHubDiscovery.Current.ErrorMessage, Is.Empty);
+            Assert.That(store.Value, Is.Not.Empty,
+                "A synchronous replacement refresh must not clear the verified cache.");
+        }
+
+        [Test]
+        public void FinalAccountVerificationStartFailure_DiscardsCatalogueAndCache()
+        {
+            double verifiedAt = EditorApplication.timeSinceStartup;
+            var store = new MemorySessionStringStateStore();
+            var cache = new PackageManagerGitHubCatalogueSessionCache(
+                store,
+                TestProjectFingerprint,
+                TestUnityVersion);
+            Assert.That(
+                cache.Save(
+                    "3001",
+                    "personal-owner",
+                    new[] { CreateCachedRepository() },
+                    verifiedAt),
+                Is.True);
+            RetainIsolatedDiscoveryOrIgnore(store);
+            accountVerificationOverride =
+                PackageManagerGitHubDiscovery
+                    .OverrideAccountVerificationStarterForTests(
+                        () => throw new InvalidOperationException(
+                            "Final verification launch rejected for the test."));
+            CliCommandRunner.CurrentRunner = new CatalogueRunner();
+
+            bool cachedCatalogueWasPresented = false;
+            void CaptureCachedCatalogue()
+            {
+                cachedCatalogueWasPresented |=
+                    PackageManagerGitHubDiscovery.Current.Repositories.Any(
+                        repository => repository.PackageName ==
+                                      "com.example.cached");
+            }
+            PackageManagerGitHubDiscovery.SnapshotChanged += CaptureCachedCatalogue;
+            try
+            {
+                PackageManagerGitHubDiscovery.Refresh();
+                WaitForCatalogue();
+            }
+            finally
+            {
+                PackageManagerGitHubDiscovery.SnapshotChanged -=
+                    CaptureCachedCatalogue;
+            }
+
+            PackageManagerGitHubDiscoverySnapshot snapshot =
+                PackageManagerGitHubDiscovery.Current;
+            Assert.That(cachedCatalogueWasPresented, Is.True,
+                "The regression must begin with a matching hydrated reload catalogue.");
+            Assert.That(snapshot.IsLoading, Is.False);
+            Assert.That(snapshot.ErrorMessage,
+                Does.Contain("Could not start final GitHub account verification"));
+            Assert.That(snapshot.Repositories, Is.Empty,
+                "An unverified staged catalogue must not remain visible.");
+            Assert.That(snapshot.IsShowingRetainedRepositories, Is.False);
+            Assert.That(store.Value, Is.Empty,
+                "No unverified catalogue may survive in the reload cache.");
         }
 
         [Test]
@@ -608,7 +1375,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                     refreshing.Repositories,
                     Is.SameAs(completedRepositories),
                     "Starting a refresh must not withdraw installed-package actions from the UI.");
-                Assert.That(refreshing.StatusMessage, Does.Contain("remain available"));
+                Assert.That(refreshing.StatusMessage, Does.Contain("remain visible"));
 
                 WaitForCatalogue();
             }
@@ -803,7 +1570,51 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                 Is.True);
         }
 
-        private void RetainIsolatedDiscoveryOrIgnore()
+        private static PackageManagerGitHubRepository CreateCachedRepository(
+            string url = "https://github.com/personal-owner/cached-package.git",
+            string owner = "personal-owner",
+            string name = "cached-package",
+            string nodeId = "NODE-CACHED",
+            string packageName = "com.example.cached",
+            string packageDescription = "Reload presentation cache test package.")
+        {
+            return new PackageManagerGitHubRepository(new GitHubRepo
+            {
+                NodeId = nodeId,
+                Name = name,
+                Owner = owner,
+                Url = url,
+                DefaultBranch = "main",
+                IsPrivate = true,
+                Description = "Cached package",
+                UpdatedAt = "2026-08-29T12:00:00Z",
+                ManifestState = PackageManifestState.Valid,
+                DeclaredPackageName = packageName,
+                DeclaredDisplayName = "Cached Package",
+                DeclaredVersion = "1.2.3",
+                DeclaredDescription = packageDescription,
+                DeclaredMinimumUnityVersion = "6000.3.22f1",
+                DeclaredAuthorName = "Package Author",
+                DeclaredLicense = "MIT",
+                DeclaredDocumentationUrl = "https://example.com/docs",
+                DeclaredChangelogUrl = "https://example.com/changelog",
+                DeclaredLicensesUrl = "https://example.com/licenses",
+                DeclaredDependencies = new[]
+                {
+                    new PackageManifestDependency(
+                        "com.example.dependency",
+                        "4.5.6")
+                },
+                PackageManifestCommitOid = new string('c', 40),
+                PackageManifestBlobOid = new string('a', 40),
+                PackageManifestMetaBlobOid = new string('b', 40),
+                PackageManifestMetaGuid =
+                    "0123456789abcdef0123456789abcdef"
+            });
+        }
+
+        private void RetainIsolatedDiscoveryOrIgnore(
+            MemorySessionStringStateStore store = null)
         {
             if (PackageManagerGitHubDiscovery.IsStarted ||
                 CliCommandRunner.HasActiveGitHubCommands ||
@@ -816,7 +1627,37 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
             }
 
             PackageManagerGitHubDiscovery.Dispose();
+            var cache = new PackageManagerGitHubCatalogueSessionCache(
+                store ?? new MemorySessionStringStateStore(),
+                TestProjectFingerprint,
+                TestUnityVersion);
+            sessionCacheOverride =
+                PackageManagerGitHubDiscovery.OverrideSessionCacheForTests(
+                    cache);
             ownsDiscovery = true;
+        }
+
+        private sealed class MemorySessionStringStateStore :
+            ISessionStringStateStore
+        {
+            internal string Value { get; set; } = string.Empty;
+            internal int LoadCount { get; private set; }
+
+            public string Load()
+            {
+                LoadCount++;
+                return Value;
+            }
+
+            public void Save(string value)
+            {
+                Value = value ?? string.Empty;
+            }
+
+            public void Clear()
+            {
+                Value = string.Empty;
+            }
         }
 
         private static void WaitForCatalogue()
@@ -967,8 +1808,8 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
             public CommandResult Run(CommandSpec spec)
             {
                 string arguments = GetArguments(spec);
-                if (arguments.Contains("api user --jq .login"))
-                    return Success("personal-owner");
+                if (arguments.Contains("api user --jq"))
+                    return Success("3001\tpersonal-owner");
 
                 if (arguments.Contains("user/orgs"))
                 {
@@ -995,6 +1836,32 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                 }
 
                 return Failure("Unexpected command: " + arguments, true);
+            }
+        }
+
+        private sealed class BlockingRetiredCommandRunner : ICommandRunner
+        {
+            private readonly ManualResetEventSlim started;
+            private readonly ManualResetEventSlim release;
+
+            internal BlockingRetiredCommandRunner(
+                ManualResetEventSlim started,
+                ManualResetEventSlim release)
+            {
+                this.started = started;
+                this.release = release;
+            }
+
+            public CommandResult Run(CommandSpec spec)
+            {
+                started.Set();
+                release.Wait();
+                return new CommandResult
+                {
+                    ExitCode = -1,
+                    Cancelled = spec.CancellationToken.IsCancellationRequested,
+                    TerminationConfirmed = true
+                };
             }
         }
 
@@ -1030,8 +1897,8 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
             public CommandResult Run(CommandSpec spec)
             {
                 string arguments = GetArguments(spec);
-                if (arguments.Contains("api user --jq .login"))
-                    return Success("personal-owner");
+                if (arguments.Contains("api user --jq"))
+                    return Success("3001\tpersonal-owner");
                 if (arguments.Contains("user/orgs"))
                     return Success(string.Empty);
 
@@ -1131,8 +1998,6 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                 new(StringComparer.Ordinal);
             private readonly List<CancellationToken> organizationCancellationTokens =
                 new();
-            private readonly ManualResetEventSlim replacementPersonalPageStarted =
-                new(false);
 
             private int activeOrganizationRequests;
             private int maximumActiveOrganizationRequests;
@@ -1229,25 +2094,18 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                     gate.Set();
             }
 
-            internal bool WaitForReplacementPersonalRepositoryPage()
-            {
-                return replacementPersonalPageStarted.Wait(
-                    TimeSpan.FromSeconds(5));
-            }
-
             public CommandResult Run(CommandSpec spec)
             {
                 string arguments = GetArguments(spec);
-                if (arguments.Contains("api user --jq .login"))
-                    return Success("personal-owner");
+                if (arguments.Contains("api user --jq"))
+                    return Success("3001\tpersonal-owner");
 
                 if (arguments.Contains("user/orgs"))
                     return Success(string.Join("\n", Organizations));
 
                 if (arguments.Contains("user/repos"))
                 {
-                    if (Interlocked.Increment(ref personalRepositoryPageCalls) == 2)
-                        replacementPersonalPageStarted.Set();
+                    Interlocked.Increment(ref personalRepositoryPageCalls);
                     return Success(RepositoryJson(
                         "NODE-PERSONAL",
                         "personal-owner",
@@ -1428,8 +2286,80 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
             }
         }
 
+        private sealed class DelayedAccountIdentityRunner : ICommandRunner
+        {
+            private readonly ParallelOrganizationCatalogueRunner inner = new();
+            private readonly ManualResetEventSlim identityGate = new(false);
+            private readonly string identityOutput;
+            private readonly bool identityStdOutInvalidUtf8;
+            private int identityRequestStarted;
+
+            internal DelayedAccountIdentityRunner(
+                string identityOutput,
+                bool identityStdOutInvalidUtf8 = false)
+            {
+                this.identityOutput = identityOutput ?? string.Empty;
+                this.identityStdOutInvalidUtf8 = identityStdOutInvalidUtf8;
+            }
+
+            internal bool IdentityRequestStarted =>
+                Volatile.Read(ref identityRequestStarted) != 0;
+
+            internal int PersonalRepositoryPageCalls =>
+                inner.PersonalRepositoryPageCalls;
+
+            internal void ReleaseIdentity()
+            {
+                identityGate.Set();
+            }
+
+            internal void ReleaseAllOrganizations()
+            {
+                inner.ReleaseAllOrganizations();
+            }
+
+            public CommandResult Run(CommandSpec spec)
+            {
+                string arguments = GetArguments(spec);
+                if (!arguments.Contains("api user --jq"))
+                    return inner.Run(spec);
+
+                Volatile.Write(ref identityRequestStarted, 1);
+                while (!identityGate.Wait(10))
+                {
+                    if (spec.CancellationToken.IsCancellationRequested)
+                        return Cancelled();
+                }
+
+                CommandResult result = Success(identityOutput);
+                result.StdOutInvalidUtf8 = identityStdOutInvalidUtf8;
+                return result;
+            }
+        }
+
+        private sealed class SwitchingAccountCatalogueRunner : ICommandRunner
+        {
+            private readonly CatalogueRunner inner = new();
+            private int identityRequestCount;
+
+            internal int IdentityRequestCount =>
+                Volatile.Read(ref identityRequestCount);
+
+            public CommandResult Run(CommandSpec spec)
+            {
+                if (!GetArguments(spec).Contains("api user --jq"))
+                    return inner.Run(spec);
+
+                int request = Interlocked.Increment(ref identityRequestCount);
+                return request == 1
+                    ? Success("3001\tpersonal-owner")
+                    : Success("3002\tother-owner");
+            }
+        }
+
         private sealed class CatalogueRunner : ICommandRunner
         {
+            internal int IdentityRequestCount;
             internal int PersonalPageCalls;
             internal int OrganizationPageCalls;
             internal bool FailOrganizationRequests;
@@ -1440,8 +2370,11 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
             public CommandResult Run(CommandSpec spec)
             {
                 string arguments = GetArguments(spec);
-                if (arguments.Contains("api user --jq .login"))
-                    return Success("personal-owner");
+                if (arguments.Contains("api user --jq"))
+                {
+                    Interlocked.Increment(ref IdentityRequestCount);
+                    return Success("3001\tpersonal-owner");
+                }
 
                 if (FailOrganizationListing && arguments.Contains("user/orgs"))
                 {

@@ -5,6 +5,6 @@ type: software
 authors:
   - family-names: Calander
     given-names: Martin
-repository-code: https://github.com/martincalander/GitSubmoduleManager
-url: https://github.com/martincalander/GitSubmoduleManager
+repository-code: https://github.com/martincalander/GitSubmoduleForUnity
+url: https://github.com/martincalander/GitSubmoduleForUnity
 license: MIT

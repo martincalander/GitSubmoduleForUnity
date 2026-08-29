@@ -28,8 +28,8 @@ normal read-only Git dependencies.
 - [Architecture and safety model](architecture.md)
 - [Roadmap](roadmap.md)
 - [Changelog](../CHANGELOG.md)
-- [Support](https://github.com/martincalander/GitSubmoduleManager/blob/main/.github/SUPPORT.md)
-- [Security policy](https://github.com/martincalander/GitSubmoduleManager/blob/main/.github/SECURITY.md)
+- [Support](https://github.com/martincalander/GitSubmoduleForUnity/blob/main/.github/SUPPORT.md)
+- [Security policy](https://github.com/martincalander/GitSubmoduleForUnity/blob/main/.github/SECURITY.md)
 
 ## Product Boundaries
 

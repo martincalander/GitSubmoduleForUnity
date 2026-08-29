@@ -126,7 +126,7 @@ gh workflow run release.yml --ref v2.0.0 -f tag=v2.0.0
 - Install the tag from a clean Unity project:
 
   ```text
-  https://github.com/martincalander/GitSubmoduleManager.git#v2.0.0
+  https://github.com/martincalander/GitSubmoduleForUnity.git#v2.0.0
   ```
 
 - Confirm the package imports, **Package Manager > Sources > GitHub** opens, and

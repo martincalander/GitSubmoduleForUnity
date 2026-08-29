@@ -249,12 +249,31 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             }
         }
 
+        private sealed class OverrideScope : IDisposable
+        {
+            private Action restore;
+
+            internal OverrideScope(Action restore)
+            {
+                this.restore = restore;
+            }
+
+            public void Dispose()
+            {
+                Action action = restore;
+                restore = null;
+                action?.Invoke();
+            }
+        }
+
         private enum CataloguePhase
         {
             Idle,
+            IdentifyingAccount,
             PersonalRepositories,
             WaitingForOrganizations,
             OrganizationRepositories,
+            VerifyingAccount,
             Complete,
             Failed
         }
@@ -270,7 +289,13 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         private static readonly List<OrganizationLane> ActiveOrganizationLanes =
             new();
 
+        private static PackageManagerGitHubCatalogueSessionCache sessionCache;
+        private static PackageManagerGitHubCachedCatalogue pendingSessionCatalogue;
+        private static bool sessionCacheLoadAttempted;
+        private static Func<AsyncCommandHandle> finalAccountVerificationStarterOverride;
+
         private static DiscoveryCoordinator coordinator;
+        private static AsyncCommandHandle accountVerificationHandle;
         private static PackageManagerGitHubDiscoverySnapshot current =
             PackageManagerGitHubDiscoverySnapshot.Empty;
         private static CataloguePhase phase;
@@ -281,6 +306,10 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         private static string organizationWarningMessage = string.Empty;
         private static string pendingOwnerFailureMessage = string.Empty;
         private static string pendingFailureMessage = string.Empty;
+        private static string activeAccountId = string.Empty;
+        private static string activeAccountLogin = string.Empty;
+        private static string lastSuccessfulAccountId = string.Empty;
+        private static string lastSuccessfulAccountLogin = string.Empty;
         private static bool isStarted;
         private static bool updateSubscribed;
         private static bool isLoading;
@@ -331,8 +360,52 @@ namespace MartinCalander.GitSubmoduleManager.Editor
 
         internal static bool IsStarted => isStarted;
         internal static bool IsUpdateSubscribed => updateSubscribed;
+        internal static double RetainedCatalogueExpiresAtForTests =>
+            retainedCatalogueExpiresAt;
         internal static bool IsFailureDrainPending =>
             !string.IsNullOrWhiteSpace(pendingFailureMessage);
+
+        internal static IDisposable OverrideSessionCacheForTests(
+            PackageManagerGitHubCatalogueSessionCache replacement)
+        {
+            if (isStarted)
+            {
+                throw new InvalidOperationException(
+                    "Discovery must be stopped before replacing its session cache.");
+            }
+
+            PackageManagerGitHubCatalogueSessionCache previousCache = sessionCache;
+            PackageManagerGitHubCachedCatalogue previousPending =
+                pendingSessionCatalogue;
+            bool previousLoadAttempted = sessionCacheLoadAttempted;
+            sessionCache = replacement ??
+                throw new ArgumentNullException(nameof(replacement));
+            pendingSessionCatalogue = null;
+            sessionCacheLoadAttempted = false;
+            return new OverrideScope(() =>
+            {
+                sessionCache = previousCache;
+                pendingSessionCatalogue = previousPending;
+                sessionCacheLoadAttempted = previousLoadAttempted;
+            });
+        }
+
+        internal static IDisposable OverrideAccountVerificationStarterForTests(
+            Func<AsyncCommandHandle> replacement)
+        {
+            if (isStarted)
+            {
+                throw new InvalidOperationException(
+                    "Discovery must be stopped before replacing account verification.");
+            }
+
+            Func<AsyncCommandHandle> previous =
+                finalAccountVerificationStarterOverride;
+            finalAccountVerificationStarterOverride = replacement ??
+                throw new ArgumentNullException(nameof(replacement));
+            return new OverrideScope(
+                () => finalAccountVerificationStarterOverride = previous);
+        }
 
         internal static void EnsureStarted()
         {
@@ -491,9 +564,10 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 return;
             }
 
+            double currentTime = EditorApplication.timeSinceStartup;
+            LoadPendingSessionCatalogue(currentTime);
             SubscribeUpdate();
             refreshQueued = false;
-            double currentTime = EditorApplication.timeSinceStartup;
             if (isShowingRetainedRepositories &&
                 currentTime >= retainedCatalogueExpiresAt)
             {
@@ -527,18 +601,30 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             DisposeCoordinators();
             ResetAggregation();
 
-            coordinator = new DiscoveryCoordinator();
-            coordinator.EnsureUsername();
-            coordinator.LoadInitialPage();
-
-            phase = CataloguePhase.PersonalRepositories;
+            phase = CataloguePhase.IdentifyingAccount;
             isLoading = true;
-            awaitingPageResult = true;
+            awaitingPageResult = false;
             pageProcessed = false;
-            totalOwners = 1;
+            totalOwners = 0;
             statusMessage = WithRetentionNotice(
-                "Loading repositories for the authenticated GitHub account...");
+                "Verifying the authenticated GitHub account...");
             PublishSnapshot();
+            TryStartInitialAccountVerification();
+        }
+
+        private static void LoadPendingSessionCatalogue(double currentTime)
+        {
+            if (sessionCacheLoadAttempted)
+                return;
+
+            sessionCacheLoadAttempted = true;
+            GetSessionCache().TryLoad(currentTime, out pendingSessionCatalogue);
+        }
+
+        private static PackageManagerGitHubCatalogueSessionCache GetSessionCache()
+        {
+            return sessionCache ??=
+                PackageManagerGitHubCatalogueSessionCache.CreateDefault();
         }
 
         private static void Update()
@@ -595,7 +681,17 @@ namespace MartinCalander.GitSubmoduleManager.Editor
 
             if (GitHubCommandRestartRequired)
             {
+                if (phase == CataloguePhase.VerifyingAccount)
+                    WithdrawUnverifiedAccountCatalogue();
+                else if (phase == CataloguePhase.IdentifyingAccount)
+                    DiscardPendingSessionCatalogue();
                 BeginFailureDrain(GitHubCommandRestartRequiredMessage);
+                return;
+            }
+
+            if (phase == CataloguePhase.IdentifyingAccount)
+            {
+                TickInitialAccountIdentity(currentTime);
                 return;
             }
 
@@ -614,6 +710,12 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 return;
             }
 
+            if (phase == CataloguePhase.VerifyingAccount)
+            {
+                TickAccountVerification();
+                return;
+            }
+
             if (coordinator == null)
                 return;
 
@@ -629,6 +731,8 @@ namespace MartinCalander.GitSubmoduleManager.Editor
 
                 if (!string.IsNullOrWhiteSpace(coordinator.ErrorMessage))
                 {
+                    if (string.IsNullOrEmpty(activeAccountId))
+                        DiscardPendingSessionCatalogue();
                     BeginFailureDrain(coordinator.ErrorMessage);
                     return;
                 }
@@ -671,6 +775,162 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                     "GitHub package discovery failed unexpectedly: " +
                     GitHubUtility.SanitizeUiDiagnostic(exception.Message));
             }
+        }
+
+        private static void TickInitialAccountIdentity(double currentTime)
+        {
+            if (accountVerificationHandle == null)
+            {
+                if (!TryStartInitialAccountVerification())
+                    return;
+            }
+
+            if (!accountVerificationHandle.IsComplete)
+                return;
+
+            CommandResult result = accountVerificationHandle.Result;
+            accountVerificationHandle = null;
+            if (!GitHubUtility.TryReadCompleteAccountIdentity(
+                    result,
+                    out string accountId,
+                    out string accountLogin))
+            {
+                DiscardPendingSessionCatalogue();
+                Fail(GitHubUtility.BuildRepoListError(
+                    "Could not identify the authenticated GitHub account; " +
+                    "GitHub discovery could not continue",
+                    result));
+                return;
+            }
+
+            AcceptAuthenticatedAccountIdentity(
+                accountId,
+                accountLogin,
+                currentTime);
+            try
+            {
+                coordinator = new DiscoveryCoordinator();
+                if (!coordinator.TryUseVerifiedAccountIdentity(
+                        accountId,
+                        accountLogin))
+                {
+                    throw new InvalidOperationException(
+                        "The verified GitHub account identity was not canonical.");
+                }
+                coordinator.LoadInitialPage();
+            }
+            catch (Exception exception)
+            {
+                DisposePersonalCoordinator();
+                Fail("Could not start GitHub repository discovery: " +
+                     GitHubUtility.SanitizeUiDiagnostic(exception.Message));
+                return;
+            }
+
+            phase = CataloguePhase.PersonalRepositories;
+            activeOwner = accountLogin;
+            awaitingPageResult = true;
+            pageProcessed = false;
+            totalOwners = 1;
+            statusMessage = WithRetentionNotice(
+                "Loading repositories for the authenticated GitHub account...");
+            PublishSnapshot();
+        }
+
+        private static bool TryStartInitialAccountVerification()
+        {
+            if (phase != CataloguePhase.IdentifyingAccount ||
+                accountVerificationHandle != null)
+            {
+                return accountVerificationHandle != null;
+            }
+
+            try
+            {
+                return TryStartAccountVerification(
+                    out accountVerificationHandle);
+            }
+            catch (Exception exception)
+            {
+                DiscardPendingSessionCatalogue();
+                Fail("Could not start GitHub account verification: " +
+                     GitHubUtility.SanitizeUiDiagnostic(exception.Message));
+                return false;
+            }
+        }
+
+        private static bool AcceptAuthenticatedAccountIdentity(
+            string accountId,
+            string accountLogin,
+            double currentTime)
+        {
+            if (string.IsNullOrEmpty(accountId) ||
+                string.IsNullOrEmpty(accountLogin))
+            {
+                return false;
+            }
+
+            activeAccountId = accountId;
+            activeAccountLogin = accountLogin;
+            bool changed = false;
+            bool retainedAccountMismatch =
+                isShowingRetainedRepositories &&
+                !string.IsNullOrEmpty(lastSuccessfulAccountId) &&
+                (!string.Equals(
+                     lastSuccessfulAccountId,
+                     accountId,
+                     StringComparison.Ordinal) ||
+                 !string.Equals(
+                     lastSuccessfulAccountLogin,
+                     accountLogin,
+                     StringComparison.OrdinalIgnoreCase));
+            if (retainedAccountMismatch)
+            {
+                isShowingRetainedRepositories = false;
+                retainedCatalogueExpiresAt = 0d;
+                lastSuccessfulRepositories =
+                    PackageManagerGitHubDiscoverySnapshot.Empty.Repositories;
+                lastSuccessfulAccountId = string.Empty;
+                lastSuccessfulAccountLogin = string.Empty;
+                repositoriesDirty = true;
+                changed = true;
+            }
+
+            PackageManagerGitHubCachedCatalogue cached = pendingSessionCatalogue;
+            if (cached == null)
+                return changed;
+
+            pendingSessionCatalogue = null;
+            if (currentTime >= cached.ExpiresAt ||
+                !cached.MatchesAccount(accountId, accountLogin))
+            {
+                GetSessionCache().Clear();
+                return changed;
+            }
+
+            // Personal results can finish before the independent account lookup.
+            // Replace that incomplete projection atomically, while leaving its
+            // staged records ready to take over when the live scan completes.
+            publishedRepositories = cached.Repositories;
+            lastSuccessfulRepositories = cached.Repositories;
+            lastSuccessfulAccountId = cached.AccountId;
+            lastSuccessfulAccountLogin = cached.AccountLogin;
+            isShowingRetainedRepositories = true;
+            retainedCatalogueExpiresAt = cached.ExpiresAt;
+            // The live scan continues to stage its own list. When the retained
+            // window expires or the scan succeeds, that staged list must replace
+            // the session catalogue even when it is empty.
+            repositoriesDirty = true;
+            return true;
+        }
+
+        private static void DiscardPendingSessionCatalogue()
+        {
+            if (pendingSessionCatalogue == null)
+                return;
+
+            pendingSessionCatalogue = null;
+            GetSessionCache().Clear();
         }
 
         private static void ConsumePersonalSettledPage()
@@ -872,6 +1132,147 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         {
             if (GitHubCommandRestartRequired)
             {
+                WithdrawUnverifiedAccountCatalogue();
+                Fail(GitHubCommandRestartRequiredMessage);
+                return;
+            }
+
+            if (string.IsNullOrEmpty(activeAccountId) ||
+                string.IsNullOrEmpty(activeAccountLogin))
+            {
+                WithdrawUnverifiedAccountCatalogue();
+                Fail("GitHub discovery could not verify which account supplied " +
+                     "the catalogue. Refresh to try again.");
+                return;
+            }
+
+            phase = CataloguePhase.VerifyingAccount;
+            activeOwner = string.Empty;
+            statusMessage = WithRetentionNotice(
+                "Verifying the GitHub account before publishing the catalogue...");
+            PublishSnapshot();
+            UpdateSubscription();
+            TryStartFinalAccountVerification();
+        }
+
+        private static bool TryStartAccountVerification(
+            out AsyncCommandHandle handle)
+        {
+            handle = null;
+            if (!DiscoveryCoordinator.CanStartGitHubCommandNow)
+                return false;
+
+            return CliCommandRunner.TryRunAsync(
+                "gh",
+                GitHubUtility.BuildAccountIdentityArguments(),
+                GitUtility.ProjectRoot,
+                out handle,
+                requireStrictUtf8StdOut: true);
+        }
+
+        private static bool TryStartFinalAccountVerification()
+        {
+            if (phase != CataloguePhase.VerifyingAccount ||
+                accountVerificationHandle != null)
+            {
+                return accountVerificationHandle != null;
+            }
+
+            try
+            {
+                if (finalAccountVerificationStarterOverride != null)
+                {
+                    accountVerificationHandle =
+                        finalAccountVerificationStarterOverride();
+                    if (accountVerificationHandle == null)
+                    {
+                        throw new InvalidOperationException(
+                            "The account verification command did not return a handle.");
+                    }
+
+                    return true;
+                }
+
+                return TryStartAccountVerification(
+                    out accountVerificationHandle);
+            }
+            catch (Exception exception)
+            {
+                WithdrawUnverifiedAccountCatalogue();
+                Fail("Could not start final GitHub account verification: " +
+                     GitHubUtility.SanitizeUiDiagnostic(exception.Message));
+                return false;
+            }
+        }
+
+        private static void TickAccountVerification()
+        {
+            if (accountVerificationHandle == null)
+            {
+                if (!TryStartFinalAccountVerification())
+                    return;
+            }
+
+            if (!accountVerificationHandle.IsComplete)
+                return;
+
+            CommandResult result = accountVerificationHandle.Result;
+            accountVerificationHandle = null;
+            if (!GitHubUtility.TryReadCompleteAccountIdentity(
+                    result,
+                    out string verifiedAccountId,
+                    out string verifiedAccountLogin))
+            {
+                WithdrawUnverifiedAccountCatalogue();
+                Fail(GitHubUtility.BuildRepoListError(
+                    "Could not re-verify the authenticated GitHub account; " +
+                    "the catalogue was discarded",
+                    result));
+                return;
+            }
+
+            if (!string.Equals(
+                    activeAccountId,
+                    verifiedAccountId,
+                    StringComparison.Ordinal) ||
+                !string.Equals(
+                    activeAccountLogin,
+                    verifiedAccountLogin,
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                WithdrawUnverifiedAccountCatalogue();
+                Fail("The authenticated GitHub account changed while discovery " +
+                     "was running. The mixed catalogue was discarded; refresh " +
+                     "to scan the current account.");
+                return;
+            }
+
+            FinishComplete();
+        }
+
+        private static void WithdrawUnverifiedAccountCatalogue()
+        {
+            pendingSessionCatalogue = null;
+            GetSessionCache().Clear();
+            Repositories.Clear();
+            IndexByNodeId.Clear();
+            IndexByRepository.Clear();
+            publishedRepositories =
+                PackageManagerGitHubDiscoverySnapshot.Empty.Repositories;
+            lastSuccessfulRepositories =
+                PackageManagerGitHubDiscoverySnapshot.Empty.Repositories;
+            lastSuccessfulAccountId = string.Empty;
+            lastSuccessfulAccountLogin = string.Empty;
+            isShowingRetainedRepositories = false;
+            retainedCatalogueExpiresAt = 0d;
+            repositoriesDirty = false;
+        }
+
+        private static void FinishComplete()
+        {
+            if (GitHubCommandRestartRequired)
+            {
+                WithdrawUnverifiedAccountCatalogue();
                 Fail(GitHubCommandRestartRequiredMessage);
                 return;
             }
@@ -881,6 +1282,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             phase = CataloguePhase.Complete;
             isLoading = false;
             activeOwner = string.Empty;
+            double currentTime = EditorApplication.timeSinceStartup;
 
             string unavailableSuffix = unavailableManifestCount > 0
                 ? $" {unavailableManifestCount} repositories could not be validated."
@@ -891,7 +1293,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             bool canKeepRetainedCatalogue =
                 !hasCompleteCoverage &&
                 isShowingRetainedRepositories &&
-                EditorApplication.timeSinceStartup < retainedCatalogueExpiresAt &&
+                currentTime < retainedCatalogueExpiresAt &&
                 ReferenceEquals(publishedRepositories, lastSuccessfulRepositories);
             if (!canKeepRetainedCatalogue)
             {
@@ -909,13 +1311,26 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             if (canKeepRetainedCatalogue)
             {
                 statusMessage +=
-                    " Previously loaded packages remain available temporarily " +
+                    " Previously loaded packages remain visible temporarily " +
                     "because refresh coverage was incomplete.";
             }
 
             DisposeCoordinators();
             // Only a warning-free catalogue with complete owner and manifest
             // coverage may become the next stale-while-revalidate baseline.
+            if (hasCompleteCoverage)
+            {
+                PreparePublishedRepositories();
+                lastSuccessfulAccountId = activeAccountId;
+                lastSuccessfulAccountLogin = activeAccountLogin;
+                lastSuccessfulRepositories = publishedRepositories;
+                pendingSessionCatalogue = null;
+                GetSessionCache().Save(
+                    activeAccountId,
+                    activeAccountLogin,
+                    lastSuccessfulRepositories,
+                    currentTime);
+            }
             PublishSnapshot(markSuccessfulCatalogue: hasCompleteCoverage);
             UpdateSubscription();
             if (startQueuedRefresh &&
@@ -949,7 +1364,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 : GitHubUtility.SanitizeUiDiagnostic(message);
             statusMessage = isShowingRetainedRepositories
                 ? "Repository refresh stopped; previously loaded packages remain " +
-                  "available temporarily."
+                  "visible temporarily."
                 : Repositories.Count == 0
                 ? "GitHub package discovery did not complete."
                 : $"Discovery stopped after finding {Repositories.Count} valid UPM packages.";
@@ -1127,7 +1542,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         private static string WithRetentionNotice(string message)
         {
             string result = isShowingRetainedRepositories
-                ? message + " Previously loaded packages remain available."
+                ? message + " Previously loaded packages remain visible."
                 : message;
             return refreshQueued
                 ? result +
@@ -1225,19 +1640,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
 
         private static void PublishSnapshot(bool markSuccessfulCatalogue = false)
         {
-            if (repositoriesDirty && !isShowingRetainedRepositories)
-            {
-                var repositoryCopies = Repositories.ToArray();
-                Array.Sort(
-                    repositoryCopies,
-                    CompareRepositories);
-                if (!HasSameCatalogueContent(publishedRepositories, repositoryCopies))
-                {
-                    publishedRepositories =
-                        new ReadOnlyCollection<PackageManagerGitHubRepository>(repositoryCopies);
-                }
-                repositoriesDirty = false;
-            }
+            PreparePublishedRepositories();
 
             // Record success before notifying synchronous Package Manager
             // subscribers so a refresh requested from a rebuild callback can
@@ -1258,6 +1661,23 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 coverageWarningMessage,
                 isShowingRetainedRepositories);
             InvokeSnapshotChanged();
+        }
+
+        private static void PreparePublishedRepositories()
+        {
+            if (repositoriesDirty && !isShowingRetainedRepositories)
+            {
+                var repositoryCopies = Repositories.ToArray();
+                Array.Sort(
+                    repositoryCopies,
+                    CompareRepositories);
+                if (!HasSameCatalogueContent(publishedRepositories, repositoryCopies))
+                {
+                    publishedRepositories =
+                        new ReadOnlyCollection<PackageManagerGitHubRepository>(repositoryCopies);
+                }
+                repositoriesDirty = false;
+            }
         }
 
         private static bool HasSameCatalogueContent(
@@ -1340,6 +1760,8 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             organizationWarningMessage = string.Empty;
             pendingOwnerFailureMessage = string.Empty;
             pendingFailureMessage = string.Empty;
+            activeAccountId = string.Empty;
+            activeAccountLogin = string.Empty;
             isLoading = false;
             awaitingPageResult = false;
             pageProcessed = false;
@@ -1357,9 +1779,16 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             coordinator = null;
         }
 
+        private static void DisposeAccountVerification()
+        {
+            AsyncCommandDrainRegistry.Retire(accountVerificationHandle);
+            accountVerificationHandle = null;
+        }
+
         private static void DisposeCoordinators()
         {
             DisposePersonalCoordinator();
+            DisposeAccountVerification();
             foreach (OrganizationLane lane in ActiveOrganizationLanes.ToArray())
                 lane.Dispose();
             ActiveOrganizationLanes.Clear();
@@ -1367,6 +1796,12 @@ namespace MartinCalander.GitSubmoduleManager.Editor
 
         private static bool HasIncompleteCoordinatorCommands()
         {
+            if (accountVerificationHandle != null &&
+                !accountVerificationHandle.IsComplete)
+            {
+                return true;
+            }
+
             if (coordinator?.HasIncompleteCommands == true)
                 return true;
 
@@ -1404,10 +1839,30 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             bool publishEmptySnapshot,
             bool preserveCompletedCatalogue = false)
         {
+            double currentTime = EditorApplication.timeSinceStartup;
+            bool hasPublishedSuccessfulCatalogue =
+                publishedRepositories.Count > 0 &&
+                ReferenceEquals(
+                    publishedRepositories,
+                    lastSuccessfulRepositories);
+            bool isFreshCompleteCatalogue =
+                phase == CataloguePhase.Complete && HasCompleteCoverage();
+            bool hasUnexpiredRetainedCatalogue =
+                isShowingRetainedRepositories &&
+                currentTime < retainedCatalogueExpiresAt;
+            bool canPreserveCompletedCatalogue =
+                preserveCompletedCatalogue &&
+                hasPublishedSuccessfulCatalogue &&
+                (isFreshCompleteCatalogue || hasUnexpiredRetainedCatalogue);
             IReadOnlyList<PackageManagerGitHubRepository> completedCatalogue =
-                preserveCompletedCatalogue
+                canPreserveCompletedCatalogue
                     ? lastSuccessfulRepositories
                     : PackageManagerGitHubDiscoverySnapshot.Empty.Repositories;
+            double completedCatalogueExpiresAt = canPreserveCompletedCatalogue
+                ? hasUnexpiredRetainedCatalogue
+                    ? retainedCatalogueExpiresAt
+                    : currentTime + RetainedCatalogueDurationSeconds
+                : 0d;
             gracefulStopRequested = false;
             restartAfterGracefulStop = false;
             preserveCompletedCatalogueAfterGracefulStop = false;
@@ -1423,11 +1878,9 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 lastSuccessfulRepositories = completedCatalogue;
                 repositoriesDirty = false;
                 isShowingRetainedRepositories = true;
-                retainedCatalogueExpiresAt =
-                    EditorApplication.timeSinceStartup +
-                    RetainedCatalogueDurationSeconds;
+                retainedCatalogueExpiresAt = completedCatalogueExpiresAt;
                 statusMessage =
-                    "Previously loaded GitHub packages remain available while " +
+                    "Previously loaded GitHub packages remain visible while " +
                     "Package Manager reconnects.";
             }
             else
@@ -1436,6 +1889,8 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 retainedCatalogueExpiresAt = 0d;
                 lastSuccessfulRepositories =
                     PackageManagerGitHubDiscoverySnapshot.Empty.Repositories;
+                lastSuccessfulAccountId = string.Empty;
+                lastSuccessfulAccountLogin = string.Empty;
             }
 
             if (publishEmptySnapshot && !isShuttingDown)
@@ -1490,6 +1945,8 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         private static void OnEditorQuitting()
         {
             isShuttingDown = true;
+            pendingSessionCatalogue = null;
+            sessionCache?.Clear();
             Stop(publishEmptySnapshot: false);
         }
     }

@@ -35,7 +35,9 @@ passwords, SSH keys, or credential-helper output.
 The same setup cards appear under **Preferences > Git Submodule Manager**.
 Installed tools show a checkmark and their detected version. Results refresh
 automatically after a short interval; use **Check Again** for an immediate
-refresh after changing a tool or its authentication.
+refresh after changing a tool or its authentication. A healthy result can
+survive a script reload for the time left in that same short interval; a manual
+check always discards it first.
 
 Choose **Open GitHub Package Manager** to continue into Package Manager. Reopen
 the window at any time from **Preferences > Git Submodule Manager > Show
@@ -95,6 +97,18 @@ Results appear incrementally and are grouped under **Organization - _owner_**.
 Installed GitHub packages remain in the list throughout the scan. Choose Package
 Manager's **Refresh** action to rescan the project and GitHub. If a scan is
 already active, one replacement scan runs afterward.
+
+After a script reload, a recently completed catalogue may reappear once GitHub
+CLI confirms that the same account is still active. Package Manager continues
+to show **Refreshing list...** while it replaces those entries with a live scan.
+The original 15-minute limit is not restarted by reloading scripts or reopening
+Package Manager, and cached entries are never used to prove that a dependency is
+missing from GitHub. Cached rows remain visible and searchable, but their
+**Install** actions stay disabled until that exact repository has been verified
+by the live scan. Discovery verifies the account before starting its
+account-scoped repository reads and checks it again before finishing. If you
+switch GitHub CLI accounts during a scan, the result is discarded and you can
+refresh again to scan the current account cleanly.
 
 Use Unity's native **Filters** control in the Package Manager toolbar to narrow
 the page by:

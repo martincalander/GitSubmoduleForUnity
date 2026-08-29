@@ -7,8 +7,8 @@
 Manage Git-hosted Unity packages from Unity's native Package Manager.
 
 <p align="center">
-  <a href="https://github.com/martincalander/GitSubmoduleManager/actions/workflows/ci.yml"><img alt="Sanity Checks" src="https://github.com/martincalander/GitSubmoduleManager/actions/workflows/ci.yml/badge.svg"></a>
-  <a href="https://github.com/martincalander/GitSubmoduleManager/releases"><img alt="Package version" src="https://img.shields.io/github/package-json/v/martincalander/GitSubmoduleManager?filename=package.json&label=package"></a>
+  <a href="https://github.com/martincalander/GitSubmoduleForUnity/actions/workflows/ci.yml"><img alt="Sanity Checks" src="https://github.com/martincalander/GitSubmoduleForUnity/actions/workflows/ci.yml/badge.svg"></a>
+  <a href="https://github.com/martincalander/GitSubmoduleForUnity/releases"><img alt="Package version" src="https://img.shields.io/github/package-json/v/martincalander/GitSubmoduleForUnity?filename=package.json&label=package"></a>
   <img alt="Validated Unity targets: 6000.3.22f1 and 6000.5.*f1" src="https://img.shields.io/badge/Unity-6000.3.22f1%20%7C%206000.5.%2Af1-222C37?logo=unity&logoColor=white">
   <img alt="Editor only" src="https://img.shields.io/badge/scope-Editor%20only-555">
   <a href="LICENSE.md"><img alt="MIT License" src="https://img.shields.io/badge/license-MIT-blue"></a>
@@ -58,7 +58,7 @@ In **Window > Package Management > Package Manager**, choose **+ > Install
 package from git URL...** and enter:
 
 ```text
-https://github.com/martincalander/GitSubmoduleManager.git
+https://github.com/martincalander/GitSubmoduleForUnity.git
 ```
 
 This URL follows `main`. To pin a published release instead, append its tag to
@@ -94,7 +94,7 @@ subdirectory cannot be converted to submodules.
   uncertain is left in place with recovery instructions.
 
 See the [architecture and safety model](Documentation~/architecture.md) and
-[security policy](https://github.com/martincalander/GitSubmoduleManager/blob/main/.github/SECURITY.md)
+[security policy](https://github.com/martincalander/GitSubmoduleForUnity/blob/main/.github/SECURITY.md)
 for implementation details and recovery behavior.
 
 ## Documentation
@@ -104,8 +104,8 @@ for implementation details and recovery behavior.
 - [Troubleshooting](Documentation~/troubleshooting.md)
 - [Architecture and safety model](Documentation~/architecture.md)
 - [Changelog](CHANGELOG.md)
-- [Contributing](https://github.com/martincalander/GitSubmoduleManager/blob/main/.github/CONTRIBUTING.md)
-- [Support](https://github.com/martincalander/GitSubmoduleManager/blob/main/.github/SUPPORT.md)
+- [Contributing](https://github.com/martincalander/GitSubmoduleForUnity/blob/main/.github/CONTRIBUTING.md)
+- [Support](https://github.com/martincalander/GitSubmoduleForUnity/blob/main/.github/SUPPORT.md)
 
 ## License
 

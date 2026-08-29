@@ -64,10 +64,13 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         {
             base.OnActivate(searchContext, rootElement);
             EnsureSetupProbe();
+            EditorApplication.update -= RefreshSetupProbeIfExpired;
+            EditorApplication.update += RefreshSetupProbeIfExpired;
         }
 
         public override void OnDeactivate()
         {
+            EditorApplication.update -= RefreshSetupProbeIfExpired;
             if (setupProbe != null)
                 setupProbe.Changed -= OnSetupProbeChanged;
             setupProbe = null;
@@ -180,12 +183,17 @@ namespace MartinCalander.GitSubmoduleManager.Editor
 
         private void EnsureSetupProbe()
         {
-            if (setupProbe != null)
-                return;
-
-            setupProbe = GitSubmoduleManagerSetupProbe.Shared;
-            setupProbe.Changed += OnSetupProbeChanged;
+            if (setupProbe == null)
+            {
+                setupProbe = GitSubmoduleManagerSetupProbe.Shared;
+                setupProbe.Changed += OnSetupProbeChanged;
+            }
             setupProbe.EnsureStarted();
+        }
+
+        private void RefreshSetupProbeIfExpired()
+        {
+            setupProbe?.EnsureStarted();
         }
 
         private void OnSetupProbeChanged()

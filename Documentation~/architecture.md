@@ -19,6 +19,7 @@ Editor/
 │                               reflected native Sources/GitHub registration
 ├── PackageManagerGitHubDiscovery.cs
 │                               lazy authenticated package catalogue
+├── ReloadSessionCaches.cs     bounded reload presentation caches
 ├── PackageManagerGitHubPackageProjection.cs
 │                               transient native package-list projection
 ├── PackageManagerGitHubDetails.cs
@@ -224,7 +225,11 @@ The runner never interprets repository input through Bash, PowerShell, Command
 Prompt, or another shell. The standalone Welcome window performs Git and GitHub
 CLI probes on a worker thread, links to official install guidance, and exposes a
 fixed copyable authentication command. Authentication remains owned by GitHub
-CLI; the extension never accepts a token.
+CLI; the extension never accepts a token. A healthy terminal result is kept in
+Unity's session state for the remainder of the same 30-second window used by the
+in-memory probe. The entry is bound to the project and Unity version, contains
+only sanitized version strings and positive status flags, and is cleared by a
+manual check, invalid data, an unhealthy result, or Editor shutdown.
 
 ## Mutation Boundary
 
@@ -379,7 +384,24 @@ projected records through Package Manager's native controls. Discovery retains
 the last successful catalogue while a replacement refresh loads and for up to
 15 minutes across quick Package Manager host switches. It retains only the
 current scan generation, so stale owner, page, or refresh results cannot replace
-newer catalogue state. Branch listing remains lazy.
+newer catalogue state. Closing a host never extends an existing retention
+deadline or revives an expired catalogue. The stable numeric account ID and
+login are resolved before any account-scoped repository request starts, then
+read again before the scan becomes terminal. A changed or unverifiable account
+discards the result instead of caching it or treating it as complete.
+
+A non-empty completed catalogue is also kept in Unity's session state for the
+remainder of that same 15-minute window, making script reloads less disruptive.
+The cache is bounded, versioned, strict-JSON data tied to the project, Unity version,
+`github.com`, and the authenticated account's stable numeric ID and login. It is
+accepted only after a fresh GitHub account lookup matches both values. Restored
+entries are presentation-only: Package Manager continues to show a loading
+state while a live scan runs, their **Install** actions stay disabled, and no
+mutation may use them as repository authority. Installation becomes available
+only when the exact row is present in the current live discovery snapshot.
+Dependency resolution also cannot use cached entries as proof that a package is
+absent. Partial, failed, malformed, expired, or mismatched entries are discarded
+rather than repaired or renewed. Branch listing remains lazy.
 
 ## Threading and Reload Handoff
 

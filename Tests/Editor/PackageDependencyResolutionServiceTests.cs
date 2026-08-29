@@ -615,6 +615,31 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
         }
 
         [Test]
+        public void RetainedCatalogue_NeverProvesSuccessfulTerminalDiscovery()
+        {
+            PackageManagerGitHubDiscoverySnapshot live = TerminalSnapshot(
+                Array.Empty<PackageManagerGitHubRepository>(),
+                string.Empty,
+                completedOwners: 1,
+                totalOwners: 1);
+            PackageManagerGitHubDiscoverySnapshot retained = TerminalSnapshot(
+                Array.Empty<PackageManagerGitHubRepository>(),
+                string.Empty,
+                completedOwners: 1,
+                totalOwners: 1,
+                isShowingRetainedRepositories: true);
+
+            Assert.That(
+                PackageDependencyResolutionService
+                    .IsSuccessfulTerminalDiscovery(live),
+                Is.True);
+            Assert.That(
+                PackageDependencyResolutionService
+                    .IsSuccessfulTerminalDiscovery(retained),
+                Is.False);
+        }
+
+        [Test]
         public void UnavailableGitHubManifest_PreventsAbsenceProofAndRegistryFallback()
         {
             const string packageName = "com.example.coverage-gap";
@@ -1239,7 +1264,8 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
             int totalOwners,
             int unavailableManifestCount = 0,
             string coverageWarning = "",
-            long revision = 2)
+            long revision = 2,
+            bool isShowingRetainedRepositories = false)
         {
             return new PackageManagerGitHubDiscoverySnapshot(
                 repositories,
@@ -1253,7 +1279,8 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                 totalOwners,
                 unavailableManifestCount,
                 revision,
-                coverageWarning);
+                coverageWarning,
+                isShowingRetainedRepositories);
         }
 
         private static PackageDependencyRegistryPackage RegistryPackage(

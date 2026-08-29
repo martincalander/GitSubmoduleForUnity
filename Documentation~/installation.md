@@ -86,7 +86,7 @@ Open **Window > Package Management > Package Manager**, choose **+ > Install
 package from git URL...**, and enter:
 
 ```text
-https://github.com/martincalander/GitSubmoduleManager.git
+https://github.com/martincalander/GitSubmoduleForUnity.git
 ```
 
 The unqualified URL follows `main`. To pin a published release instead, append
@@ -150,7 +150,7 @@ changing only the revision is not sufficient:
 ```json
 {
   "dependencies": {
-    "com.martincalander.gitsubmodulemanager": "https://github.com/martincalander/GitSubmoduleManager.git"
+    "com.martincalander.gitsubmodulemanager": "https://github.com/martincalander/GitSubmoduleForUnity.git"
   }
 }
 ```

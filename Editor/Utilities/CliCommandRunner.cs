@@ -365,28 +365,63 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             bool isGitHubAuthenticationCommand = false,
             bool requireStrictUtf8StdOut = false)
         {
-            if (!TryBeginGitHubCommand(
+            if (!TryRunAsync(
                     fileName,
+                    arguments,
+                    workingDir,
+                    out AsyncCommandHandle handle,
+                    timeoutMs,
+                    terminationScope,
                     isGitHubAuthenticationCommand,
-                    out bool tracksGitHubCommand))
+                    requireStrictUtf8StdOut))
             {
                 throw new InvalidOperationException(
                     "GitHub CLI discovery is blocked while authentication owns the process gate.");
             }
 
-            var handle = new AsyncCommandHandle(CurrentRunner, new CommandSpec
+            return handle;
+        }
+
+        /// <summary>
+        /// Atomically attempts to start a tokenized command. A false result means
+        /// the shared GitHub gate denied the start; process/thread start failures
+        /// still throw so callers cannot mistake them for routine contention.
+        /// </summary>
+        internal static bool TryRunAsync(
+            string fileName,
+            IReadOnlyList<string> arguments,
+            string workingDir,
+            out AsyncCommandHandle handle,
+            int timeoutMs = DefaultTimeoutMs,
+            CommandTerminationScope terminationScope = CommandTerminationScope.CompleteProcessTree,
+            bool isGitHubAuthenticationCommand = false,
+            bool requireStrictUtf8StdOut = false)
+        {
+            handle = null;
+            if (!TryBeginGitHubCommand(
+                    fileName,
+                    isGitHubAuthenticationCommand,
+                    out bool tracksGitHubCommand))
             {
-                FileName = fileName,
-                ArgumentList = arguments,
-                WorkingDirectory = workingDir,
-                TimeoutMs = timeoutMs,
-                TerminationScope = terminationScope,
-                RequireStrictUtf8StdOut = requireStrictUtf8StdOut
-            }, tracksGitHubCommand ? (Action<AsyncCommandHandle>)CompleteGitHubCommand : null);
+                return false;
+            }
+
             try
             {
-                handle.Start();
-                return handle;
+                var startedHandle = new AsyncCommandHandle(CurrentRunner, new CommandSpec
+                {
+                    FileName = fileName,
+                    ArgumentList = arguments,
+                    WorkingDirectory = workingDir,
+                    TimeoutMs = timeoutMs,
+                    TerminationScope = terminationScope,
+                    RequireStrictUtf8StdOut = requireStrictUtf8StdOut
+                }, tracksGitHubCommand
+                    ? (Action<AsyncCommandHandle>)CompleteGitHubCommand
+                    : null);
+                startedHandle.Start();
+                handle = startedHandle;
+                return true;
             }
             catch
             {

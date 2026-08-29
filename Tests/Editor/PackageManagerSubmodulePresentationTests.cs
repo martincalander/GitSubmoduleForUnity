@@ -2163,6 +2163,13 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
             Assert.That(
                 PackageManagerSubmoduleNativePage
                     .ShouldPreserveOrganizationFilterState(
+                        CreateCatalogueSnapshot(
+                            isShowingRetainedRepositories: true)),
+                Is.True,
+                "Reload presentation data cannot prove an organization is stale.");
+            Assert.That(
+                PackageManagerSubmoduleNativePage
+                    .ShouldPreserveOrganizationFilterState(
                         CreateCatalogueSnapshot()),
                 Is.False,
                 "Only a successful complete catalogue may prune stale organizations.");
@@ -2540,7 +2547,8 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
             int completedOwners = 1,
             int totalOwners = 1,
             int unavailableManifestCount = 0,
-            string coverageWarningMessage = "")
+            string coverageWarningMessage = "",
+            bool isShowingRetainedRepositories = false)
         {
             return new PackageManagerGitHubDiscoverySnapshot(
                 Array.Empty<PackageManagerGitHubRepository>(),
@@ -2552,7 +2560,8 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                 totalOwners,
                 unavailableManifestCount,
                 1,
-                coverageWarningMessage);
+                coverageWarningMessage,
+                isShowingRetainedRepositories);
         }
     }
 }

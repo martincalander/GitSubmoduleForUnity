@@ -457,6 +457,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         {
             return snapshot != null &&
                    !snapshot.IsLoading &&
+                   !snapshot.IsShowingRetainedRepositories &&
                    string.IsNullOrWhiteSpace(snapshot.ErrorMessage) &&
                    string.IsNullOrWhiteSpace(snapshot.CoverageWarningMessage) &&
                    snapshot.UnavailableManifestCount == 0 &&

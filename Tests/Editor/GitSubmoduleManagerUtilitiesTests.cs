@@ -1216,6 +1216,61 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
         }
 
         [Test]
+        public void GitHubAccountIdentity_ParsesCanonicalStableIdAndLogin()
+        {
+            Assert.That(
+                GitHubUtility.TryParseAccountIdentity(
+                    "123456789\tmartincalander\n",
+                    out string accountId,
+                    out string accountLogin),
+                Is.True);
+            Assert.That(accountId, Is.EqualTo("123456789"));
+            Assert.That(accountLogin, Is.EqualTo("martincalander"));
+        }
+
+        [TestCase("")]
+        [TestCase("0\towner")]
+        [TestCase("001\towner")]
+        [TestCase("not-a-number\towner")]
+        [TestCase("1\t-owner")]
+        [TestCase("1\towner-")]
+        [TestCase("1\towner_name")]
+        [TestCase("1\towner\textra")]
+        [TestCase("1\towner\n2\tother")]
+        public void GitHubAccountIdentity_RejectsMalformedOrAmbiguousOutput(
+            string output)
+        {
+            Assert.That(
+                GitHubUtility.TryParseAccountIdentity(
+                    output,
+                    out _,
+                    out _),
+                Is.False);
+        }
+
+        [Test]
+        public void GitHubAccountIdentity_RequiresCompleteStrictCommandOutput()
+        {
+            CommandResult clean = Success("123456789\tmartincalander\n");
+            Assert.That(
+                GitHubUtility.TryReadCompleteAccountIdentity(
+                    clean,
+                    out string accountId,
+                    out string accountLogin),
+                Is.True);
+            Assert.That(accountId, Is.EqualTo("123456789"));
+            Assert.That(accountLogin, Is.EqualTo("martincalander"));
+
+            clean.StdOutInvalidUtf8 = true;
+            Assert.That(
+                GitHubUtility.TryReadCompleteAccountIdentity(
+                    clean,
+                    out _,
+                    out _),
+                Is.False);
+        }
+
+        [Test]
         public void ParseRepoJson_PrefersCloneUrlOverApiUrl()
         {
             const string json = "[{\"name\":\"repo\",\"owner\":{\"login\":\"owner\"}," +
@@ -1463,12 +1518,14 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
         {
             var runner = new FakeCommandRunner(spec =>
             {
-                if (spec.FileName == "gh" && spec.Arguments.Contains("api user --jq"))
+                string arguments = spec.Arguments ??
+                                   string.Join(" ", spec.ArgumentList ?? Array.Empty<string>());
+                if (spec.FileName == "gh" && arguments.Contains("api user --jq"))
                 {
-                    return Success("EssentialsForUnity");
+                    return Success("2001\tEssentialsForUnity");
                 }
 
-                if (spec.FileName == "gh" && spec.Arguments.Contains("user/repos"))
+                if (spec.FileName == "gh" && arguments.Contains("user/repos"))
                 {
                     return Success(BuildRepoJson(1, 5));
                 }
@@ -1537,9 +1594,11 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
         {
             var runner = new FakeCommandRunner(spec =>
             {
-                if (spec.Arguments.Contains("api user --jq"))
-                    return Success("signed-in-user");
-                if (spec.Arguments.Contains("user/orgs"))
+                string arguments = spec.Arguments ??
+                                   string.Join(" ", spec.ArgumentList ?? Array.Empty<string>());
+                if (arguments.Contains("api user --jq"))
+                    return Success("2002\tsigned-in-user");
+                if (arguments.Contains("user/orgs"))
                     return Success("example-org");
                 return Fail(spec, "Unexpected");
             });
@@ -1556,12 +1615,14 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
             }
 
             Assert.That(coordinator.Username, Is.EqualTo("signed-in-user"));
+            Assert.That(coordinator.AccountId, Is.EqualTo("2002"));
             Assert.That(coordinator.SelectedOwner, Is.EqualTo("signed-in-user"));
             Assert.That(coordinator.Organizations, Does.Contain("example-org"));
 
             coordinator.Dispose();
 
             Assert.That(coordinator.Username, Is.Empty);
+            Assert.That(coordinator.AccountId, Is.Empty);
             Assert.That(coordinator.SelectedOwner, Is.Empty);
             Assert.That(coordinator.Organizations, Is.Empty);
             Assert.That(coordinator.OrgsLoaded, Is.False);

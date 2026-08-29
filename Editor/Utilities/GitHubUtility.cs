@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.IO;
 using System.Runtime.InteropServices;
 using System.Text.RegularExpressions;
@@ -192,6 +193,127 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 "--jq",
                 ".login"
             };
+        }
+
+        internal static IReadOnlyList<string> BuildAccountIdentityArguments()
+        {
+            return new[]
+            {
+                "api",
+                "user",
+                "--jq",
+                "[(.id | tostring), .login] | @tsv",
+                "--hostname",
+                GitHubHost
+            };
+        }
+
+        internal static bool TryParseAccountIdentity(
+            string output,
+            out string accountId,
+            out string accountLogin)
+        {
+            accountId = string.Empty;
+            accountLogin = string.Empty;
+            if (string.IsNullOrEmpty(output))
+                return false;
+
+            string line = output.TrimEnd('\r', '\n');
+            if (line.Length == 0 ||
+                line.IndexOfAny(new[] { '\r', '\n' }) >= 0)
+            {
+                return false;
+            }
+
+            string[] fields = line.Split('\t');
+            return fields.Length == 2 &&
+                   TryNormalizeAccountIdentity(
+                       fields[0],
+                       fields[1],
+                       out accountId,
+                       out accountLogin);
+        }
+
+        internal static bool TryReadCompleteAccountIdentity(
+            CommandResult result,
+            out string accountId,
+            out string accountLogin)
+        {
+            accountId = string.Empty;
+            accountLogin = string.Empty;
+            return result != null &&
+                   result.IsSuccess &&
+                   !result.TimedOut &&
+                   !result.Cancelled &&
+                   result.TerminationConfirmed &&
+                   !result.BlockedByGitHubAuthentication &&
+                   !result.StdOutTruncated &&
+                   !result.StdErrTruncated &&
+                   !result.StdOutInvalidUtf8 &&
+                   string.IsNullOrWhiteSpace(result.CompletionWarning) &&
+                   TryParseAccountIdentity(
+                       result.StdOut,
+                       out accountId,
+                       out accountLogin);
+        }
+
+        internal static bool TryNormalizeAccountIdentity(
+            string accountId,
+            string accountLogin,
+            out string normalizedAccountId,
+            out string normalizedAccountLogin)
+        {
+            normalizedAccountId = string.Empty;
+            normalizedAccountLogin = string.Empty;
+            string id = accountId ?? string.Empty;
+            string login = accountLogin ?? string.Empty;
+            if (!ulong.TryParse(
+                    id,
+                    NumberStyles.None,
+                    CultureInfo.InvariantCulture,
+                    out ulong numericId) ||
+                numericId == 0UL)
+            {
+                return false;
+            }
+
+            string canonicalId = numericId.ToString(CultureInfo.InvariantCulture);
+            if (!string.Equals(id, canonicalId, StringComparison.Ordinal) ||
+                !TryNormalizeAccountLogin(login, out normalizedAccountLogin))
+            {
+                return false;
+            }
+
+            normalizedAccountId = canonicalId;
+            return true;
+        }
+
+        internal static bool TryNormalizeAccountLogin(
+            string accountLogin,
+            out string normalizedAccountLogin)
+        {
+            normalizedAccountLogin = string.Empty;
+            string login = accountLogin ?? string.Empty;
+            if (login.Length == 0 ||
+                login.Length > 39 ||
+                login[0] == '-' ||
+                login[login.Length - 1] == '-')
+            {
+                return false;
+            }
+
+            foreach (char character in login)
+            {
+                bool valid = character >= 'a' && character <= 'z' ||
+                             character >= 'A' && character <= 'Z' ||
+                             character >= '0' && character <= '9' ||
+                             character == '-';
+                if (!valid)
+                    return false;
+            }
+
+            normalizedAccountLogin = login;
+            return true;
         }
 
         internal static bool SupportsClipboardAuthentication(string versionOutput)

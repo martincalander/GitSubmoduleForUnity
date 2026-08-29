@@ -119,6 +119,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         }
 
         private string cachedUsername = string.Empty;
+        private string cachedAccountId = string.Empty;
         private AsyncCommandHandle usernameHandle;
         private AsyncCommandHandle orgsHandle;
         private bool usernameRequested;
@@ -169,6 +170,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         }
 
         internal string Username => cachedUsername;
+        internal string AccountId => cachedAccountId;
         internal string SelectedOwner => selectedOwner;
         internal List<string> Organizations { get; private set; } = new();
         internal bool OrgsLoaded { get; private set; }
@@ -194,16 +196,40 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             TryStartUsernameRequest();
         }
 
+        internal bool TryUseVerifiedAccountIdentity(
+            string accountId,
+            string accountLogin)
+        {
+            if (!GitHubUtility.TryNormalizeAccountIdentity(
+                    accountId,
+                    accountLogin,
+                    out string normalizedAccountId,
+                    out string normalizedAccountLogin))
+            {
+                return false;
+            }
+
+            cachedAccountId = normalizedAccountId;
+            cachedUsername = normalizedAccountLogin;
+            selectedOwner = normalizedAccountLogin;
+            usernameRequested = false;
+            if (!OrgsLoaded)
+                organizationsRequested = true;
+            return true;
+        }
+
         private bool TryStartUsernameRequest()
         {
             if (!usernameRequested || usernameHandle != null || !CanStartGitHubCommandNow)
                 return false;
 
-            usernameRequested = false;
-            usernameHandle = CliCommandRunner.RunAsync(
+            AsyncCommandHandle handle = CliCommandRunner.RunAsync(
                 "gh",
-                GitHubUtility.BuildApiArguments("user --jq .login"),
-                GitUtility.ProjectRoot);
+                GitHubUtility.BuildAccountIdentityArguments(),
+                GitUtility.ProjectRoot,
+                requireStrictUtf8StdOut: true);
+            usernameHandle = handle;
+            usernameRequested = false;
             return true;
         }
 
@@ -216,11 +242,12 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 return false;
             }
 
-            organizationsRequested = false;
-            orgsHandle = CliCommandRunner.RunAsync(
+            AsyncCommandHandle handle = CliCommandRunner.RunAsync(
                 "gh",
                 GitHubUtility.BuildApiArguments("user/orgs --paginate --jq \".[].login\""),
                 GitUtility.ProjectRoot);
+            orgsHandle = handle;
+            organizationsRequested = false;
             return true;
         }
 
@@ -276,16 +303,13 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             if (usernameHandle != null && usernameHandle.IsComplete)
             {
                 CommandResult usernameResult = usernameHandle.Result;
-                bool usernameResolved = usernameResult != null &&
-                                        usernameResult.IsSuccess &&
-                                        !usernameResult.StdOutTruncated;
-                if (usernameResolved)
-                {
-                    cachedUsername = (usernameResult.StdOut ?? string.Empty).Trim();
-                    usernameResolved = !string.IsNullOrEmpty(cachedUsername);
-                    if (string.IsNullOrEmpty(selectedOwner))
-                        selectedOwner = cachedUsername;
-                }
+                bool usernameResolved =
+                    GitHubUtility.TryReadCompleteAccountIdentity(
+                        usernameResult,
+                        out cachedAccountId,
+                        out cachedUsername);
+                if (usernameResolved && string.IsNullOrEmpty(selectedOwner))
+                    selectedOwner = cachedUsername;
 
                 usernameHandle = null;
 
@@ -1592,6 +1616,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             packageManifestCache.Clear();
 
             DisplayedRepos = new List<GitHubRepo>();
+            cachedAccountId = string.Empty;
             cachedUsername = string.Empty;
             selectedOwner = string.Empty;
             Organizations = new List<string>();

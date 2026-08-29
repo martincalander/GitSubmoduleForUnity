@@ -81,7 +81,8 @@ namespace MartinCalander.GitSubmoduleManager.Editor
     internal sealed class GitSubmoduleManagerSetupProbe : IDisposable
     {
         internal const double CacheLifetimeSeconds = 30d;
-        internal static GitSubmoduleManagerSetupProbe Shared { get; } = new();
+        internal static GitSubmoduleManagerSetupProbe Shared { get; } = new(
+            GitSubmoduleManagerSetupSessionCache.CreateDefault());
 
         private sealed class SetupProbeResult
         {
@@ -101,6 +102,9 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         private CancellationTokenSource cancellationSource;
         private Thread probeThread;
         private volatile SetupProbeResult pendingResult;
+        private readonly GitSubmoduleManagerSetupSessionCache sessionCache;
+        private readonly Func<double> currentTimeProvider;
+        private readonly Action<CancellationToken> probeStartOverride;
         private int generation;
         private bool hasStarted;
         private bool updateSubscribed;
@@ -110,7 +114,28 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         static GitSubmoduleManagerSetupProbe()
         {
             AssemblyReloadEvents.beforeAssemblyReload += DisposeShared;
-            EditorApplication.quitting += DisposeShared;
+            EditorApplication.quitting += DisposeSharedAndClearCache;
+        }
+
+        internal GitSubmoduleManagerSetupProbe(
+            GitSubmoduleManagerSetupSessionCache sessionCache,
+            Func<double> currentTimeProvider = null,
+            Action<CancellationToken> probeStartOverride = null)
+        {
+            this.sessionCache = sessionCache;
+            this.currentTimeProvider = currentTimeProvider ??
+                (() => EditorApplication.timeSinceStartup);
+            this.probeStartOverride = probeStartOverride;
+            if (sessionCache != null &&
+                sessionCache.TryLoad(
+                    CurrentTime,
+                    out GitSubmoduleManagerSetupSnapshot cached,
+                    out double completedAt))
+            {
+                Current = cached;
+                lastCompletedTime = completedAt;
+                hasStarted = true;
+            }
         }
 
         internal event Action Changed;
@@ -121,7 +146,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         internal void EnsureStarted()
         {
             double elapsedSinceCompletion =
-                EditorApplication.timeSinceStartup - lastCompletedTime;
+                CurrentTime - lastCompletedTime;
             if (ShouldRefresh(
                     hasStarted,
                     Current.IsChecking,
@@ -146,6 +171,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             if (disposed)
                 throw new ObjectDisposedException(nameof(GitSubmoduleManagerSetupProbe));
 
+            sessionCache?.Clear();
             CancellationTokenSource retiringCancellationSource =
                 cancellationSource;
             Thread retiringThread = probeThread;
@@ -160,11 +186,28 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             pendingResult = null;
             Current = Current.WithChecking(true);
             SubscribeToEditorUpdate();
-            Changed?.Invoke();
+            InvokeChanged();
 
             // Cache Unity-owned path state on the main thread before the worker
             // enters any Git helpers.
             _ = GitUtility.ProjectRoot;
+            if (probeStartOverride != null)
+            {
+                try
+                {
+                    probeStartOverride(nextCancellationSource.Token);
+                }
+                catch (Exception exception)
+                {
+                    CompleteProbeStartFailure(
+                        nextCancellationSource,
+                        null,
+                        exception);
+                }
+
+                return;
+            }
+
             var thread = new Thread(
                 () => Run(nextGeneration, nextCancellationSource.Token))
             {
@@ -178,23 +221,10 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             }
             catch (Exception exception)
             {
-                probeThread = null;
-                cancellationSource = null;
-                RetireProbe(nextCancellationSource, thread, cancel: false);
-                Current = new GitSubmoduleManagerSetupSnapshot(
-                    false,
-                    false,
-                    string.Empty,
-                    GitHubUtility.SanitizeUiDiagnostic(exception.Message),
-                    false,
-                    string.Empty,
-                    string.Empty,
-                    GitHubAuthenticationProbeStatus.Unknown,
-                    string.Empty,
-                    false);
-                lastCompletedTime = EditorApplication.timeSinceStartup;
-                UnsubscribeFromEditorUpdate();
-                Changed?.Invoke();
+                CompleteProbeStartFailure(
+                    nextCancellationSource,
+                    thread,
+                    exception);
             }
         }
 
@@ -228,8 +258,36 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 result.GitHubAuthenticationStatus,
                 result.GitHubAuthenticationError,
                 result.GitHubProbeDeferred);
-            lastCompletedTime = EditorApplication.timeSinceStartup;
+            lastCompletedTime = CurrentTime;
+            sessionCache?.Save(Current, lastCompletedTime);
             return true;
+        }
+
+        private double CurrentTime => currentTimeProvider();
+
+        private void CompleteProbeStartFailure(
+            CancellationTokenSource source,
+            Thread thread,
+            Exception exception)
+        {
+            probeThread = null;
+            cancellationSource = null;
+            RetireProbe(source, thread, cancel: false);
+            Current = new GitSubmoduleManagerSetupSnapshot(
+                false,
+                false,
+                string.Empty,
+                GitHubUtility.SanitizeUiDiagnostic(exception.Message),
+                false,
+                string.Empty,
+                string.Empty,
+                GitHubAuthenticationProbeStatus.Unknown,
+                string.Empty,
+                false);
+            lastCompletedTime = CurrentTime;
+            sessionCache?.Save(Current, lastCompletedTime);
+            UnsubscribeFromEditorUpdate();
+            InvokeChanged();
         }
 
         public void Dispose()
@@ -255,6 +313,12 @@ namespace MartinCalander.GitSubmoduleManager.Editor
 
         private static void DisposeShared()
         {
+            Shared.Dispose();
+        }
+
+        private static void DisposeSharedAndClearCache()
+        {
+            Shared.sessionCache?.Clear();
             Shared.Dispose();
         }
 
@@ -302,11 +366,40 @@ namespace MartinCalander.GitSubmoduleManager.Editor
 
         private void Pump()
         {
-            if (!TryConsumePendingResult())
+            if (TryConsumePendingResult())
+            {
+                UnsubscribeFromEditorUpdate();
+                InvokeChanged();
+                return;
+            }
+
+            if (!Current.IsChecking &&
+                ShouldRefresh(
+                    hasStarted,
+                    false,
+                    CurrentTime - lastCompletedTime))
+            {
+                Start();
+            }
+        }
+
+        private void InvokeChanged()
+        {
+            Delegate[] subscribers = Changed?.GetInvocationList();
+            if (subscribers == null)
                 return;
 
-            UnsubscribeFromEditorUpdate();
-            Changed?.Invoke();
+            foreach (Delegate subscriber in subscribers)
+            {
+                try
+                {
+                    ((Action)subscriber).Invoke();
+                }
+                catch
+                {
+                    // A presentation callback must not interrupt probe lifecycle.
+                }
+            }
         }
 
         private void Run(int resultGeneration, CancellationToken cancellationToken)
@@ -535,7 +628,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
     internal sealed class GitSubmoduleManagerWelcomeWindow : EditorWindow
     {
         private const string DocumentationUrl =
-            "https://github.com/martincalander/GitSubmoduleManager#usage";
+            "https://github.com/martincalander/GitSubmoduleForUnity#quick-start";
         private const string ShownThisSessionKey =
             "MartinCalander.GitSubmoduleManager.WelcomeShownThisSession";
 
@@ -603,6 +696,11 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             if (setupProbe != null)
                 setupProbe.Changed -= OnSetupProbeChanged;
             setupProbe = null;
+        }
+
+        private void Update()
+        {
+            setupProbe?.EnsureStarted();
         }
 
         private void OnSetupProbeChanged()
