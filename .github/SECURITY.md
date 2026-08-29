@@ -2,14 +2,14 @@
 
 ## Supported Versions
 
-Security fixes are applied to the latest 2.x release and the current `main`
+Security fixes are applied to the latest 0.8.x release and the current `main`
 branch.
 
 | Version or ref | Supported |
 | --- | --- |
-| 2.x | Yes |
+| 0.8.x | Yes |
 | `main` | Yes |
-| 1.x and earlier | No |
+| 0.7.x and earlier | No |
 
 ## Report a Vulnerability
 

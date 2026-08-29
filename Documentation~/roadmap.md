@@ -5,7 +5,7 @@ compatibility, and a native Unity Editor experience over feature count.
 
 ## Current Priorities
 
-- maintain the 2.0 editor workflow on exact Unity `6000.3.22f1` and across
+- maintain the current editor workflow on exact Unity `6000.3.22f1` and across
   Unity `6000.5.*f1` final patch releases;
 - expand Windows, macOS, and Linux CI coverage where Unity licensing permits;
 - improve update-state visibility without performing implicit network work;

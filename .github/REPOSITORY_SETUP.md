@@ -50,6 +50,11 @@ Protect release tags with a `v*` tag ruleset:
   full-length commit SHA pinning where the repository setting is available.
 - [ ] Allow the **Publish Release** workflow to write repository contents only
   for its release job.
+- [ ] Protect the `release` environment with required review and a `v*` tag-only
+  deployment rule.
+- [ ] Add `UPM_SERVICE_ACCOUNT_KEY_ID` and
+  `UPM_SERVICE_ACCOUNT_KEY_SECRET` as `release` environment secrets, and add
+  `UPM_ORG_ID` as a `release` environment variable.
 - [ ] Enable immutable releases before publishing the first release.
 - [ ] Enable GitHub private vulnerability reporting and keep the security email
   in `.github/SECURITY.md` monitored as a fallback.
@@ -66,9 +71,13 @@ Protect release tags with a `v*` tag ruleset:
 3. Update `package.json` and `CHANGELOG.md`.
 4. Merge through a green pull request.
 5. Create and push an annotated `v<package-version>` tag.
-6. Confirm **Publish Release** creates the GitHub release, UPM `.tgz`, and
-   `SHA256SUMS` asset.
-7. Test the released tag from a clean Unity project.
+6. Confirm **Publish Release** creates the GitHub release, signed UPM `.tgz`,
+   and `SHA256SUMS` asset.
+7. Confirm the archive contains `package/.attestation.p7m`.
+8. Register the first signed release with OpenUPM using
+   `trackingMode: githubRelease`, then set the repository Actions variable
+   `OPENUPM_ENABLED=true` for later releases.
+9. Test the released tag from a clean Unity project.
 
 ## Visibility
 

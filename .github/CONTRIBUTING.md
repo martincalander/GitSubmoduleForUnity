@@ -135,15 +135,9 @@ the `PackageManagerCompatibility` category. After it passes, run the complete
 state-transition coverage intentionally lives outside the compatibility subset.
 
 CI runs license-free structure, Markdown, archive, and portability checks on
-every pull request without exposing Unity credentials to pull-request code.
-After reviewing a contribution, a maintainer can dispatch **Sanity Checks**
-from protected `main` with the full commit SHA and an exact `unity_version` of
-`6000.3.22f1` or `6000.5.0f1`. Those CI choices use reviewed, digest-pinned
-GameCI images; additional `6000.5.*f1` final patches can be checked locally
-before their image digest is added. The job stages that exact package revision
-and runs the full EditMode assembly. Protected push runs remain pinned to the
-minimum `6000.3.22f1` eligibility baseline. Unity 6000.4 is not a validated
-target.
+every pull request and push to `main`. Hosted workflows do not launch the Unity
+Editor or run EditMode tests; contributors and maintainers run the applicable
+Unity checks locally and report any skipped platform or Unity version.
 
 Branch protection requires the workflow's stable **Required sanity gate**,
 which aggregates package validation and the complete Linux, macOS, and Windows

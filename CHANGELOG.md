@@ -7,38 +7,10 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-### Added
+## [0.8.0] - 2026-08-29
 
-- Added scalable package artwork that presents the Git logomark emerging from
-  an open package box and now serves as the README logo.
-- Added a README showcase for Cave Expedition and Big Boy Boxing using linked
-  Steam capsule cards, with an email contact for game submissions.
-
-### Changed
-
-- Repository links now use the `GitSubmoduleForUnity` GitHub repository name.
-- Successful GitHub catalogues and healthy setup checks now survive script
-  reloads for the time remaining in their existing short-lived cache windows.
-  Cached catalogue entries appear only after the current GitHub account is
-  verified again, and live discovery continues in the background.
-
-### Fixed
-
-- Closing and reopening Package Manager no longer renews or revives an expired
-  retained GitHub catalogue.
-- A catalogue is now discarded if the authenticated GitHub account changes, or
-  cannot be verified again, between the start and end of discovery.
-- Account-scoped GitHub repository reads now wait until the account's stable ID
-  and login have been resolved, closing a race with concurrent account changes.
-- Reload-cached and retained catalogue rows now keep **Install** disabled until
-  the exact repository is present in the current live discovery snapshot.
-- GitHub discovery now keeps valid Unity packages from a GraphQL batch when
-  unrelated repositories simply lack `package.json` or `package.json.meta`.
-  Partial responses are accepted only when every reported error exactly matches
-  one of those missing root files; all other command and response failures still
-  fail closed.
-
-## [2.0.0] - 2026-08-29
+This is the first tagged public release. Earlier package versions were
+unpublished development snapshots; the public version line begins at 0.8.0.
 
 ### Security
 
@@ -72,14 +44,21 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   concurrently replaced files are preserved.
 - Manifest edits and reload journals use identity-checked replacement and
   quarantine paths, so a late writer's bytes are recoverable rather than
-  deleted. Pull-request code cannot access Unity credentials, and releases
-  publish the same archive bytes tested in Unity.
+  deleted. Release publication signs only the isolated validation job's exact
+  package payload, then publishes the resulting signed archive and checksum.
 
 The exact Git proof sequences and recovery boundaries are documented in the
 [architecture and safety model](Documentation~/architecture.md).
 
 ### Added
 
+- Added release-only package signing with Unity's pinned standalone UPM CLI and
+  an opt-in, OIDC-authenticated OpenUPM publication check for registered
+  packages.
+- Added scalable package artwork that presents the Git logomark emerging from
+  an open package box and now serves as the README logo.
+- Added a README showcase for Cave Expedition and Big Boy Boxing using linked
+  Steam capsule cards, with an email contact for game submissions.
 - Preferences and Welcome now share one asynchronous setup probe. Both surfaces
   show explicit checkmarks and detected versions for Git and GitHub CLI,
   GitHub authentication status, refresh controls, and safe official
@@ -151,6 +130,14 @@ The exact Git proof sequences and recovery boundaries are documented in the
 
 ### Changed
 
+- Hosted CI and release workflows no longer launch the Unity Editor or run
+  EditMode tests. Repository, archive, and cross-platform portability checks
+  remain automated.
+- Repository links now use the `GitSubmoduleForUnity` GitHub repository name.
+- Successful GitHub catalogues and healthy setup checks now survive script
+  reloads for the time remaining in their existing short-lived cache windows.
+  Cached catalogue entries appear only after the current GitHub account is
+  verified again, and live discovery continues in the background.
 - Package Manager's GitHub filter predicate now caches its verified reflection
   contract and reuses Unity's native filter lists, avoiding repeated assembly
   scans and list copies while rebuilding rows.
@@ -254,6 +241,19 @@ The exact Git proof sequences and recovery boundaries are documented in the
 
 ### Fixed
 
+- Closing and reopening Package Manager no longer renews or revives an expired
+  retained GitHub catalogue.
+- A catalogue is now discarded if the authenticated GitHub account changes, or
+  cannot be verified again, between the start and end of discovery.
+- Account-scoped GitHub repository reads now wait until the account's stable ID
+  and login have been resolved, closing a race with concurrent account changes.
+- Reload-cached and retained catalogue rows now keep **Install** disabled until
+  the exact repository is present in the current live discovery snapshot.
+- GitHub discovery now keeps valid Unity packages from a GraphQL batch when
+  unrelated repositories simply lack `package.json` or `package.json.meta`.
+  Partial responses are accepted only when every reported error exactly matches
+  one of those missing root files; all other command and response failures still
+  fail closed.
 - Submodule removal and failed-add rollback no longer use a broad forced Git
   removal. They preserve the worktree and `.gitmodules` inode in Recovery, then
   update the exact 160000 gitlink and full staged `.gitmodules` blob together
@@ -320,10 +320,11 @@ The exact Git proof sequences and recovery boundaries are documented in the
 - Kept the notification-safety regression test from writing its intentional
   callback exception to Unity's Console while preserving production reporting.
 
-## [1.0.0] - 2026-07-12
+## Development Snapshot - 2026-07-12
 
-This was a development snapshot; no `v1.0.0` tag or GitHub release was
-published.
+The package manifest reported version `1.0.0` at this
+[development snapshot](https://github.com/martincalander/GitSubmoduleForUnity/tree/5644e381f90f883aa9d12bbdca9efbf5c2b2eb05).
+No tag or GitHub release was published.
 
 ### Added
 
@@ -368,7 +369,6 @@ published.
 - Basic project submodule listing, update, remove, and branch operations.
 - Early GitHub discovery and direct URL installation.
 
-[Unreleased]: https://github.com/martincalander/GitSubmoduleForUnity/compare/v2.0.0...HEAD
-[2.0.0]: https://github.com/martincalander/GitSubmoduleForUnity/compare/5644e381f90f883aa9d12bbdca9efbf5c2b2eb05...v2.0.0
-[1.0.0]: https://github.com/martincalander/GitSubmoduleForUnity/tree/5644e381f90f883aa9d12bbdca9efbf5c2b2eb05
+[Unreleased]: https://github.com/martincalander/GitSubmoduleForUnity/compare/v0.8.0...HEAD
+[0.8.0]: https://github.com/martincalander/GitSubmoduleForUnity/releases/tag/v0.8.0
 [0.1.0]: https://github.com/martincalander/GitSubmoduleForUnity/tree/49bac435

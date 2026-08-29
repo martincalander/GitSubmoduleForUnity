@@ -86,11 +86,11 @@ Open **Window > Package Management > Package Manager**, choose **+ > Install
 package from git URL...**, and enter:
 
 ```text
-https://github.com/martincalander/GitSubmoduleForUnity.git
+https://github.com/martincalander/GitSubmoduleForUnity.git#v0.8.0
 ```
 
-The unqualified URL follows `main`. To pin a published release instead, append
-its tag to the URL.
+This URL pins the published `0.8.0` release. Omitting `#v0.8.0` follows the
+mutable `main` branch and is intended only for development.
 
 ## Team Clone Setup
 
@@ -141,24 +141,25 @@ read-only Git dependencies provide **Convert to Submodule**. Review
 
 ### Migrating from Git Package Manager
 
-Version 2.0 renamed the UPM package, assembly, namespace, and old public window
-types. Pre-release revisions used `com.essentials.gitpackagemanager`, followed
-by `com.martincalander.gitpackagemanager`. Existing Git URL installations must
+During pre-release development, the UPM package, assembly, namespace, and old
+public window types were renamed. Earlier revisions used
+`com.essentials.gitpackagemanager`, followed by
+`com.martincalander.gitpackagemanager`. Existing Git URL installations must
 replace whichever legacy dependency key appears in `Packages/manifest.json`;
 changing only the revision is not sufficient:
 
 ```json
 {
   "dependencies": {
-    "com.martincalander.gitsubmodulemanager": "https://github.com/martincalander/GitSubmoduleForUnity.git"
+    "com.martincalander.gitsubmodulemanager": "https://github.com/martincalander/GitSubmoduleForUnity.git#v0.8.0"
   }
 }
 ```
 
 Remove the old `com.essentials.gitpackagemanager` or
 `com.martincalander.gitpackagemanager` key and let Unity regenerate
-`Packages/packages-lock.json`. No 1.x tag was published from this repository.
-Append a published tag only when the project needs a pinned package revision.
+`Packages/packages-lock.json`. No earlier version tag was published from this
+repository.
 
 For a submodule installation, also coordinate the parent repository's gitlink
 and `.gitmodules` path from either

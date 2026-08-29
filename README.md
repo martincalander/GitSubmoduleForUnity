@@ -58,11 +58,11 @@ In **Window > Package Management > Package Manager**, choose **+ > Install
 package from git URL...** and enter:
 
 ```text
-https://github.com/martincalander/GitSubmoduleForUnity.git
+https://github.com/martincalander/GitSubmoduleForUnity.git#v0.8.0
 ```
 
-This URL follows `main`. To pin a published release instead, append its tag to
-the URL.
+This URL pins the published `0.8.0` release. Omitting `#v0.8.0` follows the
+mutable `main` branch and is intended only for development.
 
 ## Quick Start
 

@@ -25,7 +25,7 @@ body:
     id: versions
     attributes:
       label: Package, Git, and GitHub CLI versions
-      placeholder: Package v2.0.0; git 2.50.1; gh 2.96.0
+      placeholder: Package v0.8.0; git 2.50.1; gh 2.96.0
     validations:
       required: true
   - type: textarea

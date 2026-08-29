@@ -4,18 +4,12 @@ on:
   push:
     tags:
       - "v*.*.*"
-  workflow_dispatch:
-    inputs:
-      tag:
-        description: Existing v-prefixed tag to publish
-        required: true
-        type: string
 
 permissions:
   contents: read
 
 concurrency:
-  group: release-${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+  group: release-${{ github.ref_name }}
   cancel-in-progress: false
 
 jobs:
@@ -25,6 +19,8 @@ jobs:
     timeout-minutes: 10
     outputs:
       commit: ${{ steps.commit.outputs.sha }}
+      package_name: ${{ steps.package.outputs.name }}
+      package_version: ${{ steps.package.outputs.version }}
       prerelease: ${{ steps.release.outputs.prerelease }}
       tag: ${{ steps.release.outputs.tag }}
       tag_object: ${{ steps.commit.outputs.tag_object }}
@@ -40,15 +36,9 @@ jobs:
       - name: Resolve tag
         id: release
         env:
-          EVENT_NAME: ${{ github.event_name }}
           REF_NAME: ${{ github.ref_name }}
-          INPUT_TAG: ${{ inputs.tag }}
         run: |
-          if [[ "$EVENT_NAME" == "workflow_dispatch" ]]; then
-            tag="$INPUT_TAG"
-          else
-            tag="$REF_NAME"
-          fi
+          tag="$REF_NAME"
           prerelease="$(python3 .github/scripts/validate_repository.py --check-release-tag "$tag")"
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
           echo "prerelease=$prerelease" >> "$GITHUB_OUTPUT"
@@ -87,9 +77,6 @@ jobs:
           echo "tag_object=$tag_object" >> "$GITHUB_OUTPUT"
           echo "sha=$release_commit" >> "$GITHUB_OUTPUT"
 
-      - name: Validate repository
-        run: python3 .github/scripts/validate_repository.py
-
       - name: Verify release commit belongs to main
         env:
           RELEASE_COMMIT: ${{ steps.commit.outputs.sha }}
@@ -103,17 +90,31 @@ jobs:
             exit 1
           fi
 
+      - name: Validate repository
+        run: python3 .github/scripts/validate_repository.py
+
       - name: Match tag to package version
+        id: package
         env:
           RELEASE_TAG: ${{ steps.release.outputs.tag }}
         run: |
-          version="$(python3 -c 'import json; print(json.load(open("package.json"))["version"])')"
-          if [[ "$RELEASE_TAG" != "v$version" ]]; then
-            echo "Tag $RELEASE_TAG does not match package version $version" >&2
+          package_name="$(jq -er '.name' package.json)"
+          package_version="$(jq -er '.version' package.json)"
+          if [[ "$package_name" != "com.martincalander.gitsubmodulemanager" ]]; then
+            echo "Unexpected package name: $package_name" >&2
             exit 1
           fi
+          if [[ "$RELEASE_TAG" != "v$package_version" ]]; then
+            echo "Tag $RELEASE_TAG does not match package version $package_version" >&2
+            exit 1
+          fi
+          echo "name=$package_name" >> "$GITHUB_OUTPUT"
+          echo "version=$package_version" >> "$GITHUB_OUTPUT"
 
-      - name: Build immutable release archive
+      - name: Build validated source archive
+        env:
+          PACKAGE_NAME: ${{ steps.package.outputs.name }}
+          PACKAGE_VERSION: ${{ steps.package.outputs.version }}
         run: |
           set -euo pipefail
           mkdir -p dist
@@ -121,325 +122,341 @@ jobs:
           mapfile -t archives < <(
             find dist -maxdepth 1 -type f -name '*.tgz' -print
           )
-          if (( ${#archives[@]} != 1 )); then
-            echo "Expected exactly one release archive." >&2
+          expected_archive="$PACKAGE_NAME-$PACKAGE_VERSION.tgz"
+          if (( ${#archives[@]} != 1 )) ||
+             [[ "$(basename "${archives[0]:-}")" != "$expected_archive" ]]; then
+            echo "Expected exactly one validated source archive: $expected_archive" >&2
             exit 1
           fi
-          archive_name="$(basename "${archives[0]}")"
-          (cd dist && sha256sum -- "./$archive_name" > SHA256SUMS)
-          (cd dist && sha256sum --check SHA256SUMS)
+          (cd dist && sha256sum -- "./$expected_archive" > SHA256SUMS)
+          (cd dist && sha256sum --check --strict SHA256SUMS)
 
-      - name: Upload immutable release archive
+      - name: Upload validated source archive
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: release-package-${{ steps.commit.outputs.sha }}
+          name: validated-source-${{ steps.commit.outputs.sha }}
           path: dist/
           if-no-files-found: error
           retention-days: 14
 
-  unity:
-    name: Unity ${{ matrix.unity-version }} compile and EditMode tests
+  sign:
+    name: Sign validated UPM archive
     needs: validate
     runs-on: ubuntu-latest
-    timeout-minutes: 45
-    environment: unity-ci
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - unity-version: 6000.3.22f1
-            unity-revision: 1c726e1fb402
-            test-framework-version: 1.6.0
-            custom-image: >-
-              unityci/editor:ubuntu-6000.3.22f1-linux-il2cpp-3@sha256:bd9f0c77473bc842423236ec1498f180380f734dde521397e0fac2319865e87a
-          - unity-version: 6000.5.0f1
-            unity-revision: 88b47c5e7076
-            test-framework-version: 1.7.0
-            custom-image: >-
-              unityci/editor:ubuntu-6000.5.0f1-linux-il2cpp-3@sha256:318fd4f7081fd1fed6f3a850aa22fb39fc185d6d798915ccc803a37a5596ef82
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    environment: release
+    outputs:
+      archive: ${{ steps.sign.outputs.archive }}
+      sha256: ${{ steps.verify.outputs.sha256 }}
 
     steps:
-      - name: Download validated release archive
+      - name: Download validated source archive
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          name: release-package-${{ needs.validate.outputs.commit }}
-          path: dist
+          name: validated-source-${{ needs.validate.outputs.commit }}
+          path: validated
 
-      - name: Extract the exact archive that will be published
+      - name: Safely stage validated package source
+        env:
+          PACKAGE_NAME: ${{ needs.validate.outputs.package_name }}
+          PACKAGE_VERSION: ${{ needs.validate.outputs.package_version }}
         run: |
           set -euo pipefail
+
+          expected_archive="$PACKAGE_NAME-$PACKAGE_VERSION.tgz"
           mapfile -t archives < <(
-            find dist -maxdepth 1 -type f -name '*.tgz' -print
+            find validated -maxdepth 1 -type f -name '*.tgz' -print
           )
-          if (( ${#archives[@]} != 1 )); then
-            echo "Expected exactly one release archive." >&2
+          if (( ${#archives[@]} != 1 )) ||
+             [[ "$(basename "${archives[0]:-}")" != "$expected_archive" ]]; then
+            echo "Expected exactly one validated archive: $expected_archive" >&2
             exit 1
           fi
-          (cd dist && sha256sum --check SHA256SUMS)
-          mkdir -p .ci
-          tar -xzf "${archives[0]}" -C .ci
-          test -f .ci/package/package.json
 
-      - name: Create deterministic Unity archive test project
-        id: test-project
-        env:
-          PACKAGE_NAME: com.martincalander.gitsubmodulemanager
-          TEST_FRAMEWORK_VERSION: ${{ matrix.test-framework-version }}
-          UNITY_REVISION: ${{ matrix.unity-revision }}
-          UNITY_VERSION: ${{ matrix.unity-version }}
-        run: |
-          set -euo pipefail
-
-          mapfile -t archives < <(
-            find dist -maxdepth 1 -type f -name '*.tgz' -print
+          mapfile -t checksum_targets < <(
+            awk 'NF { print $2 }' validated/SHA256SUMS
           )
-          if (( ${#archives[@]} != 1 )); then
-            echo "Expected exactly one release archive." >&2
+          if (( ${#checksum_targets[@]} != 1 )) ||
+             [[ "${checksum_targets[0]:-}" != "./$expected_archive" ]]; then
+            echo "Validated checksum does not name the expected archive." >&2
             exit 1
           fi
+          (cd validated && sha256sum --check --strict SHA256SUMS)
 
-          archive="${archives[0]}"
-          archive_name="$(basename "$archive")"
-          package_version="$(jq -er '.version' .ci/package/package.json)"
-          expected_archive="$PACKAGE_NAME-$package_version.tgz"
-          if [[ "$archive_name" != "$expected_archive" ]]; then
-            echo "Unexpected archive name: $archive_name" >&2
-            exit 1
-          fi
-
-          project=.ci/release-test-project
-          package_reference="file:../../../dist/$archive_name"
-          mkdir -p \
-            "$project/Assets" \
-            "$project/Packages" \
-            "$project/ProjectSettings"
-
-          jq -n \
-            --arg package_name "$PACKAGE_NAME" \
-            --arg package_reference "$package_reference" \
-            --arg test_framework "$TEST_FRAMEWORK_VERSION" '
-            {
-              dependencies: {
-                "com.unity.test-framework": $test_framework
-              },
-              testables: [$package_name],
-              enableLockFile: true
-            }
-            | .dependencies[$package_name] = $package_reference
-          ' > "$project/Packages/manifest.json"
-
-          printf \
-            'm_EditorVersion: %s\nm_EditorVersionWithRevision: %s (%s)\n' \
-            "$UNITY_VERSION" \
-            "$UNITY_VERSION" \
-            "$UNITY_REVISION" \
-            > "$project/ProjectSettings/ProjectVersion.txt"
-
-          resolved_archive="$(
-            realpath "$project/Packages/${package_reference#file:}"
-          )"
-          test "$resolved_archive" = "$(realpath "$archive")"
-          echo "archive_name=$archive_name" >> "$GITHUB_OUTPUT"
-          echo "package_reference=$package_reference" >> "$GITHUB_OUTPUT"
-
-      - name: Validate Unity license configuration
-        env:
-          UNITY_EMAIL: ${{ secrets.UNITY_EMAIL }}
-          UNITY_LICENSE: ${{ secrets.UNITY_LICENSE }}
-          UNITY_PASSWORD: ${{ secrets.UNITY_PASSWORD }}
-          UNITY_SERIAL: ${{ secrets.UNITY_SERIAL }}
-        run: |
-          if [[ -z "$UNITY_EMAIL" || -z "$UNITY_PASSWORD" ]]; then
-            echo "UNITY_EMAIL and UNITY_PASSWORD environment secrets are required." >&2
-            exit 1
-          fi
-          if [[ -z "$UNITY_LICENSE" && -z "$UNITY_SERIAL" ]]; then
-            echo "Set UNITY_LICENSE (Personal) or UNITY_SERIAL (Pro) as an environment secret." >&2
-            exit 1
-          fi
-
-      - name: Compile exact archive and run EditMode tests
-        uses: game-ci/unity-test-runner@0ff419b913a3630032cbe0de48a0099b5a9f0ed9 # v4.3.1
-        env:
-          UNITY_EMAIL: ${{ secrets.UNITY_EMAIL }}
-          UNITY_LICENSE: ${{ secrets.UNITY_LICENSE }}
-          UNITY_PASSWORD: ${{ secrets.UNITY_PASSWORD }}
-          UNITY_SERIAL: ${{ secrets.UNITY_SERIAL }}
-        with:
-          packageMode: false
-          projectPath: .ci/release-test-project
-          unityVersion: ${{ matrix.unity-version }}
-          customImage: ${{ matrix.custom-image }}
-          testMode: EditMode
-          artifactsPath: unity-release-test-results-${{ matrix.unity-version }}
-
-      - name: Verify exact archive test evidence
-        env:
-          PACKAGE_NAME: com.martincalander.gitsubmodulemanager
-          PACKAGE_REFERENCE: ${{ steps.test-project.outputs.package_reference }}
-          RESULT_PATH: unity-release-test-results-${{ matrix.unity-version }}/editmode-results.xml
-        run: |
-          set -euo pipefail
-
-          manifest=.ci/release-test-project/Packages/manifest.json
-          lockfile=.ci/release-test-project/Packages/packages-lock.json
-          test -f "$lockfile"
-          jq -e \
-            --arg package_name "$PACKAGE_NAME" \
-            --arg package_reference "$PACKAGE_REFERENCE" '
-            .dependencies[$package_name] as $package
-            | $package.depth == 0
-              and $package.source == "local-tarball"
-              and $package.version == $package_reference
-              and (.dependencies | has("com.unity.testtools.codecoverage") | not)
-          ' "$lockfile" > /dev/null
-          jq -e '
-            .dependencies | has("com.unity.testtools.codecoverage") | not
-          ' "$manifest" > /dev/null
-
+          mkdir -p .ci/validated
+          export SOURCE_ARCHIVE="${archives[0]}"
           python3 - <<'PY'
           import os
-          import sys
-          import xml.etree.ElementTree as ET
+          import tarfile
+          from pathlib import Path, PurePosixPath
 
-          result_path = os.environ["RESULT_PATH"]
-          root = ET.parse(result_path).getroot()
-          if root.tag != "test-run":
-              raise SystemExit(f"Unexpected NUnit root: {root.tag}")
+          archive = Path(os.environ["SOURCE_ARCHIVE"])
+          destination = Path(".ci/validated")
+          seen = set()
 
-          total = int(root.attrib.get("total", "0"))
-          passed = int(root.attrib.get("passed", "0"))
-          failed = int(root.attrib.get("failed", "0"))
-          inconclusive = int(root.attrib.get("inconclusive", "0"))
-          skipped_count = int(root.attrib.get("skipped", "0"))
+          with tarfile.open(archive, "r:gz") as bundle:
+              for member in bundle.getmembers():
+                  raw = member.name
+                  if member.isdir() and raw.endswith("/"):
+                      raw = raw[:-1]
+                  path = PurePosixPath(raw)
+                  if (
+                      not raw
+                      or path.is_absolute()
+                      or ".." in path.parts
+                      or "\\" in raw
+                      or any(ord(char) < 32 for char in raw)
+                      or path.as_posix() != raw
+                      or not path.parts
+                      or path.parts[0] != "package"
+                  ):
+                      raise SystemExit(f"Unsafe package archive path: {member.name!r}")
+                  if raw in seen:
+                      raise SystemExit(f"Duplicate package archive path: {raw}")
+                  seen.add(raw)
+
+                  target = destination.joinpath(*path.parts)
+                  if member.isdir():
+                      target.mkdir(parents=True, exist_ok=True)
+                      continue
+                  if not member.isfile():
+                      raise SystemExit(
+                          f"Unsupported package archive member type: {raw}"
+                      )
+
+                  source = bundle.extractfile(member)
+                  if source is None:
+                      raise SystemExit(f"Could not read package member: {raw}")
+                  payload = source.read()
+                  if len(payload) != member.size:
+                      raise SystemExit(f"Truncated package member: {raw}")
+
+                  target.parent.mkdir(parents=True, exist_ok=True)
+                  target.write_bytes(payload)
+                  os.chmod(target, member.mode & 0o777)
+          PY
+
+          manifest=.ci/validated/package/package.json
+          test -f "$manifest"
+          test ! -e .ci/validated/package/.attestation.p7m
+          jq -e \
+            --arg name "$PACKAGE_NAME" \
+            --arg version "$PACKAGE_VERSION" \
+            '.name == $name and .version == $version' \
+            "$manifest" > /dev/null
+
+      - name: Install pinned Unity Package Manager CLI
+        id: upm-cli
+        env:
+          UPM_CLI_SHA256: 1de355a1bd5daf134a4dc7b6f97194e0db89cfedd0f98b5d8204603f7d009c21
+          UPM_CLI_VERSION: v9.32.0
+        run: |
+          set -euo pipefail
+
+          mkdir -p .ci/upm-cli
+          archive=.ci/upm-cli-linux-x64.zip
+          curl --proto '=https' --tlsv1.2 \
+            --fail --silent --show-error --location --retry 3 \
+            "https://cdn.packages.unity.com/upm-cli/releases/$UPM_CLI_VERSION/upm-linux-x64.zip" \
+            --output "$archive"
+          printf '%s  %s\n' "$UPM_CLI_SHA256" "$archive" |
+            sha256sum --check --strict -
+
+          unzip -q "$archive" -d .ci/upm-cli
+          chmod +x .ci/upm-cli/UnityPackageManager
+          version="$(.ci/upm-cli/UnityPackageManager --version)"
+          if [[ "$version" != "$UPM_CLI_VERSION (x64)" ]]; then
+            echo "Unexpected UPM CLI version: $version" >&2
+            exit 1
+          fi
+          echo "path=$PWD/.ci/upm-cli/UnityPackageManager" >> "$GITHUB_OUTPUT"
+
+      - name: Pack and sign validated package
+        id: sign
+        env:
+          PACKAGE_NAME: ${{ needs.validate.outputs.package_name }}
+          PACKAGE_VERSION: ${{ needs.validate.outputs.package_version }}
+          UPM_CLI: ${{ steps.upm-cli.outputs.path }}
+          UPM_ORG_ID: ${{ vars.UPM_ORG_ID }}
+          UPM_SERVICE_ACCOUNT_KEY_ID: ${{ secrets.UPM_SERVICE_ACCOUNT_KEY_ID }}
+          UPM_SERVICE_ACCOUNT_KEY_SECRET: ${{ secrets.UPM_SERVICE_ACCOUNT_KEY_SECRET }}
+        run: |
+          set -euo pipefail
+
+          if [[ -z "${UPM_ORG_ID:-}" ||
+                -z "${UPM_SERVICE_ACCOUNT_KEY_ID:-}" ||
+                -z "${UPM_SERVICE_ACCOUNT_KEY_SECRET:-}" ]]; then
+            echo "The release environment is missing UPM signing configuration." >&2
+            exit 1
+          fi
+
+          mkdir -p dist
+          "$UPM_CLI" pack .ci/validated/package \
+            --organization-id "$UPM_ORG_ID" \
+            --destination dist
+
+          expected_archive="$PACKAGE_NAME-$PACKAGE_VERSION.tgz"
+          mapfile -t archives < <(
+            find dist -maxdepth 1 -type f -name '*.tgz' -print
+          )
+          if (( ${#archives[@]} != 1 )) ||
+             [[ "$(basename "${archives[0]:-}")" != "$expected_archive" ]]; then
+            echo "UPM CLI did not create the expected signed archive: $expected_archive" >&2
+            exit 1
+          fi
+          echo "archive=$expected_archive" >> "$GITHUB_OUTPUT"
+
+      - name: Verify signed archive and checksum
+        id: verify
+        env:
+          PACKAGE_NAME: ${{ needs.validate.outputs.package_name }}
+          PACKAGE_VERSION: ${{ needs.validate.outputs.package_version }}
+          SIGNED_ARCHIVE: dist/${{ steps.sign.outputs.archive }}
+          SOURCE_ARCHIVE: validated/${{ steps.sign.outputs.archive }}
+        run: |
+          set -euo pipefail
+
+          python3 - <<'PY'
+          import hashlib
+          import json
+          import os
+          import tarfile
+          from pathlib import Path, PurePosixPath
+
+          def load_files(archive_path):
+              files = {}
+              seen = set()
+              with tarfile.open(archive_path, "r:gz") as bundle:
+                  for member in bundle.getmembers():
+                      raw = member.name
+                      if member.isdir() and raw.endswith("/"):
+                          raw = raw[:-1]
+                      path = PurePosixPath(raw)
+                      if (
+                          not raw
+                          or path.is_absolute()
+                          or ".." in path.parts
+                          or "\\" in raw
+                          or any(ord(char) < 32 for char in raw)
+                          or path.as_posix() != raw
+                          or not path.parts
+                          or path.parts[0] != "package"
+                      ):
+                          raise SystemExit(
+                              f"Unsafe package archive path: {member.name!r}"
+                          )
+                      if raw in seen:
+                          raise SystemExit(f"Duplicate package archive path: {raw}")
+                      seen.add(raw)
+                      if member.isdir():
+                          continue
+                      if not member.isfile():
+                          raise SystemExit(
+                              f"Unsupported package archive member type: {raw}"
+                          )
+
+                      source = bundle.extractfile(member)
+                      if source is None:
+                          raise SystemExit(f"Could not read package member: {raw}")
+                      payload = source.read()
+                      if len(payload) != member.size:
+                          raise SystemExit(f"Truncated package member: {raw}")
+                      files[raw] = (payload, member.mode & 0o777)
+              return files
+
+          source_files = load_files(Path(os.environ["SOURCE_ARCHIVE"]))
+          signed_files = load_files(Path(os.environ["SIGNED_ARCHIVE"]))
+          attestation_path = "package/.attestation.p7m"
+
+          source_attestations = [
+              name for name in source_files
+              if name.endswith("/.attestation.p7m")
+          ]
+          signed_attestations = [
+              name for name in signed_files
+              if name.endswith("/.attestation.p7m")
+          ]
+          if source_attestations:
+              raise SystemExit(
+                  f"Validated source already contains attestations: {source_attestations}"
+              )
+          if signed_attestations != [attestation_path]:
+              raise SystemExit(
+                  f"Expected exactly one signing attestation: {signed_attestations}"
+              )
+          if not signed_files[attestation_path][0]:
+              raise SystemExit("The signing attestation is empty.")
+
+          del signed_files[attestation_path]
+          source_hashes = {
+              name: (hashlib.sha256(payload).hexdigest(), mode)
+              for name, (payload, mode) in source_files.items()
+          }
+          signed_hashes = {
+              name: (hashlib.sha256(payload).hexdigest(), mode)
+              for name, (payload, mode) in signed_files.items()
+          }
+          if source_hashes != signed_hashes:
+              missing = sorted(source_hashes.keys() - signed_hashes.keys())
+              extra = sorted(signed_hashes.keys() - source_hashes.keys())
+              changed = sorted(
+                  name for name in source_hashes.keys() & signed_hashes.keys()
+                  if source_hashes[name] != signed_hashes[name]
+              )
+              raise SystemExit(
+                  "Signed payload differs from validated source: "
+                  f"missing={missing} extra={extra} changed={changed}"
+              )
+
+          manifest_path = "package/package.json"
+          try:
+              manifest = json.loads(signed_files[manifest_path][0])
+          except (KeyError, json.JSONDecodeError) as error:
+              raise SystemExit(f"Invalid signed package manifest: {error}") from error
           if (
-              total <= 0
-              or failed != 0
-              or inconclusive != 0
-              or passed + skipped_count != total
+              manifest.get("name") != os.environ["PACKAGE_NAME"]
+              or manifest.get("version") != os.environ["PACKAGE_VERSION"]
           ):
               raise SystemExit(
-                  "Invalid NUnit totals: "
-                  f"total={total} passed={passed} failed={failed} "
-                  f"inconclusive={inconclusive} skipped={skipped_count}"
+                  "Signed package identity does not match the validated tag."
               )
-          if root.attrib.get("result") not in {
-              "Passed",
-              "Skipped",
-              "Skipped:Ignored",
-          }:
-              raise SystemExit(
-                  f"NUnit run did not pass: {root.attrib.get('result')}"
-              )
-
-          allowed_skips = {
-              (
-                  "MartinCalander.GitSubmoduleManager.Editor.Tests."
-                  "PackageManagerGitHubPackageProjectionTests."
-                  "Reconcile_ExcludesAnAlreadyInstalledPackageName"
-              ),
-              (
-                  "MartinCalander.GitSubmoduleManager.Editor.Tests."
-                  "PackageManagerGitSubmoduleInstallMenuTests."
-                  "InstallForRoot_RepeatedTrackedRootDoesNotDuplicateNativeItem"
-              ),
-              (
-                  "MartinCalander.GitSubmoduleManager.Editor.Tests."
-                  "PackageManagerSubmodulePresentationTests."
-                  "ActivePageReflectionContract_OpenWindowProvidesDiagnostic"
-              ),
-          }
-          all_cases = list(root.iter("test-case"))
-          skipped = {
-              case.attrib.get("fullname", case.attrib.get("name", "<unknown>"))
-              for case in all_cases
-              if case.attrib.get("result") == "Skipped"
-          }
-          unexpected_results = [
-              case.attrib
-              for case in all_cases
-              if case.attrib.get("result") not in {"Passed", "Skipped"}
-          ]
-          if (
-              len(all_cases) != total
-              or len(skipped) != skipped_count
-              or not skipped.issubset(allowed_skips)
-              or unexpected_results
-          ):
-              raise SystemExit(
-                  "Unexpected NUnit case results or skips: "
-                  f"skipped={sorted(skipped)} results={unexpected_results}"
-              )
-
-          assembly_name = (
-              "MartinCalander.GitSubmoduleManager.Editor.Tests.dll"
-          )
-          assemblies = [
-              suite for suite in root.iter("test-suite")
-              if suite.attrib.get("type") == "Assembly"
-              and suite.attrib.get("name") == assembly_name
-          ]
-          if len(assemblies) != 1:
-              raise SystemExit(
-                  f"Expected one {assembly_name} suite, found {len(assemblies)}"
-              )
-          if int(assemblies[0].attrib.get("total", "0")) <= 0:
-              raise SystemExit(f"{assembly_name} did not run any tests")
-
-          compatibility_fixtures = (
-              "PackageManagerCompatibilityContractTests",
-              "PackageManagerUnityVersionCollectionContractTests",
-          )
-          for fixture_name in compatibility_fixtures:
-              fixtures = [
-                  suite for suite in root.iter("test-suite")
-                  if suite.attrib.get("type") == "TestFixture"
-                  and suite.attrib.get("name") == fixture_name
-              ]
-              if len(fixtures) != 1:
-                  raise SystemExit(
-                      f"Expected one {fixture_name} fixture, found {len(fixtures)}"
-                  )
-              cases = list(fixtures[0].iter("test-case"))
-              if not cases or any(
-                  case.attrib.get("result") != "Passed" for case in cases
-              ):
-                  raise SystemExit(
-                      f"Every {fixture_name} case must run and pass"
-                  )
-
-          if skipped:
-              print("Allowed environment-dependent skips:", file=sys.stderr)
-              for test_name in sorted(skipped):
-                  print(f"- {test_name}", file=sys.stderr)
-
           print(
-              "Verified exact archive test evidence: "
-              f"total={total}, passed={passed}, skipped={skipped_count}"
+              "Verified signed payload and attestation for "
+              f"{manifest['name']}@{manifest['version']}"
           )
           PY
 
-          (cd dist && sha256sum --check SHA256SUMS)
+          archive_name="$(basename "$SIGNED_ARCHIVE")"
+          signed_sha256="$(sha256sum "$SIGNED_ARCHIVE" | awk '{ print $1 }')"
+          if [[ ! "$signed_sha256" =~ ^[0-9a-f]{64}$ ]]; then
+            echo "Invalid signed archive SHA-256." >&2
+            exit 1
+          fi
+          printf '%s  ./%s\n' "$signed_sha256" "$archive_name" > dist/SHA256SUMS
+          (cd dist && sha256sum --check --strict SHA256SUMS)
+          echo "sha256=$signed_sha256" >> "$GITHUB_OUTPUT"
 
-      - name: Upload Unity test results
-        if: always()
+      - name: Upload signed release archive
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: unity-editmode-${{ matrix.unity-version }}-${{ needs.validate.outputs.tag }}
-          path: unity-release-test-results-${{ matrix.unity-version }}/
-          if-no-files-found: warn
+          name: signed-release-${{ needs.validate.outputs.commit }}
+          path: |
+            dist/${{ steps.sign.outputs.archive }}
+            dist/SHA256SUMS
+          if-no-files-found: error
           retention-days: 14
 
   release:
-    name: Publish tested UPM archive
+    name: Publish signed UPM archive
     needs:
       - validate
-      - unity
+      - sign
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
       contents: write # gh creates the release and uploads its assets.
-    environment: release
 
     steps:
       - name: Check out validated release commit
@@ -449,7 +466,7 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Verify release tag still targets the tested commit
+      - name: Verify release tag still targets the validated commit
         env:
           EXPECTED_COMMIT: ${{ needs.validate.outputs.commit }}
           EXPECTED_TAG_OBJECT: ${{ needs.validate.outputs.tag_object }}
@@ -470,7 +487,8 @@ jobs:
             echo "Release tag $tag_ref no longer peels to a commit." >&2
             exit 1
           fi
-          if [[ "$tag_object" != "$EXPECTED_TAG_OBJECT" || "$tag_commit" != "$EXPECTED_COMMIT" ]]; then
+          if [[ "$tag_object" != "$EXPECTED_TAG_OBJECT" ||
+                "$tag_commit" != "$EXPECTED_COMMIT" ]]; then
             echo "Tag $RELEASE_TAG moved after validation; refusing to publish." >&2
             exit 1
           fi
@@ -488,24 +506,68 @@ jobs:
             exit 1
           fi
 
-      - name: Download the tested release archive
+      - name: Download signed release archive
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          name: release-package-${{ needs.validate.outputs.commit }}
+          name: signed-release-${{ needs.validate.outputs.commit }}
           path: dist
 
-      - name: Verify the tested archive checksum
-        run: (cd dist && sha256sum --check SHA256SUMS)
+      - name: Verify signed release artifact
+        env:
+          EXPECTED_ARCHIVE: ${{ needs.sign.outputs.archive }}
+          EXPECTED_SHA256: ${{ needs.sign.outputs.sha256 }}
+        run: |
+          set -euo pipefail
+
+          if [[ ! "$EXPECTED_SHA256" =~ ^[0-9a-f]{64}$ ]]; then
+            echo "Signing job returned an invalid SHA-256." >&2
+            exit 1
+          fi
+          mapfile -t archives < <(
+            find dist -maxdepth 1 -type f -name '*.tgz' -print
+          )
+          if (( ${#archives[@]} != 1 )) ||
+             [[ "$(basename "${archives[0]:-}")" != "$EXPECTED_ARCHIVE" ]]; then
+            echo "Signed artifact does not contain the expected archive." >&2
+            exit 1
+          fi
+
+          mapfile -t checksum_lines < dist/SHA256SUMS
+          expected_line="$EXPECTED_SHA256  ./$EXPECTED_ARCHIVE"
+          if (( ${#checksum_lines[@]} != 1 )) ||
+             [[ "${checksum_lines[0]:-}" != "$expected_line" ]]; then
+            echo "Signed artifact checksum manifest is not exact." >&2
+            exit 1
+          fi
+          (cd dist && sha256sum --check --strict SHA256SUMS)
+          actual_sha256="$(sha256sum "dist/$EXPECTED_ARCHIVE" | awk '{ print $1 }')"
+          if [[ "$actual_sha256" != "$EXPECTED_SHA256" ]]; then
+            echo "Signed archive digest changed after the signing job." >&2
+            exit 1
+          fi
 
       - name: Create GitHub release
         env:
+          EXPECTED_TAG_OBJECT: ${{ needs.validate.outputs.tag_object }}
           GH_TOKEN: ${{ github.token }}
+          RELEASE_ARCHIVE: ${{ needs.sign.outputs.archive }}
           RELEASE_TAG: ${{ needs.validate.outputs.tag }}
           IS_PRERELEASE: ${{ needs.validate.outputs.prerelease }}
         run: |
+          remote_ref="$(
+            gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$RELEASE_TAG"
+          )"
+          remote_type="$(jq -er '.object.type' <<< "$remote_ref")"
+          remote_object="$(jq -er '.object.sha' <<< "$remote_ref")"
+          if [[ "$remote_type" != "tag" ||
+                "$remote_object" != "$EXPECTED_TAG_OBJECT" ]]; then
+            echo "Remote tag changed after validation; refusing to publish." >&2
+            exit 1
+          fi
+
           args=(
             "$RELEASE_TAG"
-            dist/*.tgz
+            "dist/$RELEASE_ARCHIVE"
             dist/SHA256SUMS
             --verify-tag
             --generate-notes
@@ -515,3 +577,36 @@ jobs:
             args+=(--prerelease)
           fi
           gh release create "${args[@]}"
+
+  openupm:
+    name: Publish signed package to OpenUPM
+    needs:
+      - validate
+      - release
+    if: ${{ vars.OPENUPM_ENABLED == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Trigger OpenUPM and wait for publication
+        id: openupm
+        uses: openupm/openupm-action@89b79dc8dd6cb319efff06727f8fa0051ce7e517 # v1.0.1
+        with:
+          package: com.martincalander.gitsubmodulemanager
+          tag: ${{ needs.validate.outputs.tag }}
+          timeout-minutes: 30
+
+      - name: Require signed OpenUPM publication
+        env:
+          EXPECTED_VERSION: ${{ needs.validate.outputs.package_version }}
+          OPENUPM_SIGNED: ${{ steps.openupm.outputs.signed }}
+          OPENUPM_VERSION: ${{ steps.openupm.outputs['published-version'] }}
+        run: |
+          if [[ "$OPENUPM_SIGNED" != "true" ||
+                "$OPENUPM_VERSION" != "$EXPECTED_VERSION" ]]; then
+            echo "OpenUPM did not publish the expected signed package version." >&2
+            exit 1
+          fi

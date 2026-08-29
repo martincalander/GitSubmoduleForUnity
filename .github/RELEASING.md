@@ -14,25 +14,23 @@ without release authority should use `triage` or `read` access. Enable immutable
 releases before publishing the first version so published tags and assets cannot
 be replaced.
 
-Before enabling credentialed CI, configure two protected GitHub environments:
+Before publishing, configure the protected `release` GitHub environment with
+required maintainer reviewers and deployment restricted to protected `v*`
+tags. Protect `main` from direct and force pushes, require pull requests and
+sanity checks, and require independent review when another maintainer is
+available. Add a tag protection rule for `v*` before publishing. These settings
+are repository controls and cannot be enforced by workflow YAML alone.
 
-- `unity-ci`, with required maintainer reviewers and environment-scoped
-  `UNITY_EMAIL`, `UNITY_PASSWORD`, plus either `UNITY_LICENSE` or `UNITY_SERIAL`,
-  and deployment branches restricted to protected `main` and protected `v*`
-  tags;
-- `release`, with required maintainer reviewers and deployment restricted to
-  protected `v*` tags.
+Configure these values only in the protected `release` environment:
 
-Do not store Unity credentials as general repository secrets. Set the repository
-variable `UNITY_CI_ENABLED=true` only after `unity-ci` is protected. Protect
-`main` from direct and force pushes, require pull requests and sanity checks,
-and require independent review when another maintainer is available. Add a tag
-protection rule for `v*` before publishing. These settings are repository
-controls and cannot be enforced by workflow YAML alone.
+- environment secret `UPM_SERVICE_ACCOUNT_KEY_ID`;
+- environment secret `UPM_SERVICE_ACCOUNT_KEY_SECRET`;
+- environment variable `UPM_ORG_ID`.
 
-Keep the GameCI action and each release-matrix Editor image pinned to reviewed
-commit and image digests. Adding another Unity patch to CI requires recording
-its exact image digest in both workflows before it can become a release gate.
+The keys must belong to a dedicated Unity service account with only the
+organization-level **Package Manager Package Signer** role. Follow Unity's
+[UPM CLI prerequisites](https://docs.unity3d.com/6000.3/Documentation/Manual/upm-cli-install.html#prereqs).
+No Unity Editor license, email, or password belongs in GitHub Actions.
 
 ## Version Policy
 
@@ -72,18 +70,33 @@ The version in [`package.json`](../package.json) and the tag without its leading
 8. Merge the release pull request only after required checks pass and the
    applicable review policy is satisfied.
 
-Fork pull requests never receive Unity credentials. A maintainer must inspect
-the contribution and manually dispatch **Sanity Checks** with its reviewed,
-full 40-character commit SHA as the `ref` input to run the credentialed Unity
-gate before merge. Branch names and abbreviated revisions are intentionally
-rejected so the reviewed input cannot move before the job starts. Dispatch the
-workflow definition from protected `main`, never from a contribution branch:
+Hosted workflows do not launch the Unity Editor or run EditMode tests. Complete
+and report the applicable Unity checks locally before tagging a release.
 
-```bash
-gh workflow run ci.yml --ref main \
-  -f ref=<reviewed-40-character-commit-sha> \
-  -f unity_version=6000.3.22f1
-```
+## OpenUPM Bootstrap
+
+The workflow always creates a signed GitHub Release. Its OpenUPM job remains
+disabled until the repository Actions variable `OPENUPM_ENABLED` is exactly
+`true`.
+
+For the first publication:
+
+1. publish the first signed GitHub Release normally;
+2. submit the package through [OpenUPM Add Package](https://openupm.com/packages/add/);
+3. verify its `repoUrl` is the canonical public repository
+   `https://github.com/martincalander/GitSubmoduleForUnity`;
+4. ensure the generated metadata uses `trackingMode: githubRelease` and the
+   stable asset prefix
+   `githubReleaseAssetName: 'com.martincalander.gitsubmodulemanager-'`;
+5. wait for the metadata pull request to merge and the initial signed version
+   to become available;
+6. create the repository Actions variable `OPENUPM_ENABLED=true` for future
+   releases.
+
+Initial registration is mandatory; the OpenUPM action cannot register a new
+package. GitHub Release tracking makes OpenUPM publish the signed release asset
+unchanged. Refer to OpenUPM's
+[signed-package guide](https://openupm.com/docs/signing-upm-packages).
 
 ## Tag and Publish
 
@@ -92,8 +105,8 @@ Create an annotated tag on the reviewed release commit:
 ```bash
 git switch main
 git pull --ff-only
-git tag -a v2.0.0 -m "Git Submodule Manager 2.0.0"
-git push origin v2.0.0
+git tag -a v0.8.0 -m "Git Submodule Manager 0.8.0"
+git push origin v0.8.0
 ```
 
 Pushing the tag starts the Publish Release workflow. The workflow:
@@ -101,39 +114,40 @@ Pushing the tag starts the Publish Release workflow. The workflow:
 1. validates the repository;
 2. verifies that the tag matches `package.json`;
 3. proves the tagged commit is reachable from `origin/main`;
-4. builds the UPM-compatible npm archive once and generates `SHA256SUMS`;
-5. extracts and tests those exact archive bytes in Unity;
-6. waits for approval in the protected `release` environment;
-7. creates the GitHub release and attaches the tested assets.
+4. builds and checksums a credential-free source archive;
+5. waits for approval in the protected `release` environment;
+6. signs that validated payload with the pinned Unity UPM CLI;
+7. requires the signing attestation and verifies every other packaged file is
+   unchanged;
+8. creates the GitHub release with the signed archive and its new checksum;
+9. when enabled, asks OpenUPM to publish those exact bytes and verifies it
+   recognizes the signature.
 
 Pre-release SemVer tags are published as GitHub pre-releases.
 
-The workflow can also be started manually for an existing tag. Manual dispatch
-does not create or move a tag. Start the workflow from the same protected tag
-provided as its input so the `release` environment evaluates the reviewed
-release ref:
-
-```bash
-gh workflow run release.yml --ref v2.0.0 -f tag=v2.0.0
-```
+If only the downstream OpenUPM job fails or times out after the GitHub Release
+exists, use **Re-run failed jobs**. Do not re-run every job against an existing
+immutable release.
 
 ## Verify the Published Release
 
 - Confirm the workflow completed successfully.
 - Confirm the GitHub release points to the intended commit.
 - Download the `.tgz` and compare it with `SHA256SUMS`.
+- Confirm the archive contains the nonempty signing attestation
+  `package/.attestation.p7m`.
 - Inspect the archive and confirm development-only `.github` files are absent.
 - Install the tag from a clean Unity project:
 
   ```text
-  https://github.com/martincalander/GitSubmoduleForUnity.git#v2.0.0
+  https://github.com/martincalander/GitSubmoduleForUnity.git#v0.8.0
   ```
 
 - Confirm the package imports, **Package Manager > Sources > GitHub** opens, and
   the documented minimum Unity version remains accurate.
 
-If the package is registered with OpenUPM, confirm its registry page discovers
-the new immutable tag after the GitHub release is available.
+If OpenUPM automation is enabled, confirm its job reports the requested version
+as published and signed.
 
 ## Correcting a Release
 
