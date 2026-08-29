@@ -9,8 +9,8 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
-- Added a README showcase for Cave Expedition and Big Boy Boxing using Steam
-  store widgets.
+- Added a README showcase for Cave Expedition and Big Boy Boxing using linked
+  Steam capsule cards.
 
 ### Fixed
 

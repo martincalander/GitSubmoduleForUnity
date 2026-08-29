@@ -115,26 +115,6 @@ Distributed under the [MIT License](LICENSE.md). See
 
 ## Games Made Using This Package
 
-<!-- markdownlint-disable MD033 -->
-
-<iframe
-  src="https://store.steampowered.com/widget/4372950/"
-  title="Cave Expedition on Steam"
-  frameborder="0"
-  width="646"
-  height="190">
-</iframe>
-
-[View Cave Expedition on Steam](https://store.steampowered.com/app/4372950/Cave_Expedition/)
-
-<iframe
-  src="https://store.steampowered.com/widget/1680780/"
-  title="Big Boy Boxing on Steam"
-  frameborder="0"
-  width="646"
-  height="190">
-</iframe>
-
-[View Big Boy Boxing on Steam](https://store.steampowered.com/app/1680780/Big_Boy_Boxing/)
-
-<!-- markdownlint-enable MD033 -->
+| [![Cave Expedition Steam capsule](https://shared.fastly.steamstatic.com/store_item_assets/steam/apps/4372950/capsule_616x353.jpg)](https://store.steampowered.com/app/4372950/Cave_Expedition/) | [![Big Boy Boxing Steam capsule](https://shared.fastly.steamstatic.com/store_item_assets/steam/apps/1680780/capsule_616x353.jpg)](https://store.steampowered.com/app/1680780/Big_Boy_Boxing/) |
+| :---: | :---: |
+| [**Cave Expedition**](https://store.steampowered.com/app/4372950/Cave_Expedition/) | [**Big Boy Boxing**](https://store.steampowered.com/app/1680780/Big_Boy_Boxing/) |
