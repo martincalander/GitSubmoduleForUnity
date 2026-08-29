@@ -83,19 +83,14 @@ unverified work always appear.
 ## Add the Package with UPM
 
 Open **Window > Package Management > Package Manager**, choose **+ > Install
-package from git URL...**, and enter the tagged `v2.0.0` release:
-
-```text
-https://github.com/martincalander/GitSubmoduleManager.git#v2.0.0
-```
-
-Replace `v2.0.0` with another published release tag when upgrading. An
-unqualified repository URL follows the mutable `main` branch and should be used
-only for development or pre-release testing:
+package from git URL...**, and enter:
 
 ```text
 https://github.com/martincalander/GitSubmoduleManager.git
 ```
+
+The unqualified URL follows `main`. To pin a published release instead, append
+its tag to the URL.
 
 ## Team Clone Setup
 
@@ -155,16 +150,15 @@ changing only the revision is not sufficient:
 ```json
 {
   "dependencies": {
-    "com.martincalander.gitsubmodulemanager": "https://github.com/martincalander/GitSubmoduleManager.git#<renamed-release-tag>"
+    "com.martincalander.gitsubmodulemanager": "https://github.com/martincalander/GitSubmoduleManager.git"
   }
 }
 ```
 
 Remove the old `com.essentials.gitpackagemanager` or
 `com.martincalander.gitpackagemanager` key and let Unity regenerate
-`Packages/packages-lock.json`. Replace `<renamed-release-tag>` with a published
-tag that includes the Git Submodule Manager identity. No 1.x tag was published
-from this repository; `v2.0.0` is the first tag under the current identity.
+`Packages/packages-lock.json`. No 1.x tag was published from this repository.
+Append a published tag only when the project needs a pinned package revision.
 
 For a submodule installation, also coordinate the parent repository's gitlink
 and `.gitmodules` path from either
