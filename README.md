@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="GitSubmoduleManagerIcon.svg" alt="Git Submodule Manager logo" width="80" height="80">
+  <img src="Documentation~/Images/GitSubmoduleManagerCover.png" alt="Git Submodule Manager for Unity" width="600">
 </p>
 
 # Git Submodule Manager

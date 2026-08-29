@@ -40,15 +40,17 @@ SOFTWARE.
 
 ### Git Logomark
 
-- Files: `GitSubmoduleManagerIcon.png`, `GitSubmoduleManagerIcon.svg`,
+- Files: `Documentation~/Images/GitSubmoduleManagerCover.png`,
+  `Documentation~/Images/GitSubmoduleManagerIcon.png`,
+  `Documentation~/Images/GitSubmoduleManagerIcon.svg`,
   `Editor/GitEditorWindowIcon.png`, and `Editor/GitEditorWindowIconLight.png`
 - Original Git logomark creator: Jason Long
 - Source: [Git logo downloads](https://git-scm.com/community/logos)
 - License: [Creative Commons Attribution 3.0 Unported](https://creativecommons.org/licenses/by/3.0/)
-- Use: the SVG adapts the official mark into an open-package composition for
-  README artwork. The PNG uses the official full-color icon. One-color variants
-  are recolored for Unity's dark and light skins and appear in the Welcome
-  window, Package Manager Sources row, and source presentation.
+- Use: the cover and SVG adapt the official mark into open-package artwork for
+  repository documentation. The PNG uses the official full-color icon.
+  One-color variants are recolored for Unity's dark and light skins and appear
+  in the Welcome window, Package Manager Sources row, and source presentation.
 
 ## External Tools
 

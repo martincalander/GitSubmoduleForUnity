@@ -7,6 +7,11 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- Replaced the README logo with a 600 by 300 package cover and moved the
+  repository artwork into Unity-hidden documentation assets.
+
 ## [0.8.0] - 2026-08-29
 
 This is the first tagged public release. Earlier package versions were
