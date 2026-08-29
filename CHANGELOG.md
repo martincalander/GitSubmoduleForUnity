@@ -7,6 +7,14 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- GitHub discovery now keeps valid Unity packages from a GraphQL batch when
+  unrelated repositories simply lack `package.json` or `package.json.meta`.
+  Partial responses are accepted only when every reported error exactly matches
+  one of those missing root files; all other command and response failures still
+  fail closed.
+
 ## [2.0.0] - 2026-08-29
 
 ### Security

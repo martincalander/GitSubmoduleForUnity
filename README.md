@@ -14,10 +14,11 @@ Manage Git-hosted Unity packages from Unity's native Package Manager.
   <a href="LICENSE.md"><img alt="MIT License" src="https://img.shields.io/badge/license-MIT-blue"></a>
 </p>
 
-Git Submodule Manager brings Git-hosted Unity packages into Unity's own Package
-Manager. Browse GitHub repositories, install a root UPM package as an editable
-submodule or read-only Git dependency, and switch eligible packages between the
-two modes without leaving the Editor.
+If NuGetForUnity makes NuGet packages feel at home in Unity, Git Submodule
+Manager does the same for Git submodules. It brings Git-hosted UPM packages into
+Unity's own Package Manager, where you can browse GitHub repositories, install a
+package as an editable submodule or read-only Git dependency, and switch
+eligible packages between the two modes without leaving the Editor.
 
 ## Highlights
 

@@ -351,6 +351,15 @@ batches, and each confirmed root manifest is published into an immutable
 snapshot as soon as its validation batch completes. Aggregation and immutable
 snapshot publication remain on Unity's main thread.
 
+GitHub reports a missing file resolver as both partial data and a nonzero CLI
+exit, even when every other repository in the batch was read successfully.
+Discovery accepts that narrow case only after matching every GraphQL error to
+an exact requested node, root-file alias, null field, and missing-file message.
+The response must still be complete, strict UTF-8, structurally valid, and tied
+one-to-one to the requested repository IDs. Unknown, mixed, truncated, or
+unconfirmed failures reject the batch instead of reclassifying their nulls as
+ordinary missing files.
+
 Automatic catalogue eligibility reads the root `package.json` and
 `package.json.meta` tree entries from one captured default-branch commit in the
 same bounded GraphQL batch. Both paths must be regular, complete text blobs;

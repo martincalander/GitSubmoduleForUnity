@@ -436,6 +436,8 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
             Assert.That(calls, Has.Length.EqualTo(1),
                 "A normal full repository page should use one GraphQL request.");
             Assert.That(calls.All(call => call.Arguments == null), Is.True, "GraphQL requests must use tokenized argv.");
+            Assert.That(calls.All(call => call.RequireStrictUtf8StdOut), Is.True,
+                "GraphQL package data must be decoded as strict UTF-8.");
             Assert.That(calls.All(call => GetArguments(call).Contains("--hostname github.com")), Is.True);
             Assert.That(GetGraphQlNodeIds(calls.Single()), Has.Length.EqualTo(50));
             string queryArgument = calls.Single().ArgumentList.Single(argument =>
@@ -454,6 +456,226 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                 .All(repo => repo.DeclaredPackageName.StartsWith("com.example.repo", StringComparison.Ordinal)), Is.True);
             Assert.That(coordinator.DisplayedRepos.Where(repo => repo.ManifestState == PackageManifestState.Valid)
                 .All(repo => repo.DeclaredLicense == "MIT"), Is.True);
+        }
+
+        [TestCase(false)]
+        [TestCase(true)]
+        public void PackageManifestValidation_ExpectedMissingFileErrorsPreserveValidSibling(
+            bool missingRepositoryHasManifest)
+        {
+            var runner = new RecordingRunner(spec =>
+            {
+                string arguments = GetArguments(spec);
+                if (arguments.Contains("user/repos"))
+                    return Success(BuildRepositoryPageJson(2));
+
+                if (IsGraphQlCall(spec))
+                {
+                    return new CommandResult
+                    {
+                        ExitCode = 1,
+                        StdOut = BuildExpectedMissingFilePartialGraphQlResponse(
+                            new[] { "R_repo_1", "R_repo_0" },
+                            0,
+                            missingRepositoryHasManifest),
+                        StdErr = "gh: Could not resolve a queried package file.",
+                        TerminationConfirmed = true
+                    };
+                }
+
+                return Success(string.Empty);
+            });
+            CliCommandRunner.CurrentRunner = runner;
+            using var coordinator = new DiscoveryCoordinator();
+
+            coordinator.LoadInitialPage();
+            TickUntil(coordinator, () => coordinator.DisplayedRepos.Count == 2);
+            TickUntil(coordinator, () => !coordinator.IsValidatingPackageManifests);
+
+            GitHubRepo valid = coordinator.DisplayedRepos.Single(repo => repo.NodeId == "R_repo_0");
+            GitHubRepo missing = coordinator.DisplayedRepos.Single(repo => repo.NodeId == "R_repo_1");
+            Assert.That(valid.ManifestState, Is.EqualTo(PackageManifestState.Valid));
+            Assert.That(missing.ManifestState, Is.EqualTo(PackageManifestState.Missing));
+            Assert.That(coordinator.PackageManifestCheckCompleted, Is.EqualTo(2));
+            Assert.That(coordinator.PackageManifestUnavailableCount, Is.Zero);
+        }
+
+        [Test]
+        public void PackageManifestValidation_MixedExpectedAndUnexpectedErrorsFailClosed()
+        {
+            string[] nodeIds = Enumerable.Range(0, 50)
+                .Select(index => "R_repo_" + index)
+                .ToArray();
+            string response = BuildExpectedMissingFilePartialGraphQlResponse(
+                    nodeIds,
+                    1,
+                    true);
+            string unexpectedError = BuildMissingFileGraphQlError(
+                    1,
+                    "packageManifestMeta",
+                    "package.json.meta")
+                .Replace("\"NOT_FOUND\"", "\"FORBIDDEN\"");
+            response = response.Replace(
+                "\"errors\":[",
+                "\"errors\":[" + unexpectedError + ",");
+
+            AssertUnusableManifestResponseStopsQueuedWork(() => new CommandResult
+            {
+                ExitCode = 1,
+                StdOut = response,
+                StdErr = "permission denied",
+                TerminationConfirmed = true
+            });
+        }
+
+        [Test]
+        public void PackageManifestValidation_UnreportedNullFieldFailsClosed()
+        {
+            string[] nodeIds = Enumerable.Range(0, 50)
+                .Select(index => "R_repo_" + index)
+                .ToArray();
+            string response = BuildExpectedMissingFilePartialGraphQlResponse(
+                nodeIds,
+                1,
+                false);
+            string omittedError = BuildMissingFileGraphQlError(
+                1,
+                "packageManifest",
+                "package.json");
+            response = response.Replace(omittedError + ",", string.Empty);
+
+            AssertUnusableManifestResponseStopsQueuedWork(() => new CommandResult
+            {
+                ExitCode = 1,
+                StdOut = response,
+                StdErr = "gh: partial GraphQL response",
+                TerminationConfirmed = true
+            });
+        }
+
+        [Test]
+        public void PackageManifestValidation_ExpectedPartialResponseContinuesQueuedBatch()
+        {
+            int graphQlCallCount = 0;
+            var runner = new RecordingRunner(spec =>
+            {
+                string arguments = GetArguments(spec);
+                if (arguments.Contains("user/repos"))
+                    return Success(BuildRepositoryPageJson(51));
+
+                if (IsGraphQlCall(spec))
+                {
+                    string[] nodeIds = GetGraphQlNodeIds(spec);
+                    if (Interlocked.Increment(ref graphQlCallCount) == 1)
+                    {
+                        return new CommandResult
+                        {
+                            ExitCode = 1,
+                            StdOut = BuildExpectedMissingFilePartialGraphQlResponse(
+                                nodeIds,
+                                1,
+                                true),
+                            StdErr = "gh: Could not resolve file for path 'package.json.meta'.",
+                            TerminationConfirmed = true
+                        };
+                    }
+
+                    return Success(BuildManifestGraphQlResponse(nodeIds));
+                }
+
+                return Success(string.Empty);
+            });
+            CliCommandRunner.CurrentRunner = runner;
+            using var coordinator = new DiscoveryCoordinator();
+
+            coordinator.LoadInitialPage();
+            TickUntil(coordinator, () => coordinator.DisplayedRepos.Count == 51);
+            TickUntil(coordinator, () => !coordinator.IsValidatingPackageManifests);
+
+            Assert.That(graphQlCallCount, Is.EqualTo(2));
+            Assert.That(coordinator.PackageManifestCheckCompleted, Is.EqualTo(51));
+            Assert.That(coordinator.PackageManifestUnavailableCount, Is.Zero);
+            Assert.That(
+                coordinator.DisplayedRepos.Single(repo => repo.NodeId == "R_repo_1")
+                    .ManifestState,
+                Is.EqualTo(PackageManifestState.Missing));
+        }
+
+        [Test]
+        public void PackageManifestValidation_ExitOneWithoutExpectedErrorsFailsClosed()
+        {
+            string[] nodeIds = Enumerable.Range(0, 50)
+                .Select(index => "R_repo_" + index)
+                .ToArray();
+
+            AssertUnusableManifestResponseStopsQueuedWork(() => new CommandResult
+            {
+                ExitCode = 1,
+                StdOut = BuildManifestGraphQlResponse(nodeIds),
+                StdErr = "network unavailable",
+                TerminationConfirmed = true
+            });
+        }
+
+        [TestCase("timed-out")]
+        [TestCase("cancelled")]
+        [TestCase("authentication")]
+        [TestCase("unconfirmed")]
+        [TestCase("invalid-utf8")]
+        [TestCase("stderr-truncated")]
+        [TestCase("completion-warning")]
+        public void PackageManifestValidation_UnsafePartialResponseCompletionFailsClosed(
+            string scenario)
+        {
+            CommandResult result = BuildExpectedMissingFilePartialResult();
+            switch (scenario)
+            {
+                case "timed-out":
+                    result.TimedOut = true;
+                    break;
+                case "cancelled":
+                    result.Cancelled = true;
+                    break;
+                case "authentication":
+                    result.BlockedByGitHubAuthentication = true;
+                    break;
+                case "unconfirmed":
+                    result.TerminationConfirmed = false;
+                    break;
+                case "invalid-utf8":
+                    result.StdOutInvalidUtf8 = true;
+                    break;
+                case "stderr-truncated":
+                    result.StdErrTruncated = true;
+                    break;
+                case "completion-warning":
+                    result.CompletionWarning = "output reader did not finish";
+                    break;
+                default:
+                    Assert.Fail("Unknown completion scenario: " + scenario);
+                    break;
+            }
+
+            try
+            {
+                AssertUnusableManifestResponseStopsQueuedWork(() => result);
+            }
+            finally
+            {
+                if (string.Equals(scenario, "unconfirmed", StringComparison.Ordinal))
+                    CliCommandRunner.ResetGitHubCommandRestartRequirementForTests();
+            }
+        }
+
+        [TestCase(-1)]
+        [TestCase(2)]
+        [TestCase(4)]
+        public void PackageManifestValidation_NonGraphQlFailureExitCodesFailClosed(int exitCode)
+        {
+            CommandResult result = BuildExpectedMissingFilePartialResult();
+            result.ExitCode = exitCode;
+
+            AssertUnusableManifestResponseStopsQueuedWork(() => result);
         }
 
         [TestCase(40, "valid", true)]
@@ -1217,6 +1439,102 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
 
             return "{\"data\":{\"nodes\":[" + string.Join(",", nodes) +
                    "],\"rateLimit\":{\"cost\":1,\"remaining\":4999,\"resetAt\":\"2026-07-13T01:00:00Z\"}}}";
+        }
+
+        private static CommandResult BuildExpectedMissingFilePartialResult()
+        {
+            string[] nodeIds = Enumerable.Range(0, 50)
+                .Select(index => "R_repo_" + index)
+                .ToArray();
+            return new CommandResult
+            {
+                ExitCode = 1,
+                StdOut = BuildExpectedMissingFilePartialGraphQlResponse(
+                    nodeIds,
+                    1,
+                    true),
+                StdErr = "gh: Could not resolve file for path 'package.json.meta'.",
+                TerminationConfirmed = true
+            };
+        }
+
+        private static string BuildExpectedMissingFilePartialGraphQlResponse(
+            IEnumerable<string> responseNodeIds,
+            int missingNodeIndex,
+            bool missingRepositoryHasManifest)
+        {
+            string[] nodeIds = responseNodeIds.ToArray();
+            if (missingNodeIndex < 0 || missingNodeIndex >= nodeIds.Length)
+                throw new ArgumentOutOfRangeException(nameof(missingNodeIndex));
+
+            var nodes = new List<string>(nodeIds.Length);
+            var errors = new List<string>();
+            for (int responseIndex = 0; responseIndex < nodeIds.Length; responseIndex++)
+            {
+                string nodeId = nodeIds[responseIndex];
+                int separator = nodeId.LastIndexOf('_');
+                int repositoryIndex = separator >= 0 &&
+                                      int.TryParse(
+                                          nodeId.Substring(separator + 1),
+                                          out int parsed)
+                    ? parsed
+                    : responseIndex;
+                string manifest =
+                    $"{{\"name\":\"com.example.repo{repositoryIndex}\",\"version\":\"1.0.0\"}}";
+                string manifestEntry = BuildManifestTreeEntry(
+                    "package.json",
+                    (repositoryIndex + 1).ToString("x40"),
+                    manifest);
+
+                if (responseIndex != missingNodeIndex)
+                {
+                    nodes.Add(BuildManifestCommitNode(
+                        nodeId,
+                        manifestEntry,
+                        BuildManifestTreeEntry(
+                            "package.json.meta",
+                            new string('f', 40),
+                            ValidPackageManifestMeta)));
+                    continue;
+                }
+
+                nodes.Add(BuildManifestCommitNode(
+                    nodeId,
+                    missingRepositoryHasManifest ? manifestEntry : "null",
+                    "null"));
+                if (!missingRepositoryHasManifest)
+                {
+                    errors.Add(BuildMissingFileGraphQlError(
+                        responseIndex,
+                        "packageManifest",
+                        "package.json"));
+                }
+
+                errors.Add(BuildMissingFileGraphQlError(
+                    responseIndex,
+                    "packageManifestMeta",
+                    "package.json.meta"));
+            }
+
+            return "{\"data\":{\"nodes\":[" + string.Join(",", nodes) +
+                   "],\"rateLimit\":{\"remaining\":4999," +
+                   "\"resetAt\":\"2026-07-13T01:00:00Z\"}}," +
+                   "\"errors\":[" + string.Join(",", errors) + "]}";
+        }
+
+        private static string BuildMissingFileGraphQlError(
+            int nodeIndex,
+            string fieldName,
+            string fileName)
+        {
+            return "{" +
+                   "\"type\":\"NOT_FOUND\"," +
+                   "\"path\":[\"nodes\"," + nodeIndex +
+                   ",\"defaultBranchRef\",\"target\"," + QuoteJson(fieldName) + "]," +
+                   "\"locations\":[{\"line\":1,\"column\":1}]," +
+                   "\"message\":" +
+                   QuoteJson($"Could not resolve file for path '{fileName}'.") +
+                   "}";
         }
 
         private static string BuildManifestGraphQlResponseWithoutText(string nodeId)

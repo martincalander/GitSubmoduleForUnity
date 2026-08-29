@@ -1,6 +1,9 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Text;
+using Newtonsoft.Json;
+using Newtonsoft.Json.Linq;
 using UnityEngine;
 
 namespace MartinCalander.GitSubmoduleManager.Editor
@@ -13,6 +16,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         private const int MaximumPackageManifestBytes = 64 * 1024;
         private const int MaximumPackageManifestMetaBytes = 16 * 1024;
         private const int MaximumManifestCacheEntries = 2048;
+        private const int MaximumPackageManifestResponseDepth = 32;
         private static readonly UTF8Encoding StrictUtf8Encoding =
             new(false, true);
         private const string PackageManifestRequestBudgetExhaustedMessage =
@@ -27,7 +31,6 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         private sealed class PackageManifestGraphQlResponse
         {
             public PackageManifestGraphQlData data;
-            public PackageManifestGraphQlError[] errors;
         }
 
         [Serializable]
@@ -84,12 +87,6 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         {
             public int remaining;
             public string resetAt;
-        }
-
-        [Serializable]
-        private sealed class PackageManifestGraphQlError
-        {
-            public string message;
         }
 
         private sealed class PackageManifestBatch
@@ -522,7 +519,8 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 packageManifestBatchHandle = CliCommandRunner.RunAsync(
                     "gh",
                     arguments,
-                    GitUtility.ProjectRoot);
+                    GitUtility.ProjectRoot,
+                    requireStrictUtf8StdOut: true);
                 return true;
             }
 
@@ -531,16 +529,9 @@ namespace MartinCalander.GitSubmoduleManager.Editor
 
         private void ProcessPackageManifestBatch(PackageManifestBatch batch, CommandResult result)
         {
-            if (result == null || !result.IsSuccess)
+            if (result != null && result.StdOutTruncated)
             {
-                MarkManifestBatchUnavailable(batch, BuildPackageManifestFailureMessage(result));
-                StopCurrentManifestValidationAfterFailure(batch.Generation);
-                return;
-            }
-
-            if (result.StdOutTruncated)
-            {
-                if (batch.Repositories.Count > 1)
+                if (result.IsSuccess && batch.Repositories.Count > 1)
                 {
                     SplitAndPrependPackageManifestBatch(batch);
                     return;
@@ -550,29 +541,22 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                     batch,
                     "GitHub returned more package manifest data than can be safely inspected. " +
                     "Refresh to retry; unusually large manifests are not accepted by this filter.");
+                if (!result.IsSuccess)
+                    StopCurrentManifestValidationAfterFailure(batch.Generation);
                 return;
             }
 
-            PackageManifestGraphQlResponse response;
-            try
-            {
-                string json = (result.StdOut ?? string.Empty).Trim();
-                if (json.Length < 2 || json[0] != '{' || json[json.Length - 1] != '}')
-                    throw new FormatException("The response was not a JSON object.");
-
-                response = JsonUtility.FromJson<PackageManifestGraphQlResponse>(json);
-            }
-            catch (Exception exception)
-            {
-                MarkManifestBatchUnavailable(
+            if (!TryReadPackageManifestResponse(
                     batch,
-                    "GitHub returned malformed package validation data: " +
-                    GitHubUtility.SanitizeUiDiagnostic(exception.Message));
+                    result,
+                    out PackageManifestGraphQlResponse response,
+                    out string responseError))
+            {
+                MarkManifestBatchUnavailable(batch, responseError);
                 StopCurrentManifestValidationAfterFailure(batch.Generation);
                 return;
             }
 
-            bool hasGraphQlErrors = response?.errors != null && response.errors.Length > 0;
             var expectedByNodeId = new Dictionary<string, List<GitHubRepo>>(StringComparer.Ordinal);
             foreach (GitHubRepo repo in batch.Repositories)
             {
@@ -598,7 +582,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
 
                     foreach (GitHubRepo repo in matchingRepos)
                     {
-                        ApplyPackageManifestNode(repo, node, hasGraphQlErrors);
+                        ApplyPackageManifestNode(repo, node);
                         processed.Add(repo);
                     }
                 }
@@ -624,6 +608,359 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 MarkPendingManifestBatchesUnavailable(
                     batch.Generation,
                     "GitHub API rate limit reached; package validation was paused." + resetNotice);
+            }
+        }
+
+        private static bool TryReadPackageManifestResponse(
+            PackageManifestBatch batch,
+            CommandResult result,
+            out PackageManifestGraphQlResponse response,
+            out string error)
+        {
+            response = null;
+            error = string.Empty;
+
+            if (result == null)
+            {
+                error = BuildPackageManifestFailureMessage(null);
+                return false;
+            }
+
+            if (result.StdOutInvalidUtf8)
+            {
+                error =
+                    "GitHub returned package validation data that was not valid UTF-8. " +
+                    "Refresh the page to retry.";
+                return false;
+            }
+
+            if (result.TimedOut ||
+                result.Cancelled ||
+                !result.TerminationConfirmed ||
+                result.BlockedByGitHubAuthentication ||
+                result.StdOutTruncated ||
+                result.StdErrTruncated ||
+                !string.IsNullOrWhiteSpace(result.CompletionWarning))
+            {
+                error = BuildPackageManifestFailureMessage(result);
+                return false;
+            }
+
+            bool mayBeExpectedPartialResponse =
+                result.ExitCode == 1;
+            if (!result.IsSuccess && !mayBeExpectedPartialResponse)
+            {
+                error = BuildPackageManifestFailureMessage(result);
+                return false;
+            }
+
+            string json = (result.StdOut ?? string.Empty).Trim();
+            if (json.Length < 2 || json[0] != '{' || json[json.Length - 1] != '}')
+            {
+                error =
+                    "GitHub returned malformed package validation data: " +
+                    "the response was not a JSON object.";
+                return false;
+            }
+
+            JObject root;
+            try
+            {
+                using (var stringReader = new StringReader(json))
+                using (var jsonReader = new JsonTextReader(stringReader)
+                       {
+                           DateParseHandling = DateParseHandling.None,
+                           MaxDepth = MaximumPackageManifestResponseDepth
+                       })
+                {
+                    root = JObject.Load(
+                        jsonReader,
+                        new JsonLoadSettings
+                        {
+                            CommentHandling = CommentHandling.Ignore,
+                            DuplicatePropertyNameHandling =
+                                DuplicatePropertyNameHandling.Error,
+                            LineInfoHandling = LineInfoHandling.Ignore
+                        });
+
+                    while (jsonReader.Read())
+                    {
+                        if (jsonReader.TokenType != JsonToken.Comment)
+                        {
+                            error =
+                                "GitHub returned malformed package validation data: " +
+                                "the response contained content after its root object.";
+                            return false;
+                        }
+                    }
+                }
+            }
+            catch (Exception exception)
+            {
+                error =
+                    "GitHub returned malformed package validation data: " +
+                    GitHubUtility.SanitizeUiDiagnostic(exception.Message);
+                return false;
+            }
+
+            if (!(root?["data"] is JObject data) ||
+                !(data["nodes"] is JArray nodes) ||
+                nodes.Count != batch.Repositories.Count ||
+                !(data["rateLimit"] is JObject rateLimit) ||
+                rateLimit["remaining"]?.Type != JTokenType.Integer ||
+                !IsRepresentableNonNegativeInt(rateLimit["remaining"]) ||
+                rateLimit["resetAt"] == null ||
+                rateLimit["resetAt"].Type != JTokenType.String &&
+                rateLimit["resetAt"].Type != JTokenType.Null)
+            {
+                error =
+                    "GitHub returned malformed package validation data: " +
+                    "the response envelope was incomplete.";
+                return false;
+            }
+
+            if (!TryValidatePackageManifestErrors(
+                    root,
+                    nodes,
+                    batch,
+                    out bool hasExpectedMissingFileErrors))
+            {
+                error =
+                    "GitHub returned package validation errors that could not be " +
+                    "safely matched to missing root package files. Refresh the page to retry.";
+                return false;
+            }
+
+            if (!result.IsSuccess && !hasExpectedMissingFileErrors)
+            {
+                error = BuildPackageManifestFailureMessage(result);
+                return false;
+            }
+
+            try
+            {
+                response = JsonUtility.FromJson<PackageManifestGraphQlResponse>(
+                    root.ToString(Formatting.None));
+            }
+            catch (Exception exception)
+            {
+                error =
+                    "GitHub returned malformed package validation data: " +
+                    GitHubUtility.SanitizeUiDiagnostic(exception.Message);
+                return false;
+            }
+
+            if (response?.data?.nodes == null ||
+                response.data.nodes.Length != nodes.Count)
+            {
+                response = null;
+                error =
+                    "GitHub returned malformed package validation data: " +
+                    "the repository node array could not be decoded completely.";
+                return false;
+            }
+
+            return true;
+        }
+
+        private static bool TryValidatePackageManifestErrors(
+            JObject root,
+            JArray nodes,
+            PackageManifestBatch batch,
+            out bool hasExpectedMissingFileErrors)
+        {
+            hasExpectedMissingFileErrors = false;
+            JToken errorsToken = root?["errors"];
+            if (errorsToken == null || errorsToken.Type == JTokenType.Null)
+                return true;
+            if (!(errorsToken is JArray errors))
+                return false;
+            if (errors.Count == 0)
+                return true;
+            if (batch?.Repositories == null ||
+                nodes == null ||
+                nodes.Count != batch.Repositories.Count)
+            {
+                return false;
+            }
+
+            var reportedMissingFields = new HashSet<string>(StringComparer.Ordinal);
+            var returnedMissingFields = new HashSet<string>(StringComparer.Ordinal);
+            var expectedNodeIds = new HashSet<string>(StringComparer.Ordinal);
+            foreach (GitHubRepo repo in batch.Repositories)
+            {
+                if (repo == null ||
+                    string.IsNullOrEmpty(repo.NodeId) ||
+                    !expectedNodeIds.Add(repo.NodeId))
+                {
+                    return false;
+                }
+            }
+
+            var returnedNodeIds = new HashSet<string>(StringComparer.Ordinal);
+            for (int nodeIndex = 0; nodeIndex < nodes.Count; nodeIndex++)
+            {
+                if (!(nodes[nodeIndex] is JObject node) ||
+                    node["id"]?.Type != JTokenType.String)
+                {
+                    return false;
+                }
+
+                string nodeId = node["id"].Value<string>();
+                if (!expectedNodeIds.Contains(nodeId) ||
+                    !returnedNodeIds.Add(nodeId))
+                {
+                    return false;
+                }
+
+                JProperty defaultBranchProperty = node.Property(
+                    "defaultBranchRef",
+                    StringComparison.Ordinal);
+                if (defaultBranchProperty == null)
+                    return false;
+                if (defaultBranchProperty.Value.Type == JTokenType.Null)
+                    continue;
+                if (!(defaultBranchProperty.Value is JObject defaultBranchRef))
+                    return false;
+
+                JProperty targetProperty = defaultBranchRef.Property(
+                    "target",
+                    StringComparison.Ordinal);
+                if (targetProperty == null)
+                    return false;
+                if (targetProperty.Value.Type == JTokenType.Null)
+                    continue;
+                if (!(targetProperty.Value is JObject target))
+                    return false;
+                if (!IsExactJsonString(target["__typename"], "Commit"))
+                    continue;
+
+                foreach (string fieldName in new[]
+                         {
+                             "packageManifest",
+                             "packageManifestMeta"
+                         })
+                {
+                    JProperty field = target.Property(
+                        fieldName,
+                        StringComparison.Ordinal);
+                    if (field == null)
+                        return false;
+                    if (field.Value.Type == JTokenType.Null)
+                    {
+                        returnedMissingFields.Add(
+                            BuildMissingFieldKey(nodeIndex, fieldName));
+                    }
+                }
+            }
+
+            if (!returnedNodeIds.SetEquals(expectedNodeIds))
+                return false;
+
+            foreach (JToken errorToken in errors)
+            {
+                if (!(errorToken is JObject graphQlError) ||
+                    !IsExactJsonString(graphQlError["type"], "NOT_FOUND") ||
+                    !(graphQlError["path"] is JArray path) ||
+                    path.Count != 5 ||
+                    !IsExactJsonString(path[0], "nodes") ||
+                    path[1].Type != JTokenType.Integer ||
+                    !IsExactJsonString(path[2], "defaultBranchRef") ||
+                    !IsExactJsonString(path[3], "target"))
+                {
+                    return false;
+                }
+
+                long longNodeIndex;
+                try
+                {
+                    longNodeIndex = path[1].Value<long>();
+                }
+                catch
+                {
+                    return false;
+                }
+
+                if (longNodeIndex < 0 || longNodeIndex >= nodes.Count)
+                    return false;
+
+                int nodeIndex = (int)longNodeIndex;
+                string fieldName = path[4].Type == JTokenType.String
+                    ? path[4].Value<string>()
+                    : string.Empty;
+                string missingFileName;
+                if (string.Equals(
+                        fieldName,
+                        "packageManifest",
+                        StringComparison.Ordinal))
+                {
+                    missingFileName = "package.json";
+                }
+                else if (string.Equals(
+                             fieldName,
+                             "packageManifestMeta",
+                             StringComparison.Ordinal))
+                {
+                    missingFileName = "package.json.meta";
+                }
+                else
+                {
+                    return false;
+                }
+
+                if (!IsExactJsonString(
+                        graphQlError["message"],
+                        $"Could not resolve file for path '{missingFileName}'."))
+                {
+                    return false;
+                }
+
+                if (!(nodes[nodeIndex] is JObject node) ||
+                    !(node["defaultBranchRef"] is JObject defaultBranchRef) ||
+                    !(defaultBranchRef["target"] is JObject target) ||
+                    !IsExactJsonString(target["__typename"], "Commit") ||
+                    target.Property(fieldName, StringComparison.Ordinal)?.Value.Type !=
+                    JTokenType.Null)
+                {
+                    return false;
+                }
+
+                string key = BuildMissingFieldKey(nodeIndex, fieldName);
+                if (!reportedMissingFields.Add(key))
+                    return false;
+            }
+
+            if (!reportedMissingFields.SetEquals(returnedMissingFields))
+                return false;
+
+            hasExpectedMissingFileErrors = true;
+            return true;
+        }
+
+        private static bool IsExactJsonString(JToken token, string expected)
+        {
+            return token?.Type == JTokenType.String &&
+                   string.Equals(
+                       token.Value<string>(),
+                       expected,
+                       StringComparison.Ordinal);
+        }
+
+        private static string BuildMissingFieldKey(int nodeIndex, string fieldName)
+        {
+            return nodeIndex + ":" + fieldName;
+        }
+
+        private static bool IsRepresentableNonNegativeInt(JToken token)
+        {
+            try
+            {
+                long value = token.Value<long>();
+                return value >= 0 && value <= int.MaxValue;
+            }
+            catch
+            {
+                return false;
             }
         }
 
@@ -657,8 +994,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
 
         private void ApplyPackageManifestNode(
             GitHubRepo repo,
-            PackageManifestNode node,
-            bool responseHasErrors)
+            PackageManifestNode node)
         {
             PackageManifestCommit commit = node.defaultBranchRef?.target;
             // JsonUtility materializes default nested objects for JSON null on
@@ -669,10 +1005,8 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             {
                 SetManifestState(
                     repo,
-                    responseHasErrors ? PackageManifestState.Unavailable : PackageManifestState.Missing,
-                    responseHasErrors
-                        ? "GitHub could not inspect the repository's default branch. Refresh to retry."
-                        : "The repository has no default-branch commit to inspect.");
+                    PackageManifestState.Missing,
+                    "The repository has no default-branch commit to inspect.");
                 return;
             }
 
@@ -693,7 +1027,6 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                     commit.packageManifest,
                     "package.json",
                     MaximumPackageManifestBytes,
-                    responseHasErrors,
                     out PackageManifestBlob manifestBlob))
             {
                 return;
@@ -704,7 +1037,6 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                     commit.packageManifestMeta,
                     "package.json.meta",
                     MaximumPackageManifestMetaBytes,
-                    responseHasErrors,
                     out PackageManifestBlob metaBlob))
             {
                 return;
@@ -814,7 +1146,6 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             PackageManifestTreeEntry entry,
             string fileName,
             int maximumBytes,
-            bool responseHasErrors,
             out PackageManifestBlob blob)
         {
             blob = null;
@@ -829,10 +1160,8 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             {
                 SetManifestState(
                     repo,
-                    responseHasErrors ? PackageManifestState.Unavailable : PackageManifestState.Missing,
-                    responseHasErrors
-                        ? $"GitHub could not determine whether {fileName} exists. Refresh to retry."
-                        : $"No {fileName} was found at the repository root.");
+                    PackageManifestState.Missing,
+                    $"No {fileName} was found at the repository root.");
                 return false;
             }
 
