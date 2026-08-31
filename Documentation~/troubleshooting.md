@@ -153,6 +153,23 @@ git status
 git submodule status
 ```
 
+## Removal Is Still Updating Package Manager
+
+After you choose **Remove**, let the operation finish. The manager waits for an
+active package scan, presents confirmation when required, removes managed
+submodules, completes every selected ordinary package removal, and asks Unity to
+resolve the package graph as needed. The confirmed handoff continues across
+script reload. Do not click **Remove** again or manually
+choose **Refresh** or **Resolve**.
+
+The manager retries a failed or reload-interrupted ordinary removal only when
+the package still has the exact direct dependency value captured from
+`Packages/manifest.json`. Automatic recovery is bounded. If a terminal
+diagnostic appears, the retries either failed or a manifest dependency changed,
+so another automatic attempt would be unsafe. Inspect the named package,
+`Packages/manifest.json`, the Package Manager diagnostics, and `git status`
+before starting a new operation.
+
 ## Unity Reports an Interrupted Repository Operation
 
 Do not dismiss the recovery warning until you have inspected `git status`,

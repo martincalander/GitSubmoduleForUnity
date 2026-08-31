@@ -175,7 +175,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                 uninstall.CancelText,
                 Is.EqualTo(PackageManagerSubmoduleConfirmationPolicy.CancelText));
             Assert.That(uninstall.Message,
-                Does.Contain($"Uninstall {PackageName} at {PackagePath}"));
+                Does.Contain($"Remove {PackageName} at {PackagePath}"));
             Assert.That(uninstall.Message, Does.Contain("tracked registration"));
 
             Assert.That(
@@ -225,7 +225,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                 uninstall.CancelText,
                 Is.EqualTo(PackageManagerSubmoduleConfirmationPolicy.KeepPackageText));
             Assert.That(uninstall.Message,
-                Does.Contain($"Uninstall {PackageName} at {PackagePath} anyway?"));
+                Does.Contain($"Remove {PackageName} at {PackagePath} anyway?"));
 
             Assert.That(
                 convert.Title,
@@ -289,6 +289,122 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                 Does.Contain("the selected package path"));
         }
 
+        [Test]
+        public void CleanSubmoduleBatch_SuppressionSkipsOnlyAllSubmodulePrompt()
+        {
+            IReadOnlyList<PackageManagerSubmoduleInfo> infos = CreateBatchInfos();
+            IReadOnlyList<SubmoduleRemovalAssessment> assessments =
+                CreateBatchAssessments(cleanSecond: true);
+
+            PackageManagerSubmoduleBatchConfirmationDecision decision =
+                PackageManagerSubmoduleConfirmationPolicy.EvaluateBatchRemoval(
+                    infos,
+                    assessments,
+                    System.Array.Empty<string>(),
+                    false,
+                    true);
+
+            Assert.That(decision.IsBlocked, Is.False);
+            Assert.That(decision.CanProceedWithoutPrompt, Is.True);
+            Assert.That(decision.DiscardLocalWork, Is.EqualTo(new[] { false, false }));
+            Assert.That(decision.Message, Does.Contain("2 Git submodules"));
+        }
+
+        [Test]
+        public void MixedBatch_AlwaysUsesOneRoutinePromptAndExplainsBothPaths()
+        {
+            PackageManagerSubmoduleBatchConfirmationDecision decision =
+                PackageManagerSubmoduleConfirmationPolicy.EvaluateBatchRemoval(
+                    CreateBatchInfos(),
+                    CreateBatchAssessments(cleanSecond: true),
+                    new[]
+                    {
+                        "com.example.registry-one",
+                        "com.example.registry-two"
+                    },
+                    false,
+                    true);
+
+            Assert.That(
+                decision.Requirement,
+                Is.EqualTo(
+                    PackageManagerSubmoduleConfirmationRequirement.RoutinePrompt));
+            Assert.That(decision.Message, Does.Contain("Remove 4 selected packages"));
+            Assert.That(decision.Message, Does.Contain("2 Git submodules"));
+            Assert.That(decision.Message, Does.Contain("2 other packages"));
+            Assert.That(decision.Message, Does.Contain("Unity Package Manager"));
+            Assert.That(decision.Message, Does.Contain("com.example.registry-one"));
+            Assert.That(decision.Message, Does.Contain("com.example.registry-two"));
+        }
+
+        [Test]
+        public void DirtyBatch_RequiresOneDiscardPromptBoundPerSubmodule()
+        {
+            PackageManagerSubmoduleBatchConfirmationDecision decision =
+                PackageManagerSubmoduleConfirmationPolicy.EvaluateBatchRemoval(
+                    CreateBatchInfos(),
+                    CreateBatchAssessments(cleanSecond: false),
+                    new[] { GitPackageConversionService.ManagerPackageName },
+                    true,
+                    true);
+
+            Assert.That(
+                decision.Requirement,
+                Is.EqualTo(
+                    PackageManagerSubmoduleConfirmationRequirement.DiscardPrompt));
+            Assert.That(decision.DiscardLocalWork, Is.EqualTo(new[] { false, true }));
+            Assert.That(decision.Message, Does.Contain("com.example.second"));
+            Assert.That(decision.Message, Does.Contain("would discard"));
+            Assert.That(decision.Message, Does.Contain("Removing Git Submodule Manager"));
+            Assert.That(decision.Message, Does.Contain("com.example.tool"));
+            Assert.That(decision.Message, Does.Contain("com.example.second"));
+        }
+
+        [Test]
+        public void BatchAssessmentCountMismatch_BlocksEverySelectedPackage()
+        {
+            PackageManagerSubmoduleBatchConfirmationDecision decision =
+                PackageManagerSubmoduleConfirmationPolicy.EvaluateBatchRemoval(
+                    CreateBatchInfos(),
+                    new[] { CreateCleanAssessment() },
+                    new[] { "com.example.registry" },
+                    false,
+                    false);
+
+            Assert.That(decision.IsBlocked, Is.True);
+            Assert.That(decision.Message, Does.Contain("must be inspected"));
+        }
+
+        [Test]
+        public void ManagerSubmoduleAndOrdinaryPackage_BlocksBeforeMutation()
+        {
+            var manager = new PackageManagerSubmoduleInfo(
+                GitPackageConversionService.ManagerPackageName,
+                "Packages/" + GitPackageConversionService.ManagerPackageName,
+                "/project/Packages/" +
+                GitPackageConversionService.ManagerPackageName,
+                "https://github.com/example/manager.git",
+                true);
+            var assessment = new SubmoduleRemovalAssessment
+            {
+                Path = manager.PackagePath,
+                IsInitialized = true,
+                HeadCommit = new string('a', 40)
+            };
+
+            PackageManagerSubmoduleBatchConfirmationDecision decision =
+                PackageManagerSubmoduleConfirmationPolicy.EvaluateBatchRemoval(
+                    new[] { manager },
+                    new[] { assessment },
+                    new[] { "com.example.registry" },
+                    true,
+                    false);
+
+            Assert.That(decision.IsBlocked, Is.True);
+            Assert.That(decision.Message, Does.Contain("separately"));
+            Assert.That(decision.Message, Does.Contain("ordinary Unity packages"));
+        }
+
         private static PackageManagerSubmoduleConfirmationDecision Evaluate(
             PackageManagerSubmoduleDestructiveAction action,
             SubmoduleRemovalAssessment assessment,
@@ -309,6 +425,42 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                 Path = PackagePath,
                 IsInitialized = true,
                 HeadCommit = new string('a', 40)
+            };
+        }
+
+        private static IReadOnlyList<PackageManagerSubmoduleInfo> CreateBatchInfos()
+        {
+            return new[]
+            {
+                new PackageManagerSubmoduleInfo(
+                    PackageName,
+                    PackagePath,
+                    "/project/" + PackagePath,
+                    "https://github.com/example/tool.git",
+                    true),
+                new PackageManagerSubmoduleInfo(
+                    "com.example.second",
+                    "Packages/com.example.second",
+                    "/project/Packages/com.example.second",
+                    "https://github.com/example/second.git",
+                    true)
+            };
+        }
+
+        private static IReadOnlyList<SubmoduleRemovalAssessment>
+            CreateBatchAssessments(bool cleanSecond)
+        {
+            return new[]
+            {
+                CreateCleanAssessment(),
+                new SubmoduleRemovalAssessment
+                {
+                    Path = "Packages/com.example.second",
+                    IsInitialized = true,
+                    HeadCommit = new string('b', 40),
+                    HasWorkingTreeChanges = !cleanSecond,
+                    WorktreeStatus = cleanSecond ? string.Empty : "? local.txt\n"
+                }
             };
         }
 

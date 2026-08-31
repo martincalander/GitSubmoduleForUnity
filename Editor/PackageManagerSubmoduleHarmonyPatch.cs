@@ -39,6 +39,8 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         internal const string LegacyCreateTagLabelMethodName = "CreateTagLabel";
         internal const string TriggerActionImplementationMethodName =
             "TriggerActionImplementation";
+        internal const string IsVisibleMethodName = "IsVisible";
+        internal const string IsInProgressMethodName = "IsInProgress";
         internal const string RemoveEmbeddedMethodName = "RemoveEmbedded";
         internal const string SkipRemoveConfirmationPropertyName =
             "skipRemoveConfirmation";
@@ -72,6 +74,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
 
         private static Harmony harmony;
         private static bool shuttingDown;
+        private static bool nativeRemoveOverrideReady;
         private static string lastPatchError = string.Empty;
         private static readonly ConditionalWeakTable<VisualElement, DeferredTagState>
             DeferredTags = new ConditionalWeakTable<VisualElement, DeferredTagState>();
@@ -100,6 +103,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 !PackageManagerUnityVersionSupport.IsCurrentVersionSupported)
                 return false;
 
+            nativeRemoveOverrideReady = false;
             try
             {
                 harmony = harmony ?? new Harmony(HarmonyId);
@@ -156,6 +160,49 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                         removeEmbeddedTarget,
                         GetPackageOperationDispatcherRemoveEmbeddedPrefixMethod());
                 }
+
+                MethodInfo removeActionVisibilityTarget =
+                    GetRemoveActionVisibilityTargetMethod();
+                MethodInfo removeCustomActionVisibilityTarget =
+                    GetRemoveCustomActionVisibilityTargetMethod();
+                MethodInfo removeActionProgressTarget =
+                    GetRemoveActionProgressTargetMethod();
+                MethodInfo removeCustomActionProgressTarget =
+                    GetRemoveCustomActionProgressTargetMethod();
+                if (removeActionVisibilityTarget != null)
+                {
+                    PatchPostfixIfNeeded(
+                        removeActionVisibilityTarget,
+                        GetRemoveActionVisibilityPostfixMethod());
+                }
+                if (removeCustomActionVisibilityTarget != null)
+                {
+                    PatchPostfixIfNeeded(
+                        removeCustomActionVisibilityTarget,
+                        GetRemoveCustomActionVisibilityPostfixMethod());
+                }
+                if (removeActionProgressTarget != null)
+                {
+                    PatchPostfixIfNeeded(
+                        removeActionProgressTarget,
+                        GetRemoveActionProgressPostfixMethod());
+                }
+                if (removeCustomActionProgressTarget != null)
+                {
+                    PatchPostfixIfNeeded(
+                        removeCustomActionProgressTarget,
+                        GetRemoveActionProgressPostfixMethod());
+                }
+
+                nativeRemoveOverrideReady =
+                    IsRemoveCustomActionPatchApplied() &&
+                    IsRemoveActionPatchApplied() &&
+                    IsRemoveActionCollectionPatchApplied() &&
+                    IsRemoveActionVisibilityPatchApplied() &&
+                    IsRemoveCustomActionVisibilityPatchApplied() &&
+                    IsRemoveActionProgressPatchApplied() &&
+                    IsRemoveCustomActionProgressPatchApplied() &&
+                    IsPackageOperationDispatcherRemoveEmbeddedPatchApplied();
 
                 bool tagPatchApplied = IsAnyTagPatchApplied();
                 if (tagPatchApplied)
@@ -298,6 +345,58 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 packageInterfaceType);
         }
 
+        internal static MethodInfo GetRemoveActionVisibilityTargetMethod()
+        {
+            return FindDeclaredPackageVersionBoolMethod(
+                FindLoadedType(RemoveActionTypeName),
+                IsVisibleMethodName);
+        }
+
+        internal static MethodInfo GetRemoveCustomActionVisibilityTargetMethod()
+        {
+            return FindDeclaredPackageVersionBoolMethod(
+                FindLoadedType(RemoveCustomActionTypeName),
+                IsVisibleMethodName);
+        }
+
+        internal static MethodInfo GetRemoveActionProgressTargetMethod()
+        {
+            return FindDeclaredPackageVersionBoolMethod(
+                FindLoadedType(RemoveActionTypeName),
+                IsInProgressMethodName);
+        }
+
+        internal static MethodInfo GetRemoveCustomActionProgressTargetMethod()
+        {
+            return FindDeclaredPackageVersionBoolMethod(
+                FindLoadedType(RemoveCustomActionTypeName),
+                IsInProgressMethodName);
+        }
+
+        internal static MethodInfo FindDeclaredPackageVersionBoolMethod(
+            Type actionType,
+            string methodName)
+        {
+            if (actionType == null || string.IsNullOrWhiteSpace(methodName))
+                return null;
+
+            foreach (MethodInfo method in actionType.GetMethods(
+                         AnyInstance | BindingFlags.DeclaredOnly))
+            {
+                ParameterInfo[] parameters = method.GetParameters();
+                if (method.Name == methodName &&
+                    !method.IsStatic &&
+                    method.ReturnType == typeof(bool) &&
+                    parameters.Length == 1 &&
+                    IsPackageVersionParameter(parameters[0]))
+                {
+                    return method;
+                }
+            }
+
+            return null;
+        }
+
         internal static MethodInfo FindRemoveActionCollectionTargetMethod(
             Type actionType,
             Type packageInterfaceType)
@@ -428,6 +527,27 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 AnyStatic);
         }
 
+        internal static MethodInfo GetRemoveActionVisibilityPostfixMethod()
+        {
+            return typeof(PackageManagerSubmoduleHarmonyPatch).GetMethod(
+                nameof(RemoveActionVisibilityPostfix),
+                AnyStatic);
+        }
+
+        internal static MethodInfo GetRemoveCustomActionVisibilityPostfixMethod()
+        {
+            return typeof(PackageManagerSubmoduleHarmonyPatch).GetMethod(
+                nameof(RemoveCustomActionVisibilityPostfix),
+                AnyStatic);
+        }
+
+        internal static MethodInfo GetRemoveActionProgressPostfixMethod()
+        {
+            return typeof(PackageManagerSubmoduleHarmonyPatch).GetMethod(
+                nameof(RemoveActionProgressPostfix),
+                AnyStatic);
+        }
+
         internal static MethodInfo
             GetPackageOperationDispatcherRemoveEmbeddedPrefixMethod()
         {
@@ -492,6 +612,37 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 GetRemoveActionCollectionTargetMethod(),
                 GetRemoveActionCollectionPrefixMethod());
         }
+
+        internal static bool IsRemoveActionVisibilityPatchApplied()
+        {
+            return IsPatchApplied(
+                GetRemoveActionVisibilityTargetMethod(),
+                GetRemoveActionVisibilityPostfixMethod());
+        }
+
+        internal static bool IsRemoveCustomActionVisibilityPatchApplied()
+        {
+            return IsPatchApplied(
+                GetRemoveCustomActionVisibilityTargetMethod(),
+                GetRemoveCustomActionVisibilityPostfixMethod());
+        }
+
+        internal static bool IsRemoveActionProgressPatchApplied()
+        {
+            return IsPatchApplied(
+                GetRemoveActionProgressTargetMethod(),
+                GetRemoveActionProgressPostfixMethod());
+        }
+
+        internal static bool IsRemoveCustomActionProgressPatchApplied()
+        {
+            return IsPatchApplied(
+                GetRemoveCustomActionProgressTargetMethod(),
+                GetRemoveActionProgressPostfixMethod());
+        }
+
+        internal static bool NativeRemoveOverrideReady =>
+            nativeRemoveOverrideReady;
 
         internal static bool
             IsPackageOperationDispatcherRemoveEmbeddedPatchApplied()
@@ -1322,11 +1473,111 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             }
         }
 
+        private static void RemoveActionVisibilityPostfix(
+            object __0,
+            ref bool __result)
+        {
+            if (!nativeRemoveOverrideReady)
+                return;
+
+            try
+            {
+                bool isSubmodule =
+                    PackageManagerSubmodulePresentation.TryGetPresentation(
+                        __0,
+                        out _);
+                __result = ResolveNativeRemoveVisibility(
+                    __result,
+                    isSubmodule,
+                    true,
+                    nativeRemoveOverrideReady);
+            }
+            catch
+            {
+                // Preserve Unity's original visibility when classification drifts.
+            }
+        }
+
+        private static void RemoveCustomActionVisibilityPostfix(
+            object __0,
+            ref bool __result)
+        {
+            if (!nativeRemoveOverrideReady)
+                return;
+
+            try
+            {
+                bool isSubmodule =
+                    PackageManagerSubmodulePresentation.TryGetPresentation(
+                        __0,
+                        out _);
+                __result = ResolveNativeRemoveVisibility(
+                    __result,
+                    isSubmodule,
+                    false,
+                    nativeRemoveOverrideReady);
+            }
+            catch
+            {
+                // Preserve Unity's original visibility when classification drifts.
+            }
+        }
+
+        private static void RemoveActionProgressPostfix(
+            object __0,
+            ref bool __result)
+        {
+            if (__result || !nativeRemoveOverrideReady)
+                return;
+
+            try
+            {
+                __result = PackageManagerGitHubNativeActions
+                    .IsNativeRemoveInProgress(__0);
+            }
+            catch
+            {
+                // Preserve Unity's original progress state on contract drift.
+            }
+        }
+
+        internal static bool ResolveNativeRemoveVisibility(
+            bool nativeResult,
+            bool isVerifiedSubmodule,
+            bool isRemoveAction,
+            bool overrideReady)
+        {
+            if (!overrideReady || !isVerifiedSubmodule)
+                return nativeResult;
+            return isRemoveAction;
+        }
+
         private static bool RemoveActionPrefix(
             object __instance,
             object __0,
             ref bool __result)
         {
+            try
+            {
+                if (PackageManagerGitHubNativeActions.TryHandleRemoveAction(
+                        __instance,
+                        __0,
+                        out bool actionResult))
+                {
+                    __result = actionResult;
+                    return false;
+                }
+            }
+            catch
+            {
+                if (PackageManagerGitHubNativeActions
+                        .ShouldFailClosedNativeRemoveSelection(__0, false))
+                {
+                    __result = false;
+                    return false;
+                }
+            }
+
             return ShouldRunReadOnlySelfRemoval(
                 __instance,
                 __0,
@@ -1340,6 +1591,28 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             object __0,
             ref bool __result)
         {
+            try
+            {
+                if (PackageManagerGitHubNativeActions
+                        .TryHandleRemoveActionCollection(
+                            __instance,
+                            __0,
+                            out bool actionResult))
+                {
+                    __result = actionResult;
+                    return false;
+                }
+            }
+            catch
+            {
+                if (PackageManagerGitHubNativeActions
+                        .ShouldFailClosedNativeRemoveSelection(__0, true))
+                {
+                    __result = false;
+                    return false;
+                }
+            }
+
             return ShouldRunReadOnlySelfRemoval(
                 __instance,
                 __0,
@@ -1349,7 +1622,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         }
 
         /// <summary>
-        /// Keeps Unity's own confirmation and uninstall flow authoritative. A
+        /// Keeps Unity's own confirmation and removal flow authoritative. A
         /// dedicated, non-suppressible warning is used only when the selected
         /// action contains this manager and Unity's corresponding warning has
         /// been disabled or can no longer be verified through reflection.
@@ -1538,8 +1811,8 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             catch
             {
                 // The interactive RemoveCustomAction prefix handles loading and
-                // diagnostics. This lower-level guard blocks only a proven
-                // snapshot match and otherwise preserves Unity's native behavior.
+                // diagnostics. Contract drift remains fail-open here so this
+                // independent guard cannot affect unrelated Package Manager pages.
                 return true;
             }
         }
@@ -1558,6 +1831,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         private static void OnBeforeAssemblyReload()
         {
             shuttingDown = true;
+            nativeRemoveOverrideReady = false;
             PackageManagerSubmoduleSnapshot.SnapshotChanged -= OnSnapshotChanged;
             AssemblyReloadEvents.beforeAssemblyReload -= OnBeforeAssemblyReload;
 

@@ -168,6 +168,96 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                 Is.EqualTo(expected));
         }
 
+        [TestCase(false, false, false, false)]
+        [TestCase(false, false, true, true)]
+        [TestCase(false, true, true, false)]
+        [TestCase(true, true, false, true)]
+        public void NativeRemovePrompt_CancelAndBatchModeFailClosed(
+            bool canProceedWithoutPrompt,
+            bool isBatchMode,
+            bool promptAccepted,
+            bool expected)
+        {
+            Assert.That(
+                PackageManagerGitHubNativeActions
+                    .ShouldProceedWithNativeBatchRemovalPrompt(
+                        canProceedWithoutPrompt,
+                        isBatchMode,
+                        promptAccepted),
+                Is.EqualTo(expected));
+        }
+
+        [Test]
+        public void NativeRemoveHandoff_StartsOnlyAfterSuccessfulGitBatch()
+        {
+            Assert.That(
+                PackageManagerGitHubNativeActions
+                    .ShouldPrepareNativeRemoveHandoff(
+                        true,
+                        GitOperationCompletionOutcome.Succeeded,
+                        1),
+                Is.True);
+            Assert.That(
+                PackageManagerGitHubNativeActions
+                    .ShouldPrepareNativeRemoveHandoff(
+                        false,
+                        GitOperationCompletionOutcome.FailedButRolledBack,
+                        1),
+                Is.False,
+                "A failed batch must leave ordinary packages untouched.");
+            Assert.That(
+                PackageManagerGitHubNativeActions
+                    .ShouldPrepareNativeRemoveHandoff(
+                        true,
+                        GitOperationCompletionOutcome.Succeeded,
+                        0),
+                Is.False);
+        }
+
+        [Test]
+        public void NativeRemoveBatch_PartialSafeFailurePreparesPackageResolution()
+        {
+            Assert.That(
+                GitSubmoduleRemoveService.ShouldPreparePartialBatchResolution(
+                    GitOperationCompletionOutcome.FailedButRolledBack,
+                    true,
+                    1,
+                    2),
+                Is.True);
+            Assert.That(
+                GitSubmoduleRemoveService.ShouldPreparePartialBatchResolution(
+                    GitOperationCompletionOutcome.FailedUnsafe,
+                    true,
+                    1,
+                    2),
+                Is.False);
+            Assert.That(
+                GitSubmoduleRemoveService.ShouldPreparePartialBatchResolution(
+                    GitOperationCompletionOutcome.FailedButRolledBack,
+                    false,
+                    1,
+                    2),
+                Is.False);
+            Assert.That(
+                GitSubmoduleRemoveService.ShouldPreparePartialBatchResolution(
+                    GitOperationCompletionOutcome.Succeeded,
+                    true,
+                    2,
+                    2),
+                Is.False);
+            Assert.That(
+                GitSubmoduleRemoveService.ShouldCancelPartialBatchResolution(
+                    true,
+                    GitOperationCompletionOutcome.FailedUnsafe),
+                Is.True,
+                "An unlock failure must cancel the pre-unlock resolution state.");
+            Assert.That(
+                GitSubmoduleRemoveService.ShouldCancelPartialBatchResolution(
+                    true,
+                    GitOperationCompletionOutcome.FailedButRolledBack),
+                Is.False);
+        }
+
         [Test]
         public void ExactSingleSelection_ResolvesOnlyMatchingDatabasePackage()
         {
@@ -253,6 +343,393 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                     out _),
                 Is.False,
                 "Reflection or database failures must remain contained.");
+        }
+
+        [Test]
+        public void NativeRemoveClassification_AllSubmodulesBuildsExactManagedPlan()
+        {
+            PackageManagerSubmoduleInfo firstInfo = CreateNativeRemoveSubmodule(
+                "com.example.first");
+            PackageManagerSubmoduleInfo secondInfo = CreateNativeRemoveSubmodule(
+                "com.example.second");
+            var first = new NativeRemovePackageFixture(
+                firstInfo.PackageName,
+                firstInfo);
+            var second = new NativeRemovePackageFixture(
+                secondInfo.PackageName,
+                secondInfo);
+
+            PackageManagerNativeRemoveSelectionRouting routing =
+                ClassifyNativeRemoveSelection(
+                    new[] { first, second },
+                    snapshotReady: true,
+                    out PackageManagerGitHubNativeActions.NativeRemovePlan plan,
+                    out string error);
+
+            Assert.That(
+                routing,
+                Is.EqualTo(PackageManagerNativeRemoveSelectionRouting.Managed));
+            Assert.That(plan.Submodules, Is.EqualTo(new[] { firstInfo, secondInfo }));
+            Assert.That(plan.OrdinaryPackageNames, Is.Empty);
+            Assert.That(
+                plan.AllPackageNames,
+                Is.EqualTo(new[] { firstInfo.PackageName, secondInfo.PackageName }));
+            Assert.That(error, Is.Empty);
+        }
+
+        [Test]
+        public void NativeRemoveClassification_MixedSelectionBuildsOneManagedPlan()
+        {
+            PackageManagerSubmoduleInfo submoduleInfo =
+                CreateNativeRemoveSubmodule("com.example.submodule");
+            var submodule = new NativeRemovePackageFixture(
+                submoduleInfo.PackageName,
+                submoduleInfo);
+            var ordinary = new NativeRemovePackageFixture("com.example.ordinary");
+
+            PackageManagerNativeRemoveSelectionRouting routing =
+                ClassifyNativeRemoveSelection(
+                    new[] { submodule, ordinary },
+                    snapshotReady: true,
+                    out PackageManagerGitHubNativeActions.NativeRemovePlan plan,
+                    out string error);
+
+            Assert.That(
+                routing,
+                Is.EqualTo(PackageManagerNativeRemoveSelectionRouting.Managed));
+            Assert.That(plan.Submodules, Is.EqualTo(new[] { submoduleInfo }));
+            Assert.That(
+                plan.OrdinaryPackageNames,
+                Is.EqualTo(new[] { ordinary.PackageName }));
+            Assert.That(
+                plan.AllPackageNames,
+                Is.EqualTo(new[]
+                {
+                    submoduleInfo.PackageName,
+                    ordinary.PackageName
+                }));
+            Assert.That(error, Is.Empty);
+        }
+
+        [Test]
+        public void NativeRemoveClassification_OrdinaryOnlyRemainsUnityOwned()
+        {
+            var first = new NativeRemovePackageFixture("com.example.first");
+            var second = new NativeRemovePackageFixture("com.example.second");
+
+            PackageManagerNativeRemoveSelectionRouting routing =
+                ClassifyNativeRemoveSelection(
+                    new[] { first, second },
+                    snapshotReady: true,
+                    out PackageManagerGitHubNativeActions.NativeRemovePlan plan,
+                    out string error);
+
+            Assert.That(
+                routing,
+                Is.EqualTo(PackageManagerNativeRemoveSelectionRouting.UnityOwned));
+            Assert.That(plan.Submodules, Is.Empty);
+            Assert.That(
+                plan.OrdinaryPackageNames,
+                Is.EqualTo(new[] { first.PackageName, second.PackageName }));
+            Assert.That(
+                plan.AllPackageNames,
+                Is.EqualTo(new[] { first.PackageName, second.PackageName }));
+            Assert.That(error, Is.Empty);
+        }
+
+        [Test]
+        public void NativeRemoveClassification_UnreadyDirectCandidateFailsClosed()
+        {
+            var candidate = new NativeRemovePackageFixture(
+                "com.example.candidate",
+                isDirectInstalledPackagePath: true);
+
+            PackageManagerNativeRemoveSelectionRouting routing =
+                ClassifyNativeRemoveSelection(
+                    new[] { candidate },
+                    snapshotReady: false,
+                    out PackageManagerGitHubNativeActions.NativeRemovePlan plan,
+                    out string error);
+
+            Assert.That(
+                routing,
+                Is.EqualTo(PackageManagerNativeRemoveSelectionRouting.Blocked));
+            Assert.That(plan.Submodules, Is.Empty);
+            Assert.That(plan.OrdinaryPackageNames, Is.Empty);
+            Assert.That(
+                plan.AllPackageNames,
+                Is.EqualTo(new[] { candidate.PackageName }));
+            Assert.That(plan.AllPackageVersions, Is.EqualTo(new[] { candidate.Version }));
+            Assert.That(plan.AwaitingSnapshotClassification, Is.True);
+            Assert.That(error, Does.Contain("still loading"));
+        }
+
+        [Test]
+        public void NativeRemoveClassification_RetainedSubmoduleWaitsForCurrentSuccess()
+        {
+            PackageManagerSubmoduleInfo retainedInfo =
+                CreateNativeRemoveSubmodule("com.example.retained");
+            var retained = new NativeRemovePackageFixture(
+                retainedInfo.PackageName,
+                retainedInfo,
+                isDirectInstalledPackagePath: true);
+
+            PackageManagerNativeRemoveSelectionRouting routing =
+                ClassifyNativeRemoveSelection(
+                    new[] { retained },
+                    snapshotReady: false,
+                    out PackageManagerGitHubNativeActions.NativeRemovePlan plan,
+                    out string error);
+
+            Assert.That(
+                routing,
+                Is.EqualTo(PackageManagerNativeRemoveSelectionRouting.Blocked));
+            Assert.That(plan.Submodules, Is.Empty);
+            Assert.That(plan.OrdinaryPackageNames, Is.Empty);
+            Assert.That(plan.AwaitingSnapshotClassification, Is.True);
+            Assert.That(error, Does.Contain("still loading"));
+        }
+
+        [TestCase("com.example.package", true, true, true)]
+        [TestCase("com.example.package", false, true, false)]
+        [TestCase("com.example.package", false, false, true)]
+        [TestCase("invalid package", true, false, false)]
+        public void NativeEmbeddedRemovalGuard_RequiresCurrentSuccessfulSnapshot(
+            string packageName,
+            bool foundSubmodule,
+            bool snapshotReady,
+            bool expected)
+        {
+            Assert.That(
+                PackageManagerGitHubNativeActions
+                    .ShouldBlockNativeEmbeddedRemovalState(
+                        packageName,
+                        foundSubmodule,
+                        snapshotReady),
+                Is.EqualTo(expected));
+        }
+
+        [Test]
+        public void QueuedNativeRemovePlan_ReclassifiesEverySelectedVersion()
+        {
+            object submoduleVersion = new object();
+            object ordinaryVersion = new object();
+            PackageManagerSubmoduleInfo submoduleInfo =
+                CreateNativeRemoveSubmodule("com.example.submodule");
+            var plan = new PackageManagerGitHubNativeActions.NativeRemovePlan
+            {
+                AwaitingSnapshotClassification = true
+            };
+            plan.AllPackageNames.Add("com.example.submodule");
+            plan.AllPackageNames.Add("com.example.readonly");
+            plan.AllPackageVersions.Add(submoduleVersion);
+            plan.AllPackageVersions.Add(ordinaryVersion);
+
+            bool refreshed = PackageManagerGitHubNativeActions
+                .TryRefreshQueuedNativeRemovePlan(
+                    plan,
+                    version => ReferenceEquals(version, submoduleVersion)
+                        ? new PackageManagerGitHubNativeActions
+                            .NativeRemoveVersionIdentity(
+                                "com.example.submodule",
+                                submoduleInfo.FullPackagePath,
+                                true)
+                        : new PackageManagerGitHubNativeActions
+                            .NativeRemoveVersionIdentity(
+                                "com.example.readonly",
+                                "/Library/PackageCache/com.example.readonly",
+                                true),
+                    (packageName, _) => string.Equals(
+                            packageName,
+                            submoduleInfo.PackageName,
+                            StringComparison.Ordinal)
+                        ? submoduleInfo
+                        : null,
+                    _ => string.Empty,
+                    out string error);
+
+            Assert.That(refreshed, Is.True, error);
+            Assert.That(plan.Submodules, Is.EqualTo(new[] { submoduleInfo }));
+            Assert.That(
+                plan.OrdinaryPackageNames,
+                Is.EqualTo(new[] { "com.example.readonly" }));
+            Assert.That(plan.AwaitingSnapshotClassification, Is.False);
+        }
+
+        [Test]
+        public void QueuedNativeRemovePlan_RejectsSelectionIdentityDrift()
+        {
+            object selectedVersion = new object();
+            var plan = new PackageManagerGitHubNativeActions.NativeRemovePlan
+            {
+                AwaitingSnapshotClassification = true
+            };
+            plan.AllPackageNames.Add("com.example.original");
+            plan.AllPackageVersions.Add(selectedVersion);
+
+            bool refreshed = PackageManagerGitHubNativeActions
+                .TryRefreshQueuedNativeRemovePlan(
+                    plan,
+                    _ => new PackageManagerGitHubNativeActions
+                        .NativeRemoveVersionIdentity(
+                            "com.example.changed",
+                            "/Packages/com.example.changed",
+                            true),
+                    (_, __) => null,
+                    _ => string.Empty,
+                    out string error);
+
+            Assert.That(refreshed, Is.False);
+            Assert.That(error, Does.Contain("selected package list changed"));
+            Assert.That(plan.Submodules, Is.Empty);
+            Assert.That(plan.OrdinaryPackageNames, Is.Empty);
+            Assert.That(plan.AwaitingSnapshotClassification, Is.True);
+        }
+
+        [Test]
+        public void QueuedNativeRemovePlan_RequiresAConfirmedSubmodule()
+        {
+            object selectedVersion = new object();
+            var plan = new PackageManagerGitHubNativeActions.NativeRemovePlan
+            {
+                AwaitingSnapshotClassification = true
+            };
+            plan.AllPackageNames.Add("com.example.candidate");
+            plan.AllPackageVersions.Add(selectedVersion);
+
+            bool refreshed = PackageManagerGitHubNativeActions
+                .TryRefreshQueuedNativeRemovePlan(
+                    plan,
+                    _ => new PackageManagerGitHubNativeActions
+                        .NativeRemoveVersionIdentity(
+                            "com.example.candidate",
+                            "/Packages/com.example.candidate",
+                            true),
+                    (_, __) => null,
+                    _ => string.Empty,
+                    out string error);
+
+            Assert.That(refreshed, Is.False);
+            Assert.That(error, Does.Contain("no longer include"));
+            Assert.That(plan.AwaitingSnapshotClassification, Is.True);
+        }
+
+        [Test]
+        public void QueuedNativeRemovePlan_HasBoundedScanWait()
+        {
+            long timeout = TimeSpan.FromMinutes(2d).Ticks;
+            long start = TimeSpan.FromMinutes(1d).Ticks;
+
+            Assert.That(
+                PackageManagerGitHubNativeActions.IsQueuedNativeRemoveTimedOut(
+                    start,
+                    start + timeout - 1L,
+                    timeout),
+                Is.False);
+            Assert.That(
+                PackageManagerGitHubNativeActions.IsQueuedNativeRemoveTimedOut(
+                    start,
+                    start + timeout,
+                    timeout),
+                Is.True);
+        }
+
+        [Test]
+        public void NativeRemoveClassification_InvalidAndDuplicateIdentityFailClosed()
+        {
+            PackageManagerSubmoduleInfo submoduleInfo =
+                CreateNativeRemoveSubmodule("com.example.submodule");
+            var submodule = new NativeRemovePackageFixture(
+                submoduleInfo.PackageName,
+                submoduleInfo);
+
+            PackageManagerNativeRemoveSelectionRouting invalidRouting =
+                ClassifyNativeRemoveSelection(
+                    new[]
+                    {
+                        submodule,
+                        new NativeRemovePackageFixture("invalid package name")
+                    },
+                    snapshotReady: true,
+                    out PackageManagerGitHubNativeActions.NativeRemovePlan invalidPlan,
+                    out string invalidError);
+            PackageManagerNativeRemoveSelectionRouting duplicateRouting =
+                ClassifyNativeRemoveSelection(
+                    new[]
+                    {
+                        submodule,
+                        new NativeRemovePackageFixture(submodule.PackageName)
+                    },
+                    snapshotReady: true,
+                    out PackageManagerGitHubNativeActions.NativeRemovePlan duplicatePlan,
+                    out string duplicateError);
+            PackageManagerNativeRemoveSelectionRouting mismatchRouting =
+                ClassifyNativeRemoveSelection(
+                    new[]
+                    {
+                        new NativeRemovePackageFixture(
+                            "com.example.selected",
+                            CreateNativeRemoveSubmodule("com.example.other"))
+                    },
+                    snapshotReady: true,
+                    out PackageManagerGitHubNativeActions.NativeRemovePlan mismatchPlan,
+                    out string mismatchError);
+
+            Assert.That(
+                invalidRouting,
+                Is.EqualTo(PackageManagerNativeRemoveSelectionRouting.Blocked));
+            Assert.That(
+                invalidPlan.Submodules,
+                Is.EqualTo(new[] { submoduleInfo }));
+            Assert.That(invalidPlan.OrdinaryPackageNames, Is.Empty);
+            Assert.That(
+                invalidPlan.AllPackageNames,
+                Is.EqualTo(new[] { submodule.PackageName }));
+            Assert.That(invalidError, Does.Contain("ambiguous identity"));
+            Assert.That(
+                duplicateRouting,
+                Is.EqualTo(PackageManagerNativeRemoveSelectionRouting.Blocked));
+            Assert.That(
+                duplicatePlan.Submodules,
+                Is.EqualTo(new[] { submoduleInfo }));
+            Assert.That(duplicatePlan.OrdinaryPackageNames, Is.Empty);
+            Assert.That(
+                duplicatePlan.AllPackageNames,
+                Is.EqualTo(new[] { submodule.PackageName }));
+            Assert.That(duplicateError, Does.Contain("ambiguous identity"));
+            Assert.That(
+                mismatchRouting,
+                Is.EqualTo(PackageManagerNativeRemoveSelectionRouting.Blocked));
+            Assert.That(mismatchPlan.Submodules, Is.Empty);
+            Assert.That(mismatchError, Does.Contain("ambiguous identity"));
+        }
+
+        [Test]
+        public void NativeRemoveClassification_MaterializesSingleUseSelectionOnce()
+        {
+            PackageManagerSubmoduleInfo submoduleInfo =
+                CreateNativeRemoveSubmodule("com.example.submodule");
+            var selection = new SingleUseNativeRemoveSelection(new[]
+            {
+                new NativeRemovePackageFixture(
+                    submoduleInfo.PackageName,
+                    submoduleInfo),
+                new NativeRemovePackageFixture("com.example.ordinary")
+            });
+
+            PackageManagerNativeRemoveSelectionRouting routing =
+                ClassifyNativeRemoveSelection(
+                    selection,
+                    snapshotReady: true,
+                    out PackageManagerGitHubNativeActions.NativeRemovePlan plan,
+                    out string error);
+
+            Assert.That(
+                routing,
+                Is.EqualTo(PackageManagerNativeRemoveSelectionRouting.Managed));
+            Assert.That(selection.EnumerationCount, Is.EqualTo(1));
+            Assert.That(plan.AllPackageNames, Has.Count.EqualTo(2));
+            Assert.That(error, Is.Empty);
         }
 
         [Test]
@@ -1906,6 +2383,10 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
             PackageManagerGitHubNativeActions.ReleaseForRoot(unsupportedRoot);
 
             Assert.That(
+                PackageManagerGitHubNativeActions.IsInstalledForRoot(
+                    unsupportedRoot),
+                Is.False);
+            Assert.That(
                 PackageManagerGitHubNativeActions.InstalledRootCount,
                 Is.EqualTo(before));
         }
@@ -1950,7 +2431,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                 Assert.That(
                     details.RemoveButton.parent.style.display.value,
                     Is.EqualTo(DisplayStyle.None),
-                    "Uninstall must start from Unity's Manage menu.");
+                    "Removal must start from Unity's native Remove action.");
 
                 // Native PackageAction requests can be broadcast to more than
                 // one Package Manager host. Mirroring confirmation must remain
@@ -2472,6 +2953,38 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                 null);
         }
 
+        private static PackageManagerNativeRemoveSelectionRouting
+            ClassifyNativeRemoveSelection(
+                object selection,
+                bool snapshotReady,
+                out PackageManagerGitHubNativeActions.NativeRemovePlan plan,
+                out string error)
+        {
+            return PackageManagerGitHubNativeActions.ClassifyNativeRemoveSelection(
+                selection,
+                snapshotReady,
+                package => ((NativeRemovePackageFixture)package).Version,
+                package => ((NativeRemovePackageFixture)package).PackageName,
+                version => snapshotReady
+                    ? ((NativeRemoveVersionFixture)version).Submodule
+                    : null,
+                version => ((NativeRemoveVersionFixture)version)
+                    .IsDirectInstalledPackagePath,
+                out plan,
+                out error);
+        }
+
+        private static PackageManagerSubmoduleInfo CreateNativeRemoveSubmodule(
+            string packageName)
+        {
+            return new PackageManagerSubmoduleInfo(
+                packageName,
+                "Packages/" + packageName,
+                "/project/Packages/" + packageName,
+                "https://github.com/example/" + packageName + ".git",
+                true);
+        }
+
         private static PackageManagerPackageConversionTarget
             CreateReadOnlyConversionTarget(PackageManagerReadOnlyGitInfo info)
         {
@@ -2513,6 +3026,61 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
 
             internal string UniqueId { get; }
             internal string Name { get; }
+        }
+
+        private sealed class NativeRemovePackageFixture
+        {
+            internal NativeRemovePackageFixture(
+                string packageName,
+                PackageManagerSubmoduleInfo submodule = null,
+                bool isDirectInstalledPackagePath = false)
+            {
+                PackageName = packageName;
+                Version = new NativeRemoveVersionFixture(
+                    submodule,
+                    isDirectInstalledPackagePath);
+            }
+
+            internal string PackageName { get; }
+            internal NativeRemoveVersionFixture Version { get; }
+        }
+
+        private sealed class NativeRemoveVersionFixture
+        {
+            internal NativeRemoveVersionFixture(
+                PackageManagerSubmoduleInfo submodule,
+                bool isDirectInstalledPackagePath)
+            {
+                Submodule = submodule;
+                IsDirectInstalledPackagePath = isDirectInstalledPackagePath;
+            }
+
+            internal PackageManagerSubmoduleInfo Submodule { get; }
+            internal bool IsDirectInstalledPackagePath { get; }
+        }
+
+        private sealed class SingleUseNativeRemoveSelection : IEnumerable
+        {
+            private readonly IEnumerable values;
+
+            internal SingleUseNativeRemoveSelection(IEnumerable values)
+            {
+                this.values = values;
+            }
+
+            internal int EnumerationCount { get; private set; }
+
+            public IEnumerator GetEnumerator()
+            {
+                EnumerationCount++;
+                if (EnumerationCount > 1)
+                {
+                    throw new InvalidOperationException(
+                        "The selection was enumerated more than once.");
+                }
+
+                return values.GetEnumerator();
+            }
         }
 
         private sealed class NativeActionsHostWindow : EditorWindow

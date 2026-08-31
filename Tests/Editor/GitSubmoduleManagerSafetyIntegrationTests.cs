@@ -1884,6 +1884,238 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
         }
 
         [Test]
+        public void RemoveService_BatchRemovesEveryPreflightedSubmoduleInOneTask()
+        {
+            const string secondPackagePath =
+                "Packages/com.example.integration-package-two";
+            string secondSourceRoot = Path.Combine(sandboxRoot, "source-two");
+            Directory.CreateDirectory(secondSourceRoot);
+            InitializeRepository(secondSourceRoot);
+            File.WriteAllText(
+                Path.Combine(secondSourceRoot, "package.json"),
+                "{\"name\":\"com.example.integration-package-two\"," +
+                "\"version\":\"1.0.0\"}\n");
+            ExpectGit(secondSourceRoot, "add -- package.json");
+            ExpectGit(secondSourceRoot, "commit -m \"Initial second package\"");
+            Assert.That(
+                GitUtility.TryAddSubmodule(
+                    secondSourceRoot,
+                    secondPackagePath,
+                    string.Empty,
+                    out string addError),
+                Is.True,
+                addError);
+            ExpectGit(parentRoot, "commit -am \"Add second package submodule\"");
+
+            Assert.That(
+                GitUtility.TryAssessSubmoduleRemoval(
+                    PackagePath,
+                    out SubmoduleRemovalAssessment firstAssessment,
+                    out string firstError),
+                Is.True,
+                firstError);
+            Assert.That(
+                GitUtility.TryAssessSubmoduleRemoval(
+                    secondPackagePath,
+                    out SubmoduleRemovalAssessment secondAssessment,
+                    out string secondError),
+                Is.True,
+                secondError);
+
+            var items = new[]
+            {
+                new GitSubmoduleBatchRemovalItem
+                {
+                    Info = new PackageManagerSubmoduleInfo(
+                        "com.example.integration-package",
+                        PackagePath,
+                        Path.Combine(parentRoot, PackagePath),
+                        sourceRoot,
+                        false),
+                    ConfirmedAssessment = firstAssessment,
+                    DiscardLocalWork = false
+                },
+                new GitSubmoduleBatchRemovalItem
+                {
+                    Info = new PackageManagerSubmoduleInfo(
+                        "com.example.integration-package-two",
+                        secondPackagePath,
+                        Path.Combine(parentRoot, secondPackagePath),
+                        secondSourceRoot,
+                        false),
+                    ConfirmedAssessment = secondAssessment,
+                    DiscardLocalWork = false
+                }
+            };
+            var state = new GitSubmoduleBatchRemoveTaskState();
+
+            CommandResult result = GitSubmoduleRemoveService.RunBatchRemoveTask(
+                items,
+                state,
+                CancellationToken.None);
+
+            Assert.That(result.IsSuccess, Is.True, result.StdErr);
+            Assert.That(
+                state.Outcome,
+                Is.EqualTo(GitOperationCompletionOutcome.Succeeded));
+            Assert.That(state.RemovedCount, Is.EqualTo(2));
+            Assert.That(
+                state.RemovedPackageNames,
+                Is.EqualTo(new[]
+                {
+                    "com.example.integration-package",
+                    "com.example.integration-package-two"
+                }));
+            Assert.That(Directory.Exists(Path.Combine(parentRoot, PackagePath)), Is.False);
+            Assert.That(
+                Directory.Exists(Path.Combine(parentRoot, secondPackagePath)),
+                Is.False);
+            Assert.That(
+                Git(parentRoot, "ls-files --error-unmatch -- " +
+                                GitUtility.Quote(PackagePath)).IsSuccess,
+                Is.False);
+            Assert.That(
+                Git(parentRoot, "ls-files --error-unmatch -- " +
+                                GitUtility.Quote(secondPackagePath)).IsSuccess,
+                Is.False);
+        }
+
+        [Test]
+        public void RemoveService_BatchAssessmentFailureDoesNotMutateEarlierPackage()
+        {
+            var infos = new[]
+            {
+                new PackageManagerSubmoduleInfo(
+                    "com.example.integration-package",
+                    PackagePath,
+                    Path.Combine(parentRoot, PackagePath),
+                    sourceRoot,
+                    false),
+                new PackageManagerSubmoduleInfo(
+                    "com.example.missing-package",
+                    "Packages/com.example.missing-package",
+                    Path.Combine(
+                        parentRoot,
+                        "Packages/com.example.missing-package"),
+                    Path.Combine(sandboxRoot, "missing-source"),
+                    false)
+            };
+            var state = new GitSubmoduleBatchAssessmentTaskState();
+
+            CommandResult result = GitSubmoduleRemoveService
+                .RunBatchAssessmentTask(
+                    infos,
+                    state,
+                    CancellationToken.None);
+
+            Assert.That(result.IsSuccess, Is.False);
+            Assert.That(state.Assessments, Has.Count.EqualTo(1));
+            Assert.That(
+                state.Outcome,
+                Is.EqualTo(GitOperationCompletionOutcome.FailedButRolledBack));
+            Assert.That(
+                Directory.Exists(Path.Combine(parentRoot, PackagePath)),
+                Is.True,
+                "Assessment must never mutate an earlier valid submodule.");
+            Assert.That(
+                Git(parentRoot, "ls-files --error-unmatch -- " +
+                                GitUtility.Quote(PackagePath)).IsSuccess,
+                Is.True);
+        }
+
+        [Test]
+        public void RemoveService_BatchFailureReportsRemovedPrefixAndPreservesSuffix()
+        {
+            const string secondPackageName =
+                "com.example.integration-package-two";
+            const string secondPackagePath =
+                "Packages/com.example.integration-package-two";
+            string secondSourceRoot = CreateSourceRepository(
+                "source-two",
+                secondPackageName);
+            Assert.That(
+                GitUtility.TryAddSubmodule(
+                    secondSourceRoot,
+                    secondPackagePath,
+                    string.Empty,
+                    out string addError),
+                Is.True,
+                addError);
+            ExpectGit(parentRoot, "commit -am \"Add second package submodule\"");
+
+            Assert.That(
+                GitUtility.TryAssessSubmoduleRemoval(
+                    PackagePath,
+                    out SubmoduleRemovalAssessment firstAssessment,
+                    out string firstError),
+                Is.True,
+                firstError);
+            Assert.That(
+                GitUtility.TryAssessSubmoduleRemoval(
+                    secondPackagePath,
+                    out SubmoduleRemovalAssessment secondAssessment,
+                    out string secondError),
+                Is.True,
+                secondError);
+
+            string lateFile = Path.Combine(
+                parentRoot,
+                secondPackagePath,
+                "created-after-confirmation.txt");
+            File.WriteAllText(lateFile, "preserve this work\n");
+            var items = new[]
+            {
+                new GitSubmoduleBatchRemovalItem
+                {
+                    Info = new PackageManagerSubmoduleInfo(
+                        "com.example.integration-package",
+                        PackagePath,
+                        Path.Combine(parentRoot, PackagePath),
+                        sourceRoot,
+                        false),
+                    ConfirmedAssessment = firstAssessment,
+                    DiscardLocalWork = false
+                },
+                new GitSubmoduleBatchRemovalItem
+                {
+                    Info = new PackageManagerSubmoduleInfo(
+                        secondPackageName,
+                        secondPackagePath,
+                        Path.Combine(parentRoot, secondPackagePath),
+                        secondSourceRoot,
+                        false),
+                    ConfirmedAssessment = secondAssessment,
+                    DiscardLocalWork = false
+                }
+            };
+            var state = new GitSubmoduleBatchRemoveTaskState();
+
+            CommandResult result = GitSubmoduleRemoveService.RunBatchRemoveTask(
+                items,
+                state,
+                CancellationToken.None);
+
+            Assert.That(result.IsSuccess, Is.False);
+            Assert.That(state.RemovedCount, Is.EqualTo(1));
+            Assert.That(
+                state.RemovedPackageNames,
+                Is.EqualTo(new[] { "com.example.integration-package" }));
+            Assert.That(state.Message, Does.Contain(secondPackageName));
+            Assert.That(state.Message, Does.Contain("1 of 2"));
+            Assert.That(
+                Directory.Exists(Path.Combine(parentRoot, PackagePath)),
+                Is.False);
+            Assert.That(Directory.Exists(Path.Combine(
+                parentRoot,
+                secondPackagePath)), Is.True);
+            Assert.That(File.ReadAllText(lateFile), Is.EqualTo("preserve this work\n"));
+            Assert.That(
+                Git(parentRoot, "ls-files --error-unmatch -- " +
+                                GitUtility.Quote(secondPackagePath)).IsSuccess,
+                Is.True);
+        }
+
+        [Test]
         public void Remove_ExplicitDiscardRefusesStateThatChangedAfterConfirmation()
         {
             string packageRoot = Path.Combine(parentRoot, PackagePath);

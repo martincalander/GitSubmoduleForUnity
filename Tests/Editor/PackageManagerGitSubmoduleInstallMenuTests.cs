@@ -180,8 +180,38 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                 unsupportedRoot);
 
             Assert.That(
+                PackageManagerGitSubmoduleInstallMenu.IsInstalledForRoot(
+                    unsupportedRoot),
+                Is.False);
+            Assert.That(
                 PackageManagerGitSubmoduleInstallMenu.InstalledRootCount,
                 Is.EqualTo(installedBefore));
+        }
+
+        [Test]
+        public void CurrentMenuAttachment_RequiresSameAttachedVisualElement()
+        {
+            var installedMenu = new VisualElement();
+            var replacementMenu = new VisualElement();
+
+            Assert.That(
+                PackageManagerGitSubmoduleInstallMenu.IsCurrentMenuAttachment(
+                    installedMenu,
+                    installedMenu,
+                    panelAttached: true),
+                Is.True);
+            Assert.That(
+                PackageManagerGitSubmoduleInstallMenu.IsCurrentMenuAttachment(
+                    installedMenu,
+                    replacementMenu,
+                    panelAttached: true),
+                Is.False);
+            Assert.That(
+                PackageManagerGitSubmoduleInstallMenu.IsCurrentMenuAttachment(
+                    installedMenu,
+                    installedMenu,
+                    panelAttached: false),
+                Is.False);
         }
 
         [Test]

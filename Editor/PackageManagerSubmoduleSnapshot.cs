@@ -20,6 +20,19 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             internal string Error;
         }
 
+        private sealed class MutationHandoffRefreshDeferral : IDisposable
+        {
+            private int released;
+
+            public void Dispose()
+            {
+                if (Interlocked.Exchange(ref released, 1) != 0)
+                    return;
+
+                ReleaseMutationHandoffRefreshDeferral();
+            }
+        }
+
         private static readonly object Gate = new object();
         private static readonly string ProjectRoot;
         private static readonly string GitModulesPath;
@@ -37,6 +50,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         private static double retryNotBefore;
         private static int consecutiveFailures;
         private static int hostObserverCount;
+        private static int mutationHandoffRefreshDeferralCount;
         private static bool isReady;
         private static bool isListening;
         private static volatile bool isShuttingDown;
@@ -74,6 +88,60 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             }
         }
 
+        /// <summary>
+        /// True only when the latest requested snapshot generation completed
+        /// successfully and no result is still waiting to be published.
+        /// Destructive continuations must not use a retained last-known-good
+        /// snapshot after a refresh failure.
+        /// </summary>
+        internal static bool HasCurrentSuccessfulSnapshot
+        {
+            get
+            {
+                lock (Gate)
+                {
+                    return IsCurrentSuccessfulSnapshotState(
+                        isReady,
+                        refreshThread != null,
+                        pendingResult != null,
+                        runningGeneration != requestedGeneration,
+                        !string.IsNullOrEmpty(lastError));
+                }
+            }
+        }
+
+        internal static bool IsCurrentSuccessfulSnapshotState(
+            bool ready,
+            bool readerActive,
+            bool hasPendingResult,
+            bool hasPendingRequest,
+            bool hasError)
+        {
+            return ready &&
+                   !readerActive &&
+                   !hasPendingResult &&
+                   !hasPendingRequest &&
+                   !hasError;
+        }
+
+        internal static int MutationHandoffRefreshDeferralCountForTests
+        {
+            get
+            {
+                lock (Gate)
+                    return mutationHandoffRefreshDeferralCount;
+            }
+        }
+
+        internal static bool HasPendingRefreshRequestForTests
+        {
+            get
+            {
+                lock (Gate)
+                    return runningGeneration != requestedGeneration;
+            }
+        }
+
         internal static void RetainHostObserver()
         {
             lock (Gate)
@@ -107,11 +175,12 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             int observerCount,
             bool readerActive,
             bool hasPendingResult,
-            bool hasPendingRequest)
+            bool hasPendingRequest,
+            bool mutationHandoffPending)
         {
             return !shuttingDown &&
                    (observerCount > 0 || readerActive || hasPendingResult ||
-                    hasPendingRequest);
+                    hasPendingRequest || mutationHandoffPending);
         }
 
         internal static int TransitionHostObserverCount(
@@ -129,6 +198,48 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             return normalizedCount == int.MaxValue
                 ? int.MaxValue
                 : normalizedCount + 1;
+        }
+
+        internal static bool ShouldStartRefresh(
+            bool shuttingDown,
+            bool readerActive,
+            bool hasPendingRequest,
+            bool repositoryOperationBusy,
+            bool mutationHandoffPending,
+            bool retryDelayElapsed)
+        {
+            return !shuttingDown &&
+                   !readerActive &&
+                   hasPendingRequest &&
+                   !repositoryOperationBusy &&
+                   !mutationHandoffPending &&
+                   retryDelayElapsed;
+        }
+
+        /// <summary>
+        /// Keeps queued snapshot requests from starting between a successful
+        /// read-only assessment and the synchronous reservation of its confirmed
+        /// mutation. The caller must dispose the token on every terminal path.
+        /// </summary>
+        internal static bool TryDeferRefreshForMutationHandoff(
+            out IDisposable deferral)
+        {
+            deferral = null;
+            EnsureListening();
+            lock (Gate)
+            {
+                if (isShuttingDown ||
+                    refreshThread != null ||
+                    mutationHandoffRefreshDeferralCount == int.MaxValue)
+                {
+                    return false;
+                }
+
+                mutationHandoffRefreshDeferralCount++;
+            }
+
+            deferral = new MutationHandoffRefreshDeferral();
+            return true;
         }
 
         /// <summary>
@@ -243,7 +354,8 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                     hostObserverCount,
                     refreshThread != null,
                     pendingResult != null,
-                    runningGeneration != requestedGeneration);
+                    runningGeneration != requestedGeneration,
+                    mutationHandoffRefreshDeferralCount > 0);
                 if (!keepListening)
                     isListening = false;
             }
@@ -261,17 +373,15 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             int generation;
             lock (Gate)
             {
-                if (isShuttingDown ||
-                    refreshThread != null ||
-                    runningGeneration == requestedGeneration)
-                {
-                    return;
-                }
-
                 // Do not race the package tool's own readers or inspect a
                 // repository while one of its mutations is in progress.
-                if (GitOperationService.IsBusy ||
-                    EditorApplication.timeSinceStartup < retryNotBefore)
+                if (!ShouldStartRefresh(
+                        isShuttingDown,
+                        refreshThread != null,
+                        runningGeneration != requestedGeneration,
+                        GitOperationService.IsBusy,
+                        mutationHandoffRefreshDeferralCount > 0,
+                        EditorApplication.timeSinceStartup >= retryNotBefore))
                 {
                     return;
                 }
@@ -306,6 +416,25 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                         requestedGeneration++;
                 }
             }
+        }
+
+        private static void ReleaseMutationHandoffRefreshDeferral()
+        {
+            bool shouldEnsureListening;
+            lock (Gate)
+            {
+                if (mutationHandoffRefreshDeferralCount > 0)
+                    mutationHandoffRefreshDeferralCount--;
+
+                shouldEnsureListening =
+                    !isShuttingDown &&
+                    mutationHandoffRefreshDeferralCount == 0 &&
+                    (pendingResult != null ||
+                     runningGeneration != requestedGeneration);
+            }
+
+            if (shouldEnsureListening)
+                EnsureListening();
         }
 
         private static void RunRefresh(int generation, CancellationToken cancellationToken)
@@ -434,6 +563,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                     hostObserverCount,
                     retain: false,
                     shuttingDown: true);
+                mutationHandoffRefreshDeferralCount = 0;
                 threadToDrain = refreshThread;
                 cancellationToDispose = refreshCancellationSource;
                 try

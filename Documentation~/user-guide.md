@@ -233,13 +233,49 @@ Routine confirmation can be disabled in Preferences, but dirty or unverified
 state always requires attention. See the
 [architecture and safety model](architecture.md) for the immutable Git checks.
 
-## Uninstall a Submodule
+## Remove Submodules
 
-For a verified installed submodule, choose **Manage > Uninstall Submodule**.
-Before making changes, the manager verifies the package path, gitlink,
-`.gitmodules` registration, origin, and local state. It then stages the precise
-parent-repository change instead of asking Unity to delete the package directory
-directly.
+For a verified installed submodule, use Unity Package Manager's standard
+**Remove** action. The manager safely overrides that action for submodules, so
+there is no separate **Uninstall Submodule** command. Before making changes, it
+verifies the package path, gitlink, `.gitmodules` registration, origin, and local
+state. It then stages the precise parent-repository change instead of asking
+Unity to delete the package directory directly.
+
+The standard action also works with multiple selected packages:
+
+- An ordinary-only selection, including read-only Git packages, keeps Unity
+  Package Manager's normal removal behavior.
+- If the Remove action contains a managed submodule, the manager claims that
+  whole action. Every targeted submodule is inspected before anything is
+  removed. When confirmation is required, one aggregate prompt lists the exact
+  submodules and ordinary packages targeted by that action.
+- Cancelling that prompt or failing any preflight check leaves every selected
+  target unchanged.
+- All targeted submodules are removed in one guarded Git operation. If a later
+  submodule fails, the operation reports the completed prefix, preserves the
+  untouched suffix, and does not remove any selected ordinary packages.
+- In a successful mixed selection, Unity removes every selected ordinary
+  package only after it has resolved and verified that the exact embedded
+  checkouts are gone. A manifest dependency with the same package name may
+  remain.
+- Select Git Submodule Manager separately when it is itself installed as a
+  submodule and the same selection also contains ordinary packages.
+
+No second action is required. The manager waits for any active package scan,
+presents confirmation when required, performs the submodule changes, and asks
+Unity to resolve the resulting package graph. Its confirmed handoff survives
+script reload. If an ordinary
+package request fails or its live request handle is lost during reload, the
+manager retries automatically only when that package still has the exact direct
+manifest dependency captured before the Git change. It also repeats Package
+Manager resolution when the registered-package view has not caught up. Do not
+click **Remove** again or manually use **Refresh** or **Resolve**.
+
+Automatic recovery is bounded. A terminal diagnostic is shown only when those
+attempts fail, or when a dependency changed and repeating the original removal
+would no longer be safe. In that case, inspect the reported package and current
+manifest rather than starting a second overlapping removal.
 
 The removed worktree and original `.gitmodules` file are moved to
 `Library/GitSubmoduleManager/Recovery`. The completion message lists their

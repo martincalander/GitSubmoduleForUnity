@@ -267,6 +267,62 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
         }
 
         [Test]
+        public void DependencySpec_ReadsAnyDirectPackageTypeWithoutNormalizing()
+        {
+            File.WriteAllText(
+                manifestPath,
+                "{\n  \"dependencies\": {\n" +
+                "    \"com.example.registry\": \"1.2.3\",\n" +
+                "    \"com.example.local\": \"file:../Local Package\",\n" +
+                "    \"com.example.git\": \"https://github.com/example/package.git#main\"\n" +
+                "  }\n}\n",
+                new UTF8Encoding(false));
+
+            AssertDependencySpec("com.example.registry", "1.2.3");
+            AssertDependencySpec("com.example.local", "file:../Local Package");
+            AssertDependencySpec(
+                "com.example.git",
+                "https://github.com/example/package.git#main");
+
+            Assert.That(
+                PackageManifestGitDependencyStore.TryGetDependencySpecAtPath(
+                    manifestPath,
+                    "com.example.absent",
+                    out bool exists,
+                    out string spec,
+                    out string error),
+                Is.True,
+                error);
+            Assert.That(exists, Is.False);
+            Assert.That(spec, Is.Empty);
+        }
+
+        [Test]
+        public void DependencySpec_FailsClosedForUnrelatedNonStringValue()
+        {
+            File.WriteAllText(
+                manifestPath,
+                "{\n  \"dependencies\": {\n" +
+                "    \"com.example.target\": \"1.2.3\",\n" +
+                "    \"com.example.invalid\": 42\n" +
+                "  }\n}\n",
+                new UTF8Encoding(false));
+
+            Assert.That(
+                PackageManifestGitDependencyStore.TryGetDependencySpecAtPath(
+                    manifestPath,
+                    "com.example.target",
+                    out _,
+                    out _,
+                    out string error),
+                Is.False);
+            Assert.That(
+                error,
+                Is.EqualTo(
+                    "Every Packages/manifest.json dependency value must be a string."));
+        }
+
+        [Test]
         public void Add_PreservesUtf8BomCrlfAndFinalNewline_WithoutEditingLockfile()
         {
             byte[] original = WithUtf8Bom(
@@ -1137,6 +1193,23 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                     out _,
                     out _),
                 Is.False);
+        }
+
+        private void AssertDependencySpec(
+            string packageName,
+            string expectedSpec)
+        {
+            Assert.That(
+                PackageManifestGitDependencyStore.TryGetDependencySpecAtPath(
+                    manifestPath,
+                    packageName,
+                    out bool exists,
+                    out string spec,
+                    out string error),
+                Is.True,
+                error);
+            Assert.That(exists, Is.True);
+            Assert.That(spec, Is.EqualTo(expectedSpec));
         }
 
         private static byte[] WithUtf8Bom(string value)

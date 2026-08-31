@@ -27,6 +27,39 @@ namespace MartinCalander.GitSubmoduleManager.Editor
 
         internal static int InstalledRootCount => EntriesByRoot.Count;
 
+        internal static bool IsInstalledForRoot(object packageManagerRoot)
+        {
+            if (!(packageManagerRoot is VisualElement root) ||
+                !EntriesByRoot.TryGetValue(root, out MenuEntry entry))
+            {
+                return false;
+            }
+
+            try
+            {
+                object currentMenu = FindAddMenuProperty(root.GetType())
+                    ?.GetValue(root, null);
+                return IsCurrentMenuAttachment(
+                    entry.Menu,
+                    currentMenu,
+                    entry.Menu.panel != null);
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        internal static bool IsCurrentMenuAttachment(
+            object installedMenu,
+            object currentMenu,
+            bool panelAttached)
+        {
+            return panelAttached &&
+                   installedMenu != null &&
+                   ReferenceEquals(installedMenu, currentMenu);
+        }
+
         internal static bool InstallForRoot(object packageManagerRoot)
         {
             if (!PackageManagerUnityVersionSupport.IsCurrentVersionSupported ||
@@ -42,8 +75,8 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             try
             {
                 PropertyInfo addMenuProperty = FindAddMenuProperty(root.GetType());
-                object menu = addMenuProperty?.GetValue(root, null);
-                if (!(menu is VisualElement))
+                object menuValue = addMenuProperty?.GetValue(root, null);
+                if (!(menuValue is VisualElement menu))
                     return false;
 
                 if (EntriesByRoot.TryGetValue(root, out MenuEntry existing))
@@ -66,10 +99,19 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                     return false;
                 }
 
+                EventCallback<DetachFromPanelEvent> detached = _ =>
+                    GitSubmoduleManagerPackageManagerHost
+                        .ReleaseVisualTreeAndRequestRepair(
+                            root,
+                            ReleaseForRoot,
+                            GitSubmoduleManagerPackageManagerHost
+                                .RequestVisualTreeRepair);
                 EntriesByRoot[root] = new MenuEntry(
                     menu,
                     item,
-                    properties);
+                    properties,
+                    detached);
+                menu.RegisterCallback(detached);
                 return true;
             }
             catch
@@ -87,6 +129,14 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             }
 
             EntriesByRoot.Remove(packageManagerRoot);
+            try
+            {
+                entry.Menu.UnregisterCallback(entry.DetachedCallback);
+            }
+            catch
+            {
+                // The Package Manager tree may already be tearing down.
+            }
             HideAndRemove(entry.Menu, entry.Item, entry.Properties);
         }
 
@@ -289,18 +339,21 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         private sealed class MenuEntry
         {
             internal MenuEntry(
-                object menu,
+                VisualElement menu,
                 object item,
-                ItemProperties properties)
+                ItemProperties properties,
+                EventCallback<DetachFromPanelEvent> detachedCallback)
             {
                 Menu = menu;
                 Item = item;
                 Properties = properties;
+                DetachedCallback = detachedCallback;
             }
 
-            internal object Menu { get; }
+            internal VisualElement Menu { get; }
             internal object Item { get; }
             internal ItemProperties Properties { get; }
+            internal EventCallback<DetachFromPanelEvent> DetachedCallback { get; }
         }
 
         private sealed class ReferenceComparer : IEqualityComparer<object>

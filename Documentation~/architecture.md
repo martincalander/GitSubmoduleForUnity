@@ -111,23 +111,62 @@ eligible only in this explicit URL workflow and adds a mandatory warning to
 the repository trust confirmation; a symbolic-link manifest is invalid.
 
 After a package resolve or script reload, Package Manager can restore its active
-page selection before recycled details-toolbar fields catch up. Native actions
-therefore resolve the exact single selection through the active page and package
-database before presenting or executing an action. Zero, multiple, missing, or
-identity-mismatched selections fail closed; the toolbar refresh argument remains
-only a presentation fallback when that independently validated selection seam is
-unavailable.
+page selection before recycled details-toolbar fields catch up. Conversion and
+install actions therefore resolve the exact single selection through the active
+page and package database before presenting or executing an action. Zero,
+multiple, missing, or identity-mismatched selections fail closed; the toolbar
+refresh argument remains only a presentation fallback when that independently
+validated selection seam is unavailable.
 
-For an installed verified submodule, Unity's native **Manage** menu receives
-**Convert to Read-Only Package** and **Uninstall Submodule**. An eligible direct
-read-only Git dependency receives **Convert to Submodule**. Read-only packages
-whose `package.json` is selected from a repository subdirectory are deliberately
-not convertible because a package submodule must expose its manifest at the
-checkout root.
+For an installed verified submodule, the manager exposes Unity's standard
+**Remove** action and adds **Convert to Read-Only Package** to the native
+**Manage** menu. It hides Unity's raw embedded-package removal action for the
+same package. This visibility change is enabled only after the exact single,
+multi-select, visibility, progress, and lower-level removal guards are all
+installed. An eligible direct read-only Git dependency receives **Convert to
+Submodule**. Read-only packages whose `package.json` is selected from a
+repository subdirectory are deliberately not convertible because a package
+submodule must expose its manifest at the checkout root.
+
+The multi-select Remove prefix materializes Unity's action collection once.
+Ordinary-only selections, including read-only Git packages, remain completely
+Unity-owned. When any verified managed submodule is present, the manager claims
+the complete eligible collection for that Remove action, validates every
+identity, and assesses every submodule before the first mutation. One aggregate
+confirmation binds an exact assessment and discard decision to each submodule
+and captures the exact direct manifest value of every ordinary target. The
+submodules are then removed in deterministic order under one repository
+reservation; a failure stops the untouched suffix and leaves ordinary packages
+unchanged. A successful mixed operation removes every ordinary target in the
+claimed action.
+
+After a successful mixed batch, a write-ahead handoff is persisted before
+assembly reload is unlocked. It waits for Unity's submodule package resolution,
+proves every removed package is no longer the embedded checkout at its exact
+`Packages/<package-name>` path, and then sends the remaining direct ordinary
+names to one public Package Manager `AddAndRemove` request. A manifest
+dependency revealed under the same package name therefore does not block the
+handoff. The request-attempt marker is persisted before dispatch. While its live
+request remains observable, the handoff only polls that request. After a reload
+loses the handle, it first inspects the registered-package graph and waits for a
+grace interval. It may reissue the removal only for targets that are still
+present with the exact captured manifest value. Missing manifest entries cause
+the target to be omitted from a repeated removal. When none of those entries
+remain but Unity's registered graph is stale, the handoff requests an automatic
+`Client.Resolve()` instead. Changed values stop recovery because repeating the
+original request would no longer be safe. Attempts and elapsed time are bounded.
+A selection that combines the manager as a submodule with ordinary packages is
+blocked because removing the manager would unload the handoff before it could
+resume.
 
 Projection records are owned by a specific Package Manager host lifecycle.
 Refresh requests made during an active catalogue load are coalesced until its
 bounded GitHub reads finish, avoiding forced cancellation of live process trees.
+Attachment requires live ownership of the current nested Package Manager root,
+add menu, and primary action controllers rather than cached mounted flags. When
+Unity recycles that root or its action containers, teardown or a failed immediate
+remount restarts the bounded repair pass. Install presentation remains independent
+of optional Remove, conversion, and Manage-menu presentation.
 Window teardown releases that host's transient projections and lets active
 bounded reads terminate naturally before coordinator disposal. Domain reload
 and Editor shutdown still dispose discovery coordinators and process handles
@@ -409,12 +448,27 @@ Network-heavy CLI work runs on background threads. Completion is published with
 a memory barrier before the Editor thread consumes it. Unity API calls and UI
 mutations remain on the Editor thread.
 
+Read-only removal assessments share the repository-operation lock but do not
+advance the repository mutation generation. A snapshot refresh deferral begins
+only when no reader is active and spans the assessment, confirmation, and
+synchronous reservation of the confirmed mutation. If Remove arrives during an
+active or initial snapshot, one transient pre-confirmation request retains the
+materialized single or multi-selection. After the reader drains, every installed
+version identity is checked again against the fresh snapshot before the deferral
+is acquired and assessment starts. Invalid, changed, or no-longer-submodule
+selections fail closed. Refresh requests remain queued during the guarded
+handoff, then resume on cancellation or failure, or after the mutation owns the
+repository lock. Actual mutations still advance the generation so the snapshot
+refreshes after the operation.
+
 While an asynchronous Git mutation writes below `Packages/`, automatic asset
 refresh is temporarily suspended. Validation and rollback finish before
 auto-refresh is restored in a `finally` path. Successful install, conversion,
 or removal then hands off to Unity Package Manager's resolve lifecycle. Pending
-handoff state survives assembly reload and waits for the expected embedded, Git,
-or removed package state before another mutation begins.
+handoff state survives assembly reload, automatically repeats forced resolution
+while the expected graph has not appeared, and waits for the expected embedded,
+Git, or removed package state before another mutation begins. A confirmed
+removal therefore does not require another click or a manual refresh or resolve.
 
 Dependency-aware installation persists its operation identity, ordered steps,
 exact manifest expectations, and current phase in session state. Attempted or
@@ -480,6 +534,10 @@ late writer causes the operation to fail closed instead of losing data.
   failure is contained and never bulk-mutates Unity's package database.
 - Domain reload and Editor shutdown dispose discovery and dependency-preflight
   readers without reclassifying a verified mutation outcome.
+- Package-removal recovery is bounded by exact persisted package identity,
+  manifest values, attempt count, and elapsed time. A terminal diagnostic is
+  emitted only after automatic recovery fails or current input no longer matches
+  the captured operation.
 
 ## Testing Strategy
 

@@ -17,9 +17,8 @@ namespace MartinCalander.GitSubmoduleManager.Editor
     /// <summary>
     /// Extends Unity's existing Package Manager Manage dropdown for verified
     /// submodules and eligible direct read-only Git dependencies. The native menu
-    /// is rebuilt by Unity on every toolbar refresh; submodules replace Unity's
-    /// embedded Remove entry with a guarded uninstall, while read-only packages
-    /// retain Unity's native actions and receive only the conversion command.
+    /// is rebuilt by Unity on every toolbar refresh. Both package kinds retain
+    /// Unity's native actions and receive only their applicable conversion command.
     /// </summary>
     internal static class PackageManagerSubmoduleManageMenu
     {
@@ -130,9 +129,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                     currentMenu);
             }
 
-            if (conversionRequested == null ||
-                packageKind == PackageManagerManagedPackageKind.Submodule &&
-                uninstallRequested == null)
+            if (conversionRequested == null)
                 return false;
 
             // Rebuild first so every custom refresh starts from Unity's current
@@ -156,10 +153,9 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                     conversionRequested);
             }
 
-            HashSet<string> removalTexts = GetVisibleRemovalTexts(manageDropdown);
             return ApplyToMenu(
                 menu,
-                removalTexts,
+                null,
                 conversionEnabled,
                 conversionTooltip,
                 conversionRequested,
@@ -202,9 +198,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             string uninstallTooltip,
             Action uninstallRequested)
         {
-            if (menu == null ||
-                conversionRequested == null ||
-                uninstallRequested == null)
+            if (menu == null || conversionRequested == null)
             {
                 return false;
             }
@@ -221,33 +215,9 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 return false;
             }
 
-            if (!TryRemoveNativeRemovalItems(
-                menu,
-                nativeRemovalTexts,
-                out bool nativeRemovalFound,
-                out bool nativeRemovalEnabled,
-                out string nativeRemovalTooltip))
-            {
-                return false;
-            }
-
-            bool effectiveUninstallEnabled = uninstallEnabled &&
-                                             (!nativeRemovalFound ||
-                                              nativeRemovalEnabled);
-            string effectiveUninstallTooltip = uninstallEnabled &&
-                                               nativeRemovalFound &&
-                                               !nativeRemovalEnabled
-                ? string.IsNullOrWhiteSpace(nativeRemovalTooltip)
-                    ? L10n.Tr(
-                        "Unity Package Manager currently disables this action.")
-                    : nativeRemovalTooltip
-                : uninstallTooltip;
-            AddItem(
-                menu,
-                L10n.Tr(UninstallText),
-                effectiveUninstallEnabled,
-                effectiveUninstallTooltip,
-                uninstallRequested);
+            // Remove legacy owned uninstall entries, but leave Unity's current
+            // Remove action untouched. The Harmony action boundary routes only
+            // verified submodules through the guarded Git workflow.
             AddItem(
                 menu,
                 L10n.Tr(ConvertToReadOnlyText),

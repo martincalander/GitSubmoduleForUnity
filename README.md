@@ -30,8 +30,9 @@ eligible packages between the two modes without leaving the Editor.
 - See organization groups and **Public** or **Private** repository badges in the
   native package list.
 - Add a repository directly with **+ > Install package as Git Submodule...**.
-- Convert eligible packages or uninstall submodules from Package Manager's
-  native **Manage** menu.
+- Remove one or more submodules with Package Manager's standard action, including
+  mixed selections with ordinary packages, and convert eligible packages from
+  its native **Manage** menu. Ordinary-only selections remain Unity-native.
 - Validate root `package.json` files and Unity `package.json.meta` markers, then
   resolve missing dependencies before making changes.
 
@@ -120,8 +121,16 @@ development setup.
 2. Filter or search the catalogue, then select a package and branch.
 3. Open **Install** and choose **Install as Git Submodule** or **Install as
    Read-Only Package**.
-4. Use **Manage** for supported conversions and submodule removal, or the **+**
-   menu to install a submodule directly from a secure Git URL or local repository.
+4. Use Unity's standard **Remove** action for one or more selected submodules,
+   **Manage** for supported conversions, or the **+** menu to install a
+   submodule directly from a secure Git URL or local repository.
+
+The manager overrides **Remove** only when the action includes a managed
+submodule. It waits for package scans, presents confirmation when required,
+removes the submodules and every ordinary package in the action, and asks Unity
+to resolve as needed. Do not click **Remove** again or manually refresh or resolve.
+Ordinary-only selections, including read-only Git packages, keep Unity Package
+Manager's normal removal behavior.
 
 GitHub catalogue discovery uses `gh`; direct URL probing and package operations
 use Git. Catalogue entries need a valid root UPM `package.json` and Unity

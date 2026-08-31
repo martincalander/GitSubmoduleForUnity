@@ -213,6 +213,75 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 out error);
         }
 
+        internal static bool TryGetProjectDependencySpec(
+            string packageName,
+            out bool exists,
+            out string spec,
+            out string error)
+        {
+            return TryGetDependencySpecAtPath(
+                ManifestPath,
+                packageName,
+                out exists,
+                out spec,
+                out error);
+        }
+
+        internal static bool TryGetDependencySpecAtPath(
+            string manifestPath,
+            string packageName,
+            out bool exists,
+            out string spec,
+            out string error)
+        {
+            exists = false;
+            spec = string.Empty;
+            error = ValidatePackageName(packageName);
+            if (!string.IsNullOrEmpty(error))
+                return false;
+
+            if (!TryReadDocument(manifestPath, out ManifestDocument document, out error))
+                return false;
+            if (!TryGetDependencies(
+                    document.Root,
+                    false,
+                    false,
+                    out JObject dependencies,
+                    out error))
+            {
+                return false;
+            }
+
+            if (dependencies.Properties().Any(
+                    item => item.Value.Type != JTokenType.String))
+            {
+                error = "Every Packages/manifest.json dependency value must be a string.";
+                return false;
+            }
+
+            JProperty property = dependencies.Property(
+                packageName,
+                StringComparison.Ordinal);
+            if (property == null)
+            {
+                error = string.Empty;
+                return true;
+            }
+
+            string value = property.Value.Value<string>() ?? string.Empty;
+            if (string.IsNullOrWhiteSpace(value) ||
+                value.Length > MaximumGitSpecLength)
+            {
+                error = $"The direct dependency specification for {packageName} is invalid or exceeds the safety limit.";
+                return false;
+            }
+
+            exists = true;
+            spec = value;
+            error = string.Empty;
+            return true;
+        }
+
         // Package Manager may classify many rows in one refresh. This
         // presentation-only path reuses one bounded manifest dependency index;
         // install/conversion validation continues to use the uncached method

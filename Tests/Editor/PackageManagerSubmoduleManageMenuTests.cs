@@ -26,18 +26,14 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
         }
 
         [Test]
-        public void Apply_ReplacesNativeRemovalWithGuardedActionsExactlyOnce()
+        public void Apply_PreservesNativeRemoveAndAddsConversionExactlyOnce()
         {
             var menu = new GenericDropdownMenu();
             int nativeRemoveCount = 0;
             int uninstallCount = 0;
             int conversionCount = 0;
             menu.AddItem("Open Manifest", false, () => { });
-            menu.AddItem(
-                "Remove",
-                false,
-                _ => nativeRemoveCount++,
-                new object());
+            menu.AddItem("Remove", false, () => nativeRemoveCount++);
             menu.AddItem("Update", false, () => { });
             var removalTexts = new HashSet<string> { "Remove" };
 
@@ -61,17 +57,17 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                 Is.EqualTo(new[]
                 {
                     "Open Manifest",
+                    "Remove",
                     "Update",
-                    L10n.Tr(PackageManagerSubmoduleManageMenu.UninstallText),
                     L10n.Tr(PackageManagerSubmoduleManageMenu.ConvertText)
                 }));
             Assert.That(
                 PackageManagerSubmoduleManageMenu.InvokeItemForTests(
                     menu,
-                    L10n.Tr(PackageManagerSubmoduleManageMenu.UninstallText)),
+                    "Remove"),
                 Is.True);
-            Assert.That(nativeRemoveCount, Is.Zero);
-            Assert.That(uninstallCount, Is.EqualTo(1));
+            Assert.That(nativeRemoveCount, Is.EqualTo(1));
+            Assert.That(uninstallCount, Is.Zero);
             Assert.That(
                 PackageManagerSubmoduleManageMenu.InvokeItemForTests(
                     menu,
@@ -81,7 +77,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
         }
 
         [Test]
-        public void Apply_KeepsUninstallDisabledWhenUnityDisablesNativeRemove()
+        public void Apply_PreservesUnityDisabledRemoveState()
         {
             var menu = new GenericDropdownMenu();
             menu.AddDisabledItem("Remove", false);
@@ -101,12 +97,16 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
             Assert.That(
                 PackageManagerSubmoduleManageMenu.IsItemEnabledForTests(
                     menu,
-                    L10n.Tr(PackageManagerSubmoduleManageMenu.UninstallText)),
+                    "Remove"),
                 Is.False);
+            Assert.That(
+                PackageManagerSubmoduleManageMenu.GetItemNamesForTests(menu),
+                Does.Not.Contain(
+                    L10n.Tr(PackageManagerSubmoduleManageMenu.UninstallText)));
         }
 
         [Test]
-        public void Apply_FallbackThenNativeTransitionLeavesOneCurrentUninstall()
+        public void Apply_FallbackThenNativeTransitionLeavesOneNativeRemove()
         {
             var menu = new GenericDropdownMenu();
             int oldSelectionCount = 0;
@@ -123,7 +123,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                     "Ready",
                     () => oldSelectionCount++),
                 Is.True);
-            menu.AddItem("Remove", false, () => { });
+            menu.AddItem("Remove", false, () => currentSelectionCount++);
 
             Assert.That(
                 PackageManagerSubmoduleManageMenu.ApplyToMenu(
@@ -142,21 +142,24 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
             Assert.That(
                 names.Count(name => string.Equals(
                     name,
-                    L10n.Tr(PackageManagerSubmoduleManageMenu.UninstallText),
+                    "Remove",
                     System.StringComparison.Ordinal)),
                 Is.EqualTo(1));
-            Assert.That(names, Does.Not.Contain("Remove"));
+            Assert.That(
+                names,
+                Does.Not.Contain(
+                    L10n.Tr(PackageManagerSubmoduleManageMenu.UninstallText)));
             Assert.That(
                 PackageManagerSubmoduleManageMenu.InvokeItemForTests(
                     menu,
-                    L10n.Tr(PackageManagerSubmoduleManageMenu.UninstallText)),
+                    "Remove"),
                 Is.True);
             Assert.That(oldSelectionCount, Is.Zero);
             Assert.That(currentSelectionCount, Is.EqualTo(1));
         }
 
         [Test]
-        public void Apply_DisablesBothCustomActionsWhenRepositoryIsBusy()
+        public void Apply_DisablesConversionButPreservesNativeRemoveWhenBusy()
         {
             var menu = new GenericDropdownMenu();
             menu.AddItem("Remove", false, () => { });
@@ -176,8 +179,8 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
             Assert.That(
                 PackageManagerSubmoduleManageMenu.IsItemEnabledForTests(
                     menu,
-                    L10n.Tr(PackageManagerSubmoduleManageMenu.UninstallText)),
-                Is.False);
+                    "Remove"),
+                Is.True);
             Assert.That(
                 PackageManagerSubmoduleManageMenu.IsItemEnabledForTests(
                     menu,
@@ -186,7 +189,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
         }
 
         [Test]
-        public void Apply_AddsSelectionBoundUninstallFallbackWhenUnityOmitsRemove()
+        public void Apply_DoesNotInventRemovalWhenUnityOmitsNativeRemove()
         {
             var menu = new GenericDropdownMenu();
             int uninstallCount = 0;
@@ -204,11 +207,13 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                 Is.True);
 
             Assert.That(
-                PackageManagerSubmoduleManageMenu.InvokeItemForTests(
-                    menu,
-                    L10n.Tr(PackageManagerSubmoduleManageMenu.UninstallText)),
-                Is.True);
-            Assert.That(uninstallCount, Is.EqualTo(1));
+                PackageManagerSubmoduleManageMenu.GetItemNamesForTests(menu),
+                Does.Not.Contain("Remove"));
+            Assert.That(
+                PackageManagerSubmoduleManageMenu.GetItemNamesForTests(menu),
+                Does.Not.Contain(
+                    L10n.Tr(PackageManagerSubmoduleManageMenu.UninstallText)));
+            Assert.That(uninstallCount, Is.Zero);
         }
 
         [Test]

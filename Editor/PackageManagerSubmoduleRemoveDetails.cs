@@ -20,10 +20,10 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             "git-submodule-manager-cancel-remove-action";
         internal const string FeedbackElementName =
             "git-submodule-manager-remove-feedback";
-        internal const string RemoveText = "Uninstall Submodule";
-        internal const string ConfirmRemoveText = "Confirm Uninstall";
+        internal const string RemoveText = "Remove";
+        internal const string ConfirmRemoveText = "Confirm Remove";
         internal const string ConfirmDiscardText =
-            "Discard Changes and Uninstall";
+            "Discard Changes and Remove";
         internal const string InspectingText = "Inspecting...";
         internal const string RemovingText = "Removing...";
         internal const string RetryRemoveText = "Retry Remove";
@@ -232,7 +232,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 ShowError(
                     "The package directory contains files but is not an " +
                     "initialized submodule worktree. Move those files to safety " +
-                    "and leave the directory empty before uninstalling. Git " +
+                    "and leave the directory empty before removing it. Git " +
                     "Submodule Manager will not discard unverified files.");
                 return false;
             }
@@ -363,10 +363,10 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             if (isDisposed)
                 return;
 
-            // The destructive entry point lives in Unity's native Manage menu.
+            // The destructive entry point is Unity's standard Remove action.
             // Only the explicit confirmation controls are mounted in the primary
             // action row, so idle/error/progress states never reintroduce a
-            // standalone Uninstall button.
+            // standalone Remove button.
             controls.style.display = hasSelection &&
                                      state == RemoveUiState.Confirming
                 ? DisplayStyle.Flex
@@ -495,12 +495,12 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             if (assessment != null && !assessment.IsSafe)
             {
                 return assessment.BuildWarning() + " " +
-                       $"Uninstall {packageName} at {path} anyway? Git will " +
+                       $"Remove {packageName} at {path} anyway? Git will " +
                        "remove the package worktree and parent gitlink changes. " +
                        "This cannot be undone from the Unity UI.";
             }
 
-            return $"Uninstall {packageName} at {path} as a Git submodule? " +
+            return $"Remove {packageName} at {path} as a Git submodule? " +
                    "Git will remove the tracked registration and worktree after " +
                    "confirming their state has not changed.";
         }

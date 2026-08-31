@@ -13,12 +13,18 @@ normal read-only Git dependencies.
    GitHub packages.
 3. Search or filter the list, choose a package and branch, then use **Install**
    to add it as a submodule or read-only package.
-4. Use **Manage** to convert an eligible package or uninstall a submodule. For a
-   repository URL, choose **+ > Install package as Git Submodule...**.
+4. Use **Remove** for one or more selected submodules and **Manage** to convert
+   an eligible package. For a repository URL, choose **+ > Install package as
+   Git Submodule...**.
 5. Configure defaults or reopen the Welcome window under **Preferences > Git
    Submodule Manager**.
 6. Continue with the [User Guide](user-guide.md), or use
    [Troubleshooting](troubleshooting.md) when an operation fails.
+
+The manager overrides **Remove** only when the selected installed packages
+include a managed submodule. Mixed removal includes every ordinary package in
+the action and finishes package scanning, removal, and resolution automatically.
+Ordinary-only selections, including read-only Git packages, remain Unity-native.
 
 ## Documentation
 

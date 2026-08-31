@@ -349,6 +349,80 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             return !isAttached && withinRepairWindow;
         }
 
+        internal static bool IsHostAttachmentComplete(
+            bool isDisposed,
+            bool windowAlive,
+            bool windowPanelAttached,
+            bool retainedRootAlive,
+            bool retainedRootPanelAttached,
+            bool projectionRetained,
+            bool installMenuMounted,
+            bool nativeActionsMounted,
+            bool installMenuOwned,
+            bool nativeActionsOwned)
+        {
+            return !isDisposed &&
+                   windowAlive &&
+                   windowPanelAttached &&
+                   retainedRootAlive &&
+                   retainedRootPanelAttached &&
+                   projectionRetained &&
+                   installMenuMounted &&
+                   nativeActionsMounted &&
+                   installMenuOwned &&
+                   nativeActionsOwned;
+        }
+
+        internal static void RequestVisualTreeRepair(object packageManagerRoot)
+        {
+            if (packageManagerRoot == null || isShuttingDown)
+                return;
+
+            foreach (HostSession session in Sessions.Values)
+            {
+                if (!session.OwnsRoot(packageManagerRoot))
+                    continue;
+
+                session.RestartVisualTreeRepair();
+                return;
+            }
+        }
+
+        internal static void ReleaseVisualTreeAndRequestRepair(
+            object packageManagerRoot,
+            Action<object> release,
+            Action<object> requestRepair)
+        {
+            try
+            {
+                release?.Invoke(packageManagerRoot);
+            }
+            finally
+            {
+                requestRepair?.Invoke(packageManagerRoot);
+            }
+        }
+
+        internal static bool RemountVisualTreeOrRequestRepair(
+            object packageManagerRoot,
+            Action<object> release,
+            Func<object, bool> remount,
+            Action<object> requestRepair)
+        {
+            bool remounted = false;
+            try
+            {
+                release?.Invoke(packageManagerRoot);
+                remounted = remount?.Invoke(packageManagerRoot) == true;
+                return remounted;
+            }
+            finally
+            {
+                if (!remounted)
+                    requestRepair?.Invoke(packageManagerRoot);
+            }
+        }
+
         internal static bool IsSidebarExtensionRefreshPatchApplied()
         {
             Type sidebarType = FindType(PackageManagerSubmoduleNativePage.SidebarTypeName);
@@ -840,14 +914,29 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             }
 
             internal EditorWindow Window { get; }
-            internal bool IsAttached =>
-                !isDisposed &&
-                Window != null &&
-                Window.rootVisualElement.panel != null &&
-                retainedRoot != null &&
-                projectionRetained &&
-                installMenuMounted &&
-                nativeActionsMounted;
+            internal bool IsAttached
+            {
+                get
+                {
+                    bool windowAlive = Window != null;
+                    bool retainedRootAlive = retainedRoot != null;
+                    return IsHostAttachmentComplete(
+                        isDisposed,
+                        windowAlive,
+                        windowAlive && Window.rootVisualElement.panel != null,
+                        retainedRootAlive,
+                        retainedRootAlive && retainedRoot.panel != null,
+                        projectionRetained,
+                        installMenuMounted,
+                        nativeActionsMounted,
+                        retainedRootAlive &&
+                        PackageManagerGitSubmoduleInstallMenu.IsInstalledForRoot(
+                            retainedRoot),
+                        retainedRootAlive &&
+                        PackageManagerGitHubNativeActions.IsInstalledForRoot(
+                            retainedRoot));
+                }
+            }
             internal bool RequiresPolling
             {
                 get
@@ -867,6 +956,22 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 repairDeadline = EditorApplication.timeSinceStartup +
                                  SessionRepairTimeoutSeconds;
                 SubscribeUpdate();
+            }
+
+            internal bool OwnsRoot(object packageManagerRoot)
+            {
+                return !isDisposed &&
+                       ReferenceEquals(retainedRoot, packageManagerRoot);
+            }
+
+            internal void RestartVisualTreeRepair()
+            {
+                if (isDisposed)
+                    return;
+
+                installMenuMounted = false;
+                nativeActionsMounted = false;
+                RestartRepairWindow();
             }
 
             internal bool TryAttachVisualTree()

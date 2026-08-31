@@ -7,6 +7,36 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- Verified installed submodules now use Unity Package Manager's standard
+  **Remove** action instead of a separate **Uninstall Submodule** command.
+- The manager overrides **Remove** only when the selected installed packages
+  include a verified managed submodule. Ordinary-only selections, including
+  read-only Git packages, continue through Unity Package Manager unchanged.
+- Multi-select **Remove** now inspects every selected submodule before changing
+  the repository, uses one aggregate confirmation, and removes all selected
+  packages through a guarded mixed workflow. Submodules are removed in one Git
+  operation; Unity removes the ordinary packages after package resolution.
+- Mixed-removal handoff now survives assembly reload, automatically retries a
+  failed or lost Package Manager request only while every direct manifest
+  dependency still has its captured exact value, and requests Package Manager
+  resolution again when needed.
+
+### Fixed
+
+- Fixed Install actions disappearing when Unity recycled Package Manager's
+  nested visual root or action containers. Failed remounts now restart the
+  bounded repair pass, and optional Remove, conversion, or Manage-menu failures
+  cannot suppress a valid Install surface.
+- Fixed confirmed submodule removals and submodule-to-read-only conversions
+  being blocked when Package Manager started a snapshot between the read-only
+  safety inspection and the confirmed mutation.
+- Fixed confirmed removal requiring another click, Package Manager refresh, or
+  manual resolve while a package scan or transient Package Manager request was
+  still completing. Bounded automatic recovery now reports a terminal
+  diagnostic only after retries fail or changed input makes a retry unsafe.
+
 ## [0.8.1] - 2026-08-29
 
 ### Added

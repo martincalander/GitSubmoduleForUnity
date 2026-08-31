@@ -234,8 +234,9 @@ defaults and safety choices:
 - initial discovered-package install mode (**Git Submodule** by default);
 - whether to install missing dependencies automatically when each one has a
   single unambiguous source;
-- whether to skip the second confirmation for a clean, routine submodule
-  removal or conversion.
+- whether to skip the manager's confirmation for a clean, routine submodule
+  removal or conversion. Mixed selections that include ordinary packages still
+  require one aggregate confirmation.
 
 Both options are off by default. Warnings about dirty, unpushed, changed, or
 unverified work always appear.
@@ -282,9 +283,23 @@ development.
 ## Upgrade or Remove
 
 Manage Git Submodule Manager itself from Unity's Package Manager. When an
-installed package is a verified submodule, its native **Manage** menu provides
-**Convert to Read-Only Package** and **Uninstall Submodule**. Eligible direct
-read-only Git dependencies provide **Convert to Submodule**. Review
+installed package is a verified submodule, Unity's standard **Remove** action
+uses the guarded Git workflow and its native **Manage** menu provides **Convert
+to Read-Only Package**. The same Remove action safely handles all-submodule and
+mixed multi-selections, including every ordinary package in the action. The
+manager intercepts Remove only when the selection includes a managed submodule;
+ordinary-only selections, including read-only Git dependencies, retain Unity
+Package Manager's normal removal behavior. Eligible direct read-only Git
+dependencies provide **Convert to Submodule**.
+
+After you choose **Remove**, the manager waits for any active package scan and
+then presents confirmation when required. It removes the submodules, completes
+any ordinary package removal, and requests package resolution as needed. This
+handoff survives assembly reload and retries only
+while the exact captured manifest dependencies remain unchanged. Do not click
+**Remove** again or manually refresh or resolve. A terminal diagnostic appears
+only if bounded automatic recovery fails or changed project input makes another
+attempt unsafe. Review
 [CHANGELOG.md](../CHANGELOG.md) before changing versions.
 
 ### Migrating from Git Package Manager

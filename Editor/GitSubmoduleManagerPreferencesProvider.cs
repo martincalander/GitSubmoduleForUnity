@@ -88,8 +88,10 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             bool suppressRoutineConfirmations = EditorGUILayout.Toggle(
                 new GUIContent(
                     "Skip Routine Confirmation",
-                    "Skip the second confirmation only after Git verifies that a " +
-                    "submodule removal or conversion is clean and routine."),
+                    "Skip the manager's confirmation only after Git verifies " +
+                    "that a submodule removal or conversion is clean and routine. " +
+                    "Mixed selections with ordinary packages still require one " +
+                    "aggregate confirmation."),
                 settings.SuppressRoutineSubmoduleRemovalConfirmations);
             EditorGUILayout.HelpBox(
                 "Warnings for uncommitted, unpushed, changed, or unverified " +

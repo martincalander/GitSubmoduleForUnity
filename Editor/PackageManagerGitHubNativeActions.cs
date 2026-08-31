@@ -1,4 +1,5 @@
 using System;
+using System.Collections;
 using System.Collections.Generic;
 using System.IO;
 using System.Reflection;
@@ -8,6 +9,13 @@ using UnityEngine.UIElements;
 
 namespace MartinCalander.GitSubmoduleManager.Editor
 {
+    internal enum PackageManagerNativeRemoveSelectionRouting
+    {
+        UnityOwned,
+        Managed,
+        Blocked
+    }
+
     /// <summary>
     /// Adds a discovered GitHub repository's controls to Unity's native primary
     /// Package Manager action area. The implementation deliberately avoids the
@@ -52,10 +60,53 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             new(ReferenceComparer.Instance);
         private static readonly Dictionary<string, string> ActiveInstallMessages =
             new(StringComparer.Ordinal);
+        private static readonly HashSet<string> ActiveNativeRemovePackageNames =
+            new(StringComparer.Ordinal);
+        private static NativeRemovePlan queuedNativeRemoveAssessment;
+        private static bool queuedNativeRemoveUpdateSubscribed;
+        private static long queuedNativeRemoveStartedUtcTicks;
         private static SelectionContract supportedSelectionContract;
         private static bool recoveredCompletionPresentationScheduled;
+        private static readonly long QueuedNativeRemoveTimeoutTicks =
+            TimeSpan.FromMinutes(2d).Ticks;
         private const string LiveDiscoveryRequiredMessage =
             "Wait for live GitHub discovery to verify this exact repository before installing it.";
+
+        internal sealed class NativeRemovePlan
+        {
+            internal readonly List<PackageManagerSubmoduleInfo> Submodules =
+                new List<PackageManagerSubmoduleInfo>();
+            internal readonly List<string> OrdinaryPackageNames =
+                new List<string>();
+            internal readonly List<string> OrdinaryPackageSpecs =
+                new List<string>();
+            internal readonly List<string> AllPackageNames =
+                new List<string>();
+            internal readonly List<object> AllPackageVersions =
+                new List<object>();
+            internal string OperationId = Guid.NewGuid().ToString("N");
+            internal object PageManager;
+            internal bool IncludesManager;
+            internal bool AwaitingSnapshotClassification;
+            internal string OrdinaryRemovalError = string.Empty;
+        }
+
+        internal sealed class NativeRemoveVersionIdentity
+        {
+            internal NativeRemoveVersionIdentity(
+                string packageName,
+                string localPath,
+                bool isInstalled)
+            {
+                PackageName = packageName ?? string.Empty;
+                LocalPath = localPath ?? string.Empty;
+                IsInstalled = isInstalled;
+            }
+
+            internal string PackageName { get; }
+            internal string LocalPath { get; }
+            internal bool IsInstalled { get; }
+        }
 
         static PackageManagerGitHubNativeActions()
         {
@@ -70,9 +121,17 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 OnDependencyInstallPipelineCompleted;
             PackageManagerGitHubDiscovery.SnapshotChanged +=
                 RefreshAllEntries;
+            AssemblyReloadEvents.beforeAssemblyReload +=
+                ClearQueuedNativeRemoveAssessment;
         }
 
         internal static int InstalledRootCount => EntriesByRoot.Count;
+
+        internal static bool IsInstalledForRoot(object packageManagerRoot)
+        {
+            return packageManagerRoot != null &&
+                   EntriesByRoot.ContainsKey(packageManagerRoot);
+        }
 
         internal static bool InstallForRoot(object packageManagerRoot)
         {
@@ -109,8 +168,8 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                         ReferenceEquals(current.DetailsLinksContainer, detailsLinks))
                     {
                         current.Details.EnsurePrimaryControlsMounted();
-                        current.RemoveDetails.EnsureControlsMounted();
-                        current.ConversionDetails.EnsureControlsMounted();
+                        current.RemoveDetails?.EnsureControlsMounted();
+                        current.ConversionDetails?.EnsureControlsMounted();
                         RefreshForToolbar(toolbar, GetFieldValue(toolbar, "m_Package"));
                         TryScheduleRecoveredDependencyInstallCompletion();
                         return true;
@@ -150,36 +209,32 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                         GetFieldValue(toolbar, "m_Package"));
 
                 PackageManagerSubmoduleRemoveDetails removeDetails = null;
-                if (!PackageManagerSubmoduleRemoveDetails.TryCreate(
-                        primaryActions,
-                        detailsLinks,
-                        info => OnRemoveRequested(
-                            toolbar,
-                            removeDetails,
-                            info),
-                        out removeDetails))
-                {
-                    details.Dispose();
-                    return false;
-                }
+                PackageManagerSubmoduleRemoveDetails.TryCreate(
+                    primaryActions,
+                    detailsLinks,
+                    info => OnRemoveRequested(
+                        toolbar,
+                        removeDetails,
+                        info),
+                    out removeDetails);
 
                 PackageManagerPackageConversionDetails conversionDetails = null;
-                if (!PackageManagerPackageConversionDetails.TryCreate(
-                        primaryActions,
-                        detailsLinks,
-                        target => OnConversionRequested(
-                            toolbar,
-                            conversionDetails,
-                            target),
-                        out conversionDetails))
-                {
-                    removeDetails.Dispose();
-                    details.Dispose();
-                    return false;
-                }
+                PackageManagerPackageConversionDetails.TryCreate(
+                    primaryActions,
+                    detailsLinks,
+                    target => OnConversionRequested(
+                        toolbar,
+                        conversionDetails,
+                        target),
+                    out conversionDetails);
 
                 EventCallback<DetachFromPanelEvent> detached = _ =>
-                    ReleaseForRoot(root);
+                    GitSubmoduleManagerPackageManagerHost
+                        .ReleaseVisualTreeAndRequestRepair(
+                            root,
+                            ReleaseForRoot,
+                            GitSubmoduleManagerPackageManagerHost
+                                .RequestVisualTreeRepair);
                 var entry = new NativeActionEntry(
                     root,
                     toolbar,
@@ -236,9 +291,32 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 // The Package Manager tree may already be tearing down.
             }
 
-            entry.Details.Dispose();
-            entry.RemoveDetails.Dispose();
-            entry.ConversionDetails.Dispose();
+            try
+            {
+                entry.Details.Dispose();
+            }
+            catch
+            {
+                // Continue retiring the remaining optional controllers.
+            }
+
+            try
+            {
+                entry.RemoveDetails?.Dispose();
+            }
+            catch
+            {
+                // Continue retiring the remaining optional controller.
+            }
+
+            try
+            {
+                entry.ConversionDetails?.Dispose();
+            }
+            catch
+            {
+                // Registry ownership was already released above.
+            }
         }
 
         internal static void RefreshForToolbar(object toolbar, object package)
@@ -264,8 +342,13 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                         currentDetailsLinks))
                 {
                     VisualElement root = entry.Root;
-                    ReleaseForRoot(root);
-                    InstallForRoot(root);
+                    GitSubmoduleManagerPackageManagerHost
+                        .RemountVisualTreeOrRequestRepair(
+                            root,
+                            ReleaseForRoot,
+                            InstallForRoot,
+                            GitSubmoduleManagerPackageManagerHost
+                                .RequestVisualTreeRepair);
                     return;
                 }
 
@@ -292,131 +375,21 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 {
                     entry.Details.Refresh(null);
                     entry.Details.SetInstallState(false, false, string.Empty);
-                    entry.RemoveDetails.Refresh(submoduleInfo);
-                    string removeValidationError =
-                        GitSubmoduleRemoveService.ValidateInput(submoduleInfo);
-                    bool removeEnabled =
-                        string.IsNullOrWhiteSpace(removeValidationError) &&
-                        GitSubmoduleRemoveService.CanStart;
-                    string removeTooltip = removeEnabled
-                        ? "Uninstall this package through Git so its " +
-                          "submodule registration and worktree stay consistent."
-                        : string.IsNullOrWhiteSpace(removeValidationError)
-                            ? GitSubmoduleRemoveService.BuildUnavailableMessage()
-                            : removeValidationError;
-                    entry.RemoveDetails.SetRemoveState(
-                        removeEnabled,
-                        removeTooltip);
-                    PackageManagerPackageConversionTarget conversionTarget =
-                        BuildConversionTarget(submoduleInfo);
-                    entry.ConversionDetails.Refresh(conversionTarget);
-                    string conversionError =
-                        GitPackageConversionService.ValidateToReadOnly(
-                            submoduleInfo);
-                    bool conversionEnabled =
-                        string.IsNullOrWhiteSpace(conversionError) &&
-                        GitPackageConversionService.CanStart;
-                    entry.ConversionDetails.SetActionState(
-                        conversionTarget,
-                        conversionEnabled,
-                        conversionEnabled
-                            ? "Convert this editable submodule to a normal " +
-                              "read-only UPM Git dependency pinned to its current commit."
-                            : BuildConversionDisabledTooltip(conversionError));
-                    PackageManagerSubmoduleManageMenu.Apply(
-                        entry.Toolbar,
-                        PackageManagerManagedPackageKind.Submodule,
-                        conversionEnabled,
-                        conversionEnabled
-                            ? "Convert this editable submodule to a normal " +
-                              "read-only UPM Git dependency pinned to its current commit."
-                            : BuildConversionDisabledTooltip(conversionError),
-                        () => BeginConversionAssessment(
-                            entry.Toolbar,
-                            entry.ConversionDetails,
-                            conversionTarget,
-                            submoduleInfo),
-                        removeEnabled,
-                        removeTooltip,
-                        () => BeginRemoveAssessment(
-                            entry.Toolbar,
-                            entry.RemoveDetails,
-                            submoduleInfo));
-                    if (entry.RemoveDetails.IsRemoving && GitOperationService.IsBusy)
-                    {
-                        entry.RemoveDetails.ShowRemoving(
-                            "Removing the Git submodule and refreshing Unity...");
-                    }
-                    if (entry.ConversionDetails.IsConverting &&
-                        GitOperationService.IsBusy)
-                    {
-                        entry.ConversionDetails.ShowProgress(
-                            conversionTarget,
-                            "Converting the submodule to a read-only Git package...");
-                    }
+                    RefreshSubmoduleManagement(entry, submoduleInfo);
                     return;
                 }
 
-                entry.RemoveDetails.Refresh(null);
-                entry.RemoveDetails.SetRemoveState(false, string.Empty);
+                ResetRemoveDetails(entry.RemoveDetails);
 
                 if (isInstalledReadOnlyGit)
                 {
                     entry.Details.Refresh(null);
                     entry.Details.SetInstallState(false, false, string.Empty);
-                    PackageManagerPackageConversionTarget conversionTarget =
-                        BuildConversionTarget(readOnlyInfo);
-                    entry.ConversionDetails.Refresh(conversionTarget);
-                    string conversionError =
-                        GitPackageConversionService.ValidateToSubmodule(
-                            readOnlyInfo);
-                    bool conversionEnabled =
-                        string.IsNullOrWhiteSpace(conversionError) &&
-                        GitPackageConversionService.CanStart;
-                    string conversionTooltip = conversionEnabled
-                        ? "Convert this normal read-only UPM Git dependency " +
-                          "to an editable submodule at " +
-                          conversionTarget.PackagePath + "."
-                        : BuildConversionDisabledTooltip(conversionError);
-                    entry.ConversionDetails.SetActionState(
-                        conversionTarget,
-                        conversionEnabled,
-                        conversionTooltip);
-                    PackageManagerSubmoduleManageMenu.Apply(
-                        entry.Toolbar,
-                        PackageManagerManagedPackageKind.ReadOnlyGit,
-                        conversionEnabled,
-                        conversionTooltip,
-                        () => BeginReadOnlyConversion(
-                            entry.Toolbar,
-                            entry.ConversionDetails,
-                            conversionTarget,
-                            readOnlyInfo),
-                        false,
-                        string.Empty,
-                        null);
-                    if (entry.ConversionDetails.IsConverting &&
-                        GitOperationService.IsBusy)
-                    {
-                        entry.ConversionDetails.ShowProgress(
-                            conversionTarget,
-                            "Converting the read-only Git package to a submodule...");
-                    }
+                    RefreshReadOnlyManagement(entry, readOnlyInfo);
                     return;
                 }
 
-                PackageManagerSubmoduleManageMenu.Apply(
-                    entry.Toolbar,
-                    PackageManagerManagedPackageKind.None,
-                    false,
-                    string.Empty,
-                    null,
-                    false,
-                    string.Empty,
-                    null);
-
-                entry.ConversionDetails.Refresh(null);
-                entry.ConversionDetails.SetActionState(false, string.Empty);
+                ResetManagedDetails(entry);
 
                 if (!isProjectedRepository)
                 {
@@ -567,113 +540,1300 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             }
             catch
             {
-                entry.Details.Refresh(null);
-                entry.Details.SetInstallState(false, false, string.Empty);
-                entry.RemoveDetails.Refresh(null);
-                entry.RemoveDetails.SetRemoveState(false, string.Empty);
-                entry.ConversionDetails.Refresh(null);
-                entry.ConversionDetails.SetActionState(false, string.Empty);
+                HideInstallDetails(entry.Details);
+                ResetManagedDetails(entry);
+            }
+        }
+
+        private static void RefreshSubmoduleManagement(
+            NativeActionEntry entry,
+            PackageManagerSubmoduleInfo submoduleInfo)
+        {
+            bool removeEnabled = false;
+            string removeTooltip = string.Empty;
+            PackageManagerSubmoduleRemoveDetails removeDetails =
+                entry.RemoveDetails;
+            if (removeDetails != null)
+            {
+                try
+                {
+                    removeDetails.Refresh(submoduleInfo);
+                    string removeValidationError =
+                        GitSubmoduleRemoveService.ValidateInput(submoduleInfo);
+                    removeEnabled =
+                        string.IsNullOrWhiteSpace(removeValidationError) &&
+                        GitSubmoduleRemoveService.CanStart;
+                    removeTooltip = removeEnabled
+                        ? "Remove this package through Git so its submodule " +
+                          "registration and worktree stay consistent."
+                        : string.IsNullOrWhiteSpace(removeValidationError)
+                            ? GitSubmoduleRemoveService.BuildUnavailableMessage()
+                            : removeValidationError;
+                    removeDetails.SetRemoveState(removeEnabled, removeTooltip);
+                    if (removeDetails.IsRemoving && GitOperationService.IsBusy)
+                    {
+                        removeDetails.ShowRemoving(
+                            "Removing the Git submodule and refreshing Unity...");
+                    }
+                }
+                catch
+                {
+                    ResetRemoveDetails(removeDetails);
+                    removeEnabled = false;
+                    removeTooltip = string.Empty;
+                }
+            }
+
+            PackageManagerPackageConversionDetails conversionDetails =
+                entry.ConversionDetails;
+            if (conversionDetails == null)
+            {
+                RestoreNativeManageMenu(entry.Toolbar);
+                return;
+            }
+
+            try
+            {
+                PackageManagerPackageConversionTarget conversionTarget =
+                    BuildConversionTarget(submoduleInfo);
+                conversionDetails.Refresh(conversionTarget);
+                string conversionError =
+                    GitPackageConversionService.ValidateToReadOnly(submoduleInfo);
+                bool conversionEnabled =
+                    string.IsNullOrWhiteSpace(conversionError) &&
+                    GitPackageConversionService.CanStart;
+                string conversionTooltip = conversionEnabled
+                    ? "Convert this editable submodule to a normal read-only " +
+                      "UPM Git dependency pinned to its current commit."
+                    : BuildConversionDisabledTooltip(conversionError);
+                conversionDetails.SetActionState(
+                    conversionTarget,
+                    conversionEnabled,
+                    conversionTooltip);
+                if (PackageManagerSubmoduleManageMenu.IsSupportedContract())
+                {
+                    PackageManagerSubmoduleManageMenu.Apply(
+                        entry.Toolbar,
+                        PackageManagerManagedPackageKind.Submodule,
+                        conversionEnabled,
+                        conversionTooltip,
+                        () => BeginConversionAssessment(
+                            entry.Toolbar,
+                            conversionDetails,
+                            conversionTarget,
+                            submoduleInfo),
+                        removeEnabled,
+                        removeTooltip,
+                        removeDetails == null
+                            ? null
+                            : () => BeginRemoveAssessment(
+                                entry.Toolbar,
+                                removeDetails,
+                                submoduleInfo));
+                }
+
+                if (conversionDetails.IsConverting && GitOperationService.IsBusy)
+                {
+                    conversionDetails.ShowProgress(
+                        conversionTarget,
+                        "Converting the submodule to a read-only Git package...");
+                }
+            }
+            catch
+            {
+                ResetConversionDetails(conversionDetails);
+                RestoreNativeManageMenu(entry.Toolbar);
+            }
+        }
+
+        private static void RefreshReadOnlyManagement(
+            NativeActionEntry entry,
+            PackageManagerReadOnlyGitInfo readOnlyInfo)
+        {
+            PackageManagerPackageConversionDetails conversionDetails =
+                entry.ConversionDetails;
+            if (conversionDetails == null)
+            {
+                RestoreNativeManageMenu(entry.Toolbar);
+                return;
+            }
+
+            try
+            {
+                PackageManagerPackageConversionTarget conversionTarget =
+                    BuildConversionTarget(readOnlyInfo);
+                conversionDetails.Refresh(conversionTarget);
+                string conversionError =
+                    GitPackageConversionService.ValidateToSubmodule(readOnlyInfo);
+                bool conversionEnabled =
+                    string.IsNullOrWhiteSpace(conversionError) &&
+                    GitPackageConversionService.CanStart;
+                string conversionTooltip = conversionEnabled
+                    ? "Convert this normal read-only UPM Git dependency to an " +
+                      "editable submodule at " + conversionTarget.PackagePath + "."
+                    : BuildConversionDisabledTooltip(conversionError);
+                conversionDetails.SetActionState(
+                    conversionTarget,
+                    conversionEnabled,
+                    conversionTooltip);
+                if (PackageManagerSubmoduleManageMenu.IsSupportedContract())
+                {
+                    PackageManagerSubmoduleManageMenu.Apply(
+                        entry.Toolbar,
+                        PackageManagerManagedPackageKind.ReadOnlyGit,
+                        conversionEnabled,
+                        conversionTooltip,
+                        () => BeginReadOnlyConversion(
+                            entry.Toolbar,
+                            conversionDetails,
+                            conversionTarget,
+                            readOnlyInfo),
+                        false,
+                        string.Empty,
+                        null);
+                }
+
+                if (conversionDetails.IsConverting && GitOperationService.IsBusy)
+                {
+                    conversionDetails.ShowProgress(
+                        conversionTarget,
+                        "Converting the read-only Git package to a submodule...");
+                }
+            }
+            catch
+            {
+                ResetConversionDetails(conversionDetails);
+                RestoreNativeManageMenu(entry.Toolbar);
+            }
+        }
+
+        private static void ResetManagedDetails(NativeActionEntry entry)
+        {
+            if (entry == null)
+                return;
+
+            ResetRemoveDetails(entry.RemoveDetails);
+            ResetConversionDetails(entry.ConversionDetails);
+            RestoreNativeManageMenu(entry.Toolbar);
+        }
+
+        private static void ResetRemoveDetails(
+            PackageManagerSubmoduleRemoveDetails details)
+        {
+            if (details == null)
+                return;
+
+            try
+            {
+                details.Refresh(null);
+                details.SetRemoveState(false, string.Empty);
+            }
+            catch
+            {
+                // Optional removal presentation must not suppress Install.
+            }
+        }
+
+        private static void ResetConversionDetails(
+            PackageManagerPackageConversionDetails details)
+        {
+            if (details == null)
+                return;
+
+            try
+            {
+                details.Refresh(null);
+                details.SetActionState(false, string.Empty);
+            }
+            catch
+            {
+                // Optional conversion presentation must not suppress Install.
+            }
+        }
+
+        private static void RestoreNativeManageMenu(VisualElement toolbar)
+        {
+            try
+            {
+                if (!PackageManagerSubmoduleManageMenu.IsSupportedContract())
+                    return;
+
+                PackageManagerSubmoduleManageMenu.Apply(
+                    toolbar,
+                    PackageManagerManagedPackageKind.None,
+                    false,
+                    string.Empty,
+                    null,
+                    false,
+                    string.Empty,
+                    null);
+            }
+            catch
+            {
+                // Manage menu drift is isolated from primary Install controls.
+            }
+        }
+
+        private static void HideInstallDetails(PackageManagerGitHubDetails details)
+        {
+            if (details == null)
+                return;
+
+            try
+            {
+                details.Refresh(null);
+                details.SetInstallState(false, false, string.Empty);
+            }
+            catch
+            {
+                // The Package Manager details hierarchy may be recycling.
             }
         }
 
         /// <summary>
-        /// Harmony entry point for Unity's embedded-package Remove action. True
-        /// means the request was claimed and Unity's recursive directory delete
-        /// must be skipped; actionResult is returned to Unity's PackageAction.
+        /// Harmony fallback for Unity's raw embedded Remove action. Verified
+        /// submodules use the same guarded workflow as the native Remove action.
+        /// Ordinary embedded packages remain entirely Unity-owned.
         /// </summary>
         internal static bool TryHandleRemoveCustomAction(
             object packageVersion,
             out bool actionResult)
         {
+            return TryHandleSingleNativeRemove(
+                null,
+                packageVersion,
+                out actionResult);
+        }
+
+        internal static bool TryHandleRemoveAction(
+            object removeAction,
+            object packageVersion,
+            out bool actionResult)
+        {
+            return TryHandleSingleNativeRemove(
+                removeAction,
+                packageVersion,
+                out actionResult);
+        }
+
+        internal static bool TryHandleRemoveActionCollection(
+            object removeAction,
+            object packages,
+            out bool actionResult)
+        {
+            return TryHandleNativeRemoveSelection(
+                removeAction,
+                packages,
+                out actionResult);
+        }
+
+        private static bool TryHandleSingleNativeRemove(
+            object removeAction,
+            object packageVersion,
+            out bool actionResult)
+        {
             actionResult = false;
-            if (PackageManagerSubmodulePresentation.TryGetPresentation(
-                    packageVersion,
-                    out PackageManagerSubmoduleInfo info))
+            if (packageVersion == null)
+                return false;
+
+            object package = GetPropertyValue(packageVersion, "package");
+            if (package == null)
             {
-                bool matchedEntry = false;
-                VisualElement assessmentToolbar = null;
-                PackageManagerSubmoduleRemoveDetails assessmentDetails = null;
-                foreach (NativeActionEntry entry in EntriesByToolbar.Values)
+                if (!ShouldFailClosedNativeRemoveSelection(
+                        packageVersion,
+                        false))
                 {
-                    if (entry?.Toolbar == null || entry.RemoveDetails == null)
-                        continue;
-
-                    object selectedVersion =
-                        TryGetAuthoritativeSelectedPackage(
-                            entry.Toolbar,
-                            out object selectedPackage)
-                            ? PackageManagerSubmoduleNativePage.GetPrimaryVersion(
-                                selectedPackage)
-                            : null;
-                    if (!ReferenceEquals(selectedVersion, packageVersion) &&
-                        !SameSubmodule(entry.RemoveDetails.CurrentInfo, info))
-                    {
-                        continue;
-                    }
-
-                    matchedEntry = true;
-                    entry.RemoveDetails.Refresh(info);
-                    string validationError =
-                        GitSubmoduleRemoveService.ValidateInput(info);
-                    bool enabled =
-                        string.IsNullOrWhiteSpace(validationError) &&
-                        GitSubmoduleRemoveService.CanStart;
-                    string disabledMessage = string.IsNullOrWhiteSpace(validationError)
-                        ? GitSubmoduleRemoveService.BuildUnavailableMessage()
-                        : validationError;
-                    entry.RemoveDetails.SetRemoveState(
-                        enabled,
-                        enabled
-                            ? "Uninstall this installed package through Git."
-                            : disabledMessage);
-                    if (!enabled)
-                    {
-                        entry.RemoveDetails.ShowError(disabledMessage);
-                        continue;
-                    }
-
-                    assessmentToolbar ??= entry.Toolbar;
-                    assessmentDetails ??= entry.RemoveDetails;
+                    return false;
                 }
 
-                if (matchedEntry)
+                ReportNativeRemoveDiagnostic(
+                    "The selected submodule package could not be resolved. It " +
+                    "was preserved; refresh Package Manager and retry.");
+                return true;
+            }
+
+            return TryHandleNativeRemoveSelection(
+                removeAction,
+                new[] { package },
+                out actionResult);
+        }
+
+        private static bool TryHandleNativeRemoveSelection(
+            object removeAction,
+            object selection,
+            out bool actionResult)
+        {
+            actionResult = false;
+            if (!TryBuildNativeRemovePlan(
+                    removeAction,
+                    selection,
+                    out NativeRemovePlan plan,
+                    out bool claimed,
+                    out string error))
+            {
+                if (!claimed)
+                    return false;
+
+                string queueError = string.Empty;
+                if (plan?.AwaitingSnapshotClassification == true &&
+                    TryQueueNativeRemoveAssessment(plan, out queueError))
                 {
-                    // IPackageVersion instances can be shared by Package Manager
-                    // windows. Start one read-only assessment, then mirror its
-                    // exact confirmation state to every matching details host.
-                    actionResult = assessmentToolbar != null &&
-                                   BeginRemoveAssessment(
-                                       assessmentToolbar,
-                                       assessmentDetails,
-                                       info);
+                    SetNativeRemoveInProgress(plan, true);
+                    ShowInspectingForNativeRemove(plan);
+                    ScheduleNativeRemovePresentationRefresh();
+                    actionResult = true;
                     return true;
                 }
 
-                // A proven submodule must never fall through to Unity's raw
-                // embedded-directory deletion merely because its visual tree was
-                // recycled. Rebuild the window and leave the package intact.
-                Debug.LogWarning(
-                    "[Git Submodule Manager] Package Manager could not mount the " +
-                    "safe submodule removal controls. The package was preserved; " +
-                    "refresh Package Manager and retry.");
-                PackageManagerSubmoduleHarmonyPatch.RefreshOpenPackageManagerWindows();
+                ReportNativeBatchRemoveError(
+                    plan,
+                    string.IsNullOrWhiteSpace(queueError) ? error : queueError);
                 return true;
             }
 
-            // During the initial asynchronous snapshot, conservatively preserve
-            // direct Packages/<name> embedded packages. Once ready, an ordinary
-            // non-submodule is allowed to use Unity's native removal unchanged.
-            if (!PackageManagerSubmoduleSnapshot.IsReady &&
-                IsDirectInstalledPackagePath(packageVersion))
+            if (!TryStartNativeBatchAssessment(plan, out string startError))
             {
-                PackageManagerSubmoduleSnapshot.Refresh();
-                Debug.LogWarning(
-                    "[Git Submodule Manager] Submodule detection is still loading. " +
-                    "The package was preserved; retry Remove after Package Manager refreshes.");
+                ReportNativeBatchRemoveError(
+                    plan,
+                    string.IsNullOrWhiteSpace(startError)
+                        ? "The selected Git submodules could not be inspected safely."
+                        : startError);
                 return true;
+            }
+
+            SetNativeRemoveInProgress(plan, true);
+            ShowInspectingForNativeRemove(plan);
+            ScheduleNativeRemovePresentationRefresh();
+            actionResult = true;
+            return true;
+        }
+
+        private static bool TryBuildNativeRemovePlan(
+            object removeAction,
+            object selection,
+            out NativeRemovePlan plan,
+            out bool claimed,
+            out string error)
+        {
+            bool snapshotReady =
+                PackageManagerSubmoduleSnapshot.HasCurrentSuccessfulSnapshot;
+            PackageManagerNativeRemoveSelectionRouting routing =
+                ClassifyNativeRemoveSelection(
+                    selection,
+                    snapshotReady,
+                    PackageManagerSubmoduleNativePage.GetPrimaryVersion,
+                    package => PackageManagerReadOnlyGitPackage
+                        .TryResolveSelectedPackageName(
+                            package,
+                            out string packageName)
+                            ? packageName
+                            : null,
+                    version => snapshotReady &&
+                               PackageManagerSubmodulePresentation
+                                   .TryGetPresentation(
+                                       version,
+                                       out PackageManagerSubmoduleInfo info)
+                            ? info
+                            : null,
+                    IsDirectInstalledPackagePath,
+                    out plan,
+                    out error);
+            plan.PageManager = GetFieldValue(removeAction, "m_PageManager");
+            if (routing == PackageManagerNativeRemoveSelectionRouting.UnityOwned)
+            {
+                claimed = false;
+                return false;
+            }
+
+            claimed = true;
+            if (routing == PackageManagerNativeRemoveSelectionRouting.Blocked)
+            {
+                if (!snapshotReady)
+                    PackageManagerSubmoduleSnapshot.Refresh();
+                return false;
+            }
+
+            for (int index = 0; index < plan.Submodules.Count; index++)
+            {
+                string validationError = GitSubmoduleRemoveService.ValidateInput(
+                    plan.Submodules[index]);
+                if (!string.IsNullOrWhiteSpace(validationError))
+                {
+                    error = validationError;
+                    return false;
+                }
+            }
+
+            if (!GitSubmoduleRemoveService.CanStart &&
+                (!PackageManagerSubmoduleSnapshot.IsReaderActive ||
+                 !GitSubmoduleRemoveService.CanStartAfterPackageSnapshot))
+            {
+                error = GitSubmoduleRemoveService.BuildUnavailableMessage();
+                return false;
+            }
+
+            return true;
+        }
+
+        internal static PackageManagerNativeRemoveSelectionRouting
+            ClassifyNativeRemoveSelection(
+                object selection,
+                bool snapshotReady,
+                Func<object, object> getPrimaryVersion,
+                Func<object, string> resolvePackageName,
+                Func<object, PackageManagerSubmoduleInfo> resolveSubmodule,
+                Func<object, bool> isDirectInstalledPackagePath,
+                out NativeRemovePlan plan,
+                out string error)
+        {
+            plan = new NativeRemovePlan();
+            error = string.Empty;
+            if (!(selection is IEnumerable packages) || selection is string)
+                return PackageManagerNativeRemoveSelectionRouting.UnityOwned;
+
+            if (getPrimaryVersion == null || resolvePackageName == null ||
+                resolveSubmodule == null || isDirectInstalledPackagePath == null)
+            {
+                error = "The native Remove package classifier is unavailable.";
+                return PackageManagerNativeRemoveSelectionRouting.Blocked;
+            }
+
+            var identities = new HashSet<string>(StringComparer.Ordinal);
+            bool loadingCandidate = false;
+            bool invalidIdentity = false;
+            foreach (object package in packages)
+            {
+                object version = getPrimaryVersion(package);
+                string packageName = resolvePackageName(package)?.Trim() ??
+                                     string.Empty;
+                if (version == null ||
+                    !GitUtility.IsValidUpmPackageName(packageName) ||
+                    !identities.Add(packageName))
+                {
+                    invalidIdentity = true;
+                    continue;
+                }
+
+                plan.AllPackageNames.Add(packageName);
+                plan.AllPackageVersions.Add(version);
+                if (string.Equals(
+                        packageName,
+                        GitPackageConversionService.ManagerPackageName,
+                        StringComparison.Ordinal))
+                {
+                    plan.IncludesManager = true;
+                }
+
+                PackageManagerSubmoduleInfo info = resolveSubmodule(version);
+                if (info != null)
+                {
+                    if (!string.Equals(
+                            info.PackageName?.Trim(),
+                            packageName,
+                            StringComparison.Ordinal))
+                    {
+                        loadingCandidate = true;
+                        invalidIdentity = true;
+                        continue;
+                    }
+
+                    plan.Submodules.Add(info);
+                    continue;
+                }
+
+                if (!snapshotReady && isDirectInstalledPackagePath(version))
+                {
+                    loadingCandidate = true;
+                    continue;
+                }
+
+                plan.OrdinaryPackageNames.Add(packageName);
+            }
+
+            PackageManagerNativeRemoveSelectionRouting routing =
+                ResolveNativeRemoveSelectionRouting(
+                    plan.Submodules.Count,
+                    plan.OrdinaryPackageNames.Count,
+                    loadingCandidate,
+                    invalidIdentity);
+            if (routing != PackageManagerNativeRemoveSelectionRouting.Blocked)
+                return routing;
+
+            error = invalidIdentity
+                ? "The selected package list changed or contains an ambiguous " +
+                  "identity. Every selected package was preserved."
+                : "Submodule detection is still loading. The selected packages " +
+                  "will continue automatically after Package Manager refreshes.";
+            plan.AwaitingSnapshotClassification =
+                loadingCandidate && !invalidIdentity;
+            return routing;
+        }
+
+        internal static PackageManagerNativeRemoveSelectionRouting
+            ResolveNativeRemoveSelectionRouting(
+                int submoduleCount,
+                int ordinaryPackageCount,
+                bool loadingSubmoduleCandidate,
+                bool invalidIdentity)
+        {
+            if (submoduleCount < 0 || ordinaryPackageCount < 0)
+                return PackageManagerNativeRemoveSelectionRouting.Blocked;
+            if (submoduleCount == 0 && !loadingSubmoduleCandidate)
+                return PackageManagerNativeRemoveSelectionRouting.UnityOwned;
+            if (loadingSubmoduleCandidate || invalidIdentity ||
+                submoduleCount == 0)
+            {
+                return PackageManagerNativeRemoveSelectionRouting.Blocked;
+            }
+
+            return PackageManagerNativeRemoveSelectionRouting.Managed;
+        }
+
+        internal static bool ShouldFailClosedNativeRemoveSelection(
+            object selection,
+            bool isCollection)
+        {
+            try
+            {
+                if (!isCollection)
+                {
+                    return IsKnownOrLoadingSubmoduleVersion(selection);
+                }
+
+                if (!(selection is IEnumerable packages) || selection is string)
+                    return false;
+                foreach (object package in packages)
+                {
+                    object version =
+                        PackageManagerSubmoduleNativePage.GetPrimaryVersion(package);
+                    if (IsKnownOrLoadingSubmoduleVersion(version))
+                        return true;
+                }
+            }
+            catch
+            {
+                // Unknown selections remain Unity-owned unless a submodule was
+                // positively identified before the classification failure.
             }
 
             return false;
+        }
+
+        private static bool IsKnownOrLoadingSubmoduleVersion(object version)
+        {
+            if (version == null)
+                return false;
+
+            bool snapshotReady =
+                PackageManagerSubmoduleSnapshot.HasCurrentSuccessfulSnapshot;
+            if (snapshotReady &&
+                PackageManagerSubmodulePresentation.TryGetPresentation(
+                    version,
+                    out _))
+            {
+                return true;
+            }
+
+            if (snapshotReady || !IsDirectInstalledPackagePath(version))
+            {
+                return false;
+            }
+
+            PackageManagerSubmoduleSnapshot.Refresh();
+            return true;
+        }
+
+        internal static bool IsNativeRemoveInProgress(object packageVersion)
+        {
+            if (!PackageManagerReadOnlyGitPackage.TryResolveSelectedPackageName(
+                    packageVersion,
+                    out string packageName))
+            {
+                return false;
+            }
+
+            return IsNativeRemovePackageNameInProgress(packageName);
+        }
+
+        internal static bool IsNativeRemovePackageNameInProgress(
+            string packageName)
+        {
+            if (string.IsNullOrWhiteSpace(packageName))
+                return false;
+
+            return ActiveNativeRemovePackageNames.Contains(packageName) ||
+                   PackageManagerProjectResolutionService.ContainsPackage(
+                       packageName) ||
+                   PackageManagerNativeRemoveHandoffService.ContainsPackage(
+                       packageName);
+        }
+
+        private static bool TryStartNativeBatchAssessment(
+            NativeRemovePlan plan,
+            out string error)
+        {
+            if (queuedNativeRemoveAssessment != null)
+            {
+                error = "Another Package Manager Remove action is already " +
+                        "waiting for the current package scan.";
+                return false;
+            }
+
+            if (PackageManagerSubmoduleSnapshot.IsReaderActive)
+                return TryQueueNativeRemoveAssessment(plan, out error);
+
+            if (!PackageManagerSubmoduleSnapshot
+                    .TryDeferRefreshForMutationHandoff(
+                        out IDisposable refreshDeferral))
+            {
+                error = GitSubmoduleRemoveService.BuildUnavailableMessage();
+                return false;
+            }
+
+            return TryStartNativeBatchAssessmentWithDeferral(
+                plan,
+                refreshDeferral,
+                out error);
+        }
+
+        private static bool TryQueueNativeRemoveAssessment(
+            NativeRemovePlan plan,
+            out string error)
+        {
+            if (plan == null || plan.AllPackageNames.Count == 0 ||
+                plan.AllPackageNames.Count != plan.AllPackageVersions.Count)
+            {
+                error = "The Package Manager Remove action has no complete " +
+                        "selection identity to resume.";
+                return false;
+            }
+            if (!GitSubmoduleRemoveService.CanStartAfterPackageSnapshot)
+            {
+                error = GitSubmoduleRemoveService.BuildUnavailableMessage();
+                return false;
+            }
+            if (queuedNativeRemoveAssessment != null)
+            {
+                error = "Another Package Manager Remove action is already " +
+                        "waiting for the current package scan.";
+                return false;
+            }
+
+            queuedNativeRemoveAssessment = plan;
+            queuedNativeRemoveStartedUtcTicks = DateTime.UtcNow.Ticks;
+            SubscribeQueuedNativeRemoveUpdate();
+            error = string.Empty;
+            return true;
+        }
+
+        private static bool TryStartNativeBatchAssessmentWithDeferral(
+            NativeRemovePlan plan,
+            IDisposable refreshDeferral,
+            out string error)
+        {
+            bool started = false;
+            try
+            {
+                started = GitSubmoduleRemoveService.TryStartBatchAssessment(
+                    plan.Submodules,
+                    completion => OnNativeBatchAssessmentCompleted(
+                        plan,
+                        refreshDeferral,
+                        completion),
+                    out error);
+                return started;
+            }
+            finally
+            {
+                if (!started)
+                    refreshDeferral.Dispose();
+            }
+        }
+
+        private static void SubscribeQueuedNativeRemoveUpdate()
+        {
+            if (queuedNativeRemoveUpdateSubscribed)
+                return;
+
+            queuedNativeRemoveUpdateSubscribed = true;
+            EditorApplication.update += ContinueQueuedNativeRemoveAssessment;
+        }
+
+        private static void UnsubscribeQueuedNativeRemoveUpdate()
+        {
+            if (!queuedNativeRemoveUpdateSubscribed)
+                return;
+
+            queuedNativeRemoveUpdateSubscribed = false;
+            EditorApplication.update -= ContinueQueuedNativeRemoveAssessment;
+        }
+
+        private static void ContinueQueuedNativeRemoveAssessment()
+        {
+            NativeRemovePlan plan = queuedNativeRemoveAssessment;
+            if (plan == null)
+            {
+                UnsubscribeQueuedNativeRemoveUpdate();
+                return;
+            }
+
+            if (IsQueuedNativeRemoveTimedOut(
+                    queuedNativeRemoveStartedUtcTicks,
+                    DateTime.UtcNow.Ticks,
+                    QueuedNativeRemoveTimeoutTicks))
+            {
+                ClearQueuedNativeRemoveAssessment();
+                SetNativeRemoveInProgress(plan, false);
+                ReportNativeBatchRemoveError(
+                    plan,
+                    "The package scan did not produce a current submodule snapshot " +
+                    "in time. Every selected package was preserved.");
+                return;
+            }
+
+            if (!PackageManagerSubmoduleSnapshot.HasCurrentSuccessfulSnapshot)
+                return;
+
+            if (!GitSubmoduleRemoveService.CanStartAfterPackageSnapshot)
+            {
+                ClearQueuedNativeRemoveAssessment();
+                SetNativeRemoveInProgress(plan, false);
+                ReportNativeBatchRemoveError(
+                    plan,
+                    GitSubmoduleRemoveService.BuildUnavailableMessage());
+                return;
+            }
+
+            if (!PackageManagerSubmoduleSnapshot
+                    .TryDeferRefreshForMutationHandoff(
+                        out IDisposable refreshDeferral))
+            {
+                return;
+            }
+
+            ClearQueuedNativeRemoveAssessment();
+
+            if (!TryRefreshQueuedNativeRemovePlan(plan, out string refreshError))
+            {
+                refreshDeferral?.Dispose();
+                SetNativeRemoveInProgress(plan, false);
+                ReportNativeBatchRemoveError(plan, refreshError);
+                return;
+            }
+
+            ShowInspectingForNativeRemove(plan);
+            if (TryStartNativeBatchAssessmentWithDeferral(
+                    plan,
+                    refreshDeferral,
+                    out string startError))
+            {
+                return;
+            }
+
+            SetNativeRemoveInProgress(plan, false);
+            ReportNativeBatchRemoveError(
+                plan,
+                string.IsNullOrWhiteSpace(startError)
+                    ? "The selected Git submodules could not be inspected safely."
+                    : startError);
+        }
+
+        internal static bool IsQueuedNativeRemoveTimedOut(
+            long startedUtcTicks,
+            long nowUtcTicks,
+            long timeoutTicks)
+        {
+            return startedUtcTicks <= 0L ||
+                   timeoutTicks < 0L ||
+                   nowUtcTicks < startedUtcTicks ||
+                   nowUtcTicks - startedUtcTicks >= timeoutTicks;
+        }
+
+        private static void ClearQueuedNativeRemoveAssessment()
+        {
+            queuedNativeRemoveAssessment = null;
+            queuedNativeRemoveStartedUtcTicks = 0L;
+            UnsubscribeQueuedNativeRemoveUpdate();
+        }
+
+        internal static bool TryRefreshQueuedNativeRemovePlan(
+            NativeRemovePlan plan,
+            out string error)
+        {
+            return TryRefreshQueuedNativeRemovePlan(
+                plan,
+                version => PackageManagerSubmodulePresentation
+                    .TryGetVersionIdentity(
+                        version,
+                        out string packageName,
+                        out string localPath,
+                        out bool isInstalled)
+                    ? new NativeRemoveVersionIdentity(
+                        packageName,
+                        localPath,
+                        isInstalled)
+                    : null,
+                (packageName, localPath) =>
+                    PackageManagerSubmoduleSnapshot.TryGet(
+                        packageName,
+                        localPath,
+                        true,
+                        out PackageManagerSubmoduleInfo info)
+                        ? info
+                        : null,
+                GitSubmoduleRemoveService.ValidateInput,
+                out error);
+        }
+
+        internal static bool TryRefreshQueuedNativeRemovePlan(
+            NativeRemovePlan plan,
+            Func<object, NativeRemoveVersionIdentity> resolveVersionIdentity,
+            Func<string, string, PackageManagerSubmoduleInfo> resolveSubmodule,
+            Func<PackageManagerSubmoduleInfo, string> validateSubmodule,
+            out string error)
+        {
+            error = string.Empty;
+            if (plan == null || plan.AllPackageNames.Count == 0 ||
+                plan.AllPackageNames.Count != plan.AllPackageVersions.Count ||
+                resolveVersionIdentity == null ||
+                resolveSubmodule == null ||
+                validateSubmodule == null)
+            {
+                error = "The queued Package Manager Remove action has no package identity.";
+                return false;
+            }
+
+            var submodules = new List<PackageManagerSubmoduleInfo>();
+            var ordinaryPackageNames = new List<string>();
+            for (int index = 0; index < plan.AllPackageNames.Count; index++)
+            {
+                string packageName = plan.AllPackageNames[index];
+                NativeRemoveVersionIdentity identity =
+                    resolveVersionIdentity(plan.AllPackageVersions[index]);
+                if (identity?.IsInstalled != true ||
+                    !string.Equals(
+                        packageName,
+                        identity.PackageName?.Trim(),
+                        StringComparison.Ordinal))
+                {
+                    error = "The selected package list changed while waiting for " +
+                            "the package scan. Every selected package was preserved.";
+                    return false;
+                }
+
+                PackageManagerSubmoduleInfo info = resolveSubmodule(
+                    packageName,
+                    identity.LocalPath);
+                if (info != null)
+                {
+                    string validationError = validateSubmodule(info);
+                    if (!string.IsNullOrWhiteSpace(validationError))
+                    {
+                        error = validationError;
+                        return false;
+                    }
+
+                    submodules.Add(info);
+                }
+                else
+                {
+                    ordinaryPackageNames.Add(packageName);
+                }
+            }
+
+            if (submodules.Count == 0)
+            {
+                error = "The selected packages no longer include the verified " +
+                        "Git submodule that claimed Remove. Every package was preserved.";
+                return false;
+            }
+
+            plan.Submodules.Clear();
+            plan.Submodules.AddRange(submodules);
+            plan.OrdinaryPackageNames.Clear();
+            plan.OrdinaryPackageNames.AddRange(ordinaryPackageNames);
+            plan.OrdinaryPackageSpecs.Clear();
+            plan.AwaitingSnapshotClassification = false;
+            return true;
+        }
+
+        private static void OnNativeBatchAssessmentCompleted(
+            NativeRemovePlan plan,
+            IDisposable refreshDeferral,
+            GitSubmoduleBatchAssessmentCompletion completion)
+        {
+            if (completion == null || !completion.Success ||
+                completion.Assessments == null ||
+                completion.Assessments.Count != plan.Submodules.Count)
+            {
+                refreshDeferral?.Dispose();
+                SetNativeRemoveInProgress(plan, false);
+                ReportNativeBatchRemoveError(
+                    plan,
+                    string.IsNullOrWhiteSpace(completion?.Message)
+                        ? "The selected Git submodules could not be inspected safely."
+                        : completion.Message);
+                return;
+            }
+
+            ScheduleMutationHandoff(
+                () => ConfirmAndStartNativeBatchRemove(
+                    plan,
+                    completion.Assessments),
+                refreshDeferral);
+        }
+
+        private static void ConfirmAndStartNativeBatchRemove(
+            NativeRemovePlan plan,
+            IReadOnlyList<SubmoduleRemovalAssessment> assessments)
+        {
+            PackageManagerSubmoduleBatchConfirmationDecision decision =
+                PackageManagerSubmoduleConfirmationPolicy.EvaluateBatchRemoval(
+                    plan.Submodules,
+                    assessments,
+                    plan.OrdinaryPackageNames,
+                    plan.IncludesManager,
+                    GitSubmoduleManagerUserSettings.Instance
+                        .SuppressRoutineSubmoduleRemovalConfirmations);
+            if (decision.IsBlocked)
+            {
+                SetNativeRemoveInProgress(plan, false);
+                ReportNativeBatchRemoveError(plan, decision.Message);
+                return;
+            }
+
+            bool promptAccepted = false;
+            if (!decision.CanProceedWithoutPrompt && !Application.isBatchMode)
+            {
+                promptAccepted = EditorUtility.DisplayDialog(
+                    decision.Title,
+                    decision.Message,
+                    decision.AcceptText,
+                    decision.CancelText);
+            }
+
+            bool accepted = ShouldProceedWithNativeBatchRemovalPrompt(
+                decision.CanProceedWithoutPrompt,
+                Application.isBatchMode,
+                promptAccepted);
+            if (!accepted)
+            {
+                SetNativeRemoveInProgress(plan, false);
+                CancelInspectionForNativeRemove(plan);
+                ScheduleNativeRemovePresentationRefresh();
+                return;
+            }
+
+            if (!TryCaptureOrdinaryDependencySpecs(plan, out string specError))
+            {
+                SetNativeRemoveInProgress(plan, false);
+                ReportNativeBatchRemoveError(plan, specError);
+                return;
+            }
+
+            var items = new List<GitSubmoduleBatchRemovalItem>(
+                plan.Submodules.Count);
+            for (int index = 0; index < plan.Submodules.Count; index++)
+            {
+                items.Add(new GitSubmoduleBatchRemovalItem
+                {
+                    Info = plan.Submodules[index],
+                    ConfirmedAssessment = assessments[index],
+                    DiscardLocalWork = decision.DiscardLocalWork[index]
+                });
+            }
+
+            if (!GitSubmoduleRemoveService.TryStartBatch(
+                    items,
+                    (result, outcome) =>
+                        OnNativeBatchBeforeReloadUnlock(plan, result, outcome),
+                    completion => OnNativeBatchRemoveCompleted(plan, completion),
+                    out string startError))
+            {
+                SetNativeRemoveInProgress(plan, false);
+                ReportNativeBatchRemoveError(
+                    plan,
+                    string.IsNullOrWhiteSpace(startError)
+                        ? "The selected Git submodules could not be removed safely."
+                        : startError);
+                return;
+            }
+
+            ShowRemovingForNativeRemove(plan);
+            TryDeselectNativeRemovePackages(plan);
+        }
+
+        private static void OnNativeBatchBeforeReloadUnlock(
+            NativeRemovePlan plan,
+            CommandResult result,
+            GitOperationCompletionOutcome outcome)
+        {
+            if (!ShouldPrepareNativeRemoveHandoff(
+                    result?.IsSuccess == true,
+                    outcome,
+                    plan?.OrdinaryPackageNames.Count ?? 0))
+            {
+                if (outcome != GitOperationCompletionOutcome.Succeeded ||
+                    result?.IsSuccess != true)
+                {
+                    ReportNativeRemoveDiagnostic(
+                        string.IsNullOrWhiteSpace(result?.StdErr)
+                            ? "The multi-package remove stopped safely before Unity " +
+                              "Package Manager changed the ordinary packages."
+                            : result.StdErr);
+                }
+                return;
+            }
+
+            if (!PackageManagerNativeRemoveHandoffService.TryPrepare(
+                    plan.OperationId,
+                    plan.Submodules.ConvertAll(info => info.PackageName),
+                    plan.OrdinaryPackageNames,
+                    plan.OrdinaryPackageSpecs,
+                    out string handoffError))
+            {
+                plan.OrdinaryRemovalError = handoffError;
+            }
+
+            if (!string.IsNullOrWhiteSpace(plan.OrdinaryRemovalError))
+                ReportNativeRemoveDiagnostic(plan.OrdinaryRemovalError);
+        }
+
+        internal static bool TryCaptureOrdinaryDependencySpecs(
+            NativeRemovePlan plan,
+            out string error)
+        {
+            error = string.Empty;
+            if (plan == null)
+            {
+                error = "The multi-package Remove plan is missing.";
+                return false;
+            }
+
+            plan.OrdinaryPackageSpecs.Clear();
+            for (int index = 0; index < plan.OrdinaryPackageNames.Count; index++)
+            {
+                string packageName = plan.OrdinaryPackageNames[index];
+                if (!PackageManifestGitDependencyStore.TryGetProjectDependencySpec(
+                        packageName,
+                        out bool exists,
+                        out string spec,
+                        out string readError) ||
+                    !exists)
+                {
+                    plan.OrdinaryPackageSpecs.Clear();
+                    error = !string.IsNullOrWhiteSpace(readError)
+                        ? readError
+                        : $"The direct dependency for {packageName} changed before removal could start.";
+                    return false;
+                }
+
+                plan.OrdinaryPackageSpecs.Add(spec);
+            }
+
+            return true;
+        }
+
+        internal static bool ShouldPrepareNativeRemoveHandoff(
+            bool resultSucceeded,
+            GitOperationCompletionOutcome outcome,
+            int ordinaryPackageCount)
+        {
+            return resultSucceeded &&
+                   outcome == GitOperationCompletionOutcome.Succeeded &&
+                   ordinaryPackageCount > 0;
+        }
+
+        private static void OnNativeBatchRemoveCompleted(
+            NativeRemovePlan plan,
+            GitSubmoduleBatchRemoveCompletion completion)
+        {
+            SetNativeRemoveInProgress(plan, false);
+            if (completion == null || !completion.Success)
+            {
+                PackageManagerNativeRemoveHandoffService.CancelPrepared(
+                    plan?.OperationId);
+                ReportNativeBatchRemoveError(
+                    plan,
+                    string.IsNullOrWhiteSpace(completion?.Message)
+                        ? "The multi-package remove did not complete safely."
+                        : completion.Message);
+                return;
+            }
+
+            for (int index = 0; index < plan.Submodules.Count; index++)
+            {
+                PackageManagerSubmoduleInfo info = plan.Submodules[index];
+                ApplyRemoveStateForSubmodule(
+                    null,
+                    info,
+                    details => details.ShowCompleted(
+                        $"Removed {info.PackageName} through Git. Unity is " +
+                        "refreshing Package Manager; review and commit the " +
+                        "parent repository changes."));
+            }
+            ScheduleNativeRemovePresentationRefresh();
+        }
+
+        private static void SetNativeRemoveInProgress(
+            NativeRemovePlan plan,
+            bool inProgress)
+        {
+            if (plan == null)
+                return;
+            for (int index = 0; index < plan.AllPackageNames.Count; index++)
+            {
+                string packageName = plan.AllPackageNames[index];
+                if (inProgress)
+                    ActiveNativeRemovePackageNames.Add(packageName);
+                else
+                    ActiveNativeRemovePackageNames.Remove(packageName);
+            }
+        }
+
+        private static void ShowInspectingForNativeRemove(NativeRemovePlan plan)
+        {
+            for (int index = 0; index < plan.Submodules.Count; index++)
+            {
+                PackageManagerSubmoduleInfo info = plan.Submodules[index];
+                ApplyRemoveStateForSubmodule(
+                    null,
+                    info,
+                    details => details.ShowInspecting(
+                        $"Inspecting {info.PackageName} for local work..."));
+            }
+        }
+
+        private static void ShowRemovingForNativeRemove(NativeRemovePlan plan)
+        {
+            for (int index = 0; index < plan.Submodules.Count; index++)
+                ShowRemovingForSubmodule(plan.Submodules[index]);
+        }
+
+        private static void CancelInspectionForNativeRemove(NativeRemovePlan plan)
+        {
+            for (int index = 0; index < plan.Submodules.Count; index++)
+            {
+                PackageManagerSubmoduleInfo info = plan.Submodules[index];
+                ApplyRemoveStateForSubmodule(
+                    null,
+                    info,
+                    details => details.CancelInspection());
+            }
+        }
+
+        private static void TryDeselectNativeRemovePackages(NativeRemovePlan plan)
+        {
+            object activePage = GetPropertyValue(
+                plan?.PageManager,
+                "activePage");
+            if (activePage == null)
+                return;
+
+            try
+            {
+                MethodInfo method = FindRemoveSelectionMethod(
+                    activePage.GetType());
+                if (method == null)
+                    return;
+
+                string[] packageNames = plan.AllPackageNames.ToArray();
+                object[] arguments = method.GetParameters().Length == 2
+                    ? new object[] { packageNames, false }
+                    : new object[] { packageNames };
+                method.Invoke(activePage, arguments);
+            }
+            catch
+            {
+                // Package Manager refresh will discard stale selections anyway.
+            }
+        }
+
+        internal static MethodInfo FindRemoveSelectionMethod(Type pageType)
+        {
+            if (pageType == null)
+                return null;
+
+            MethodInfo oneParameter = null;
+            MethodInfo twoParameters = null;
+            foreach (MethodInfo method in pageType.GetMethods(AnyInstance))
+            {
+                if (!string.Equals(
+                        method.Name,
+                        "RemoveSelection",
+                        StringComparison.Ordinal))
+                {
+                    continue;
+                }
+
+                ParameterInfo[] parameters = method.GetParameters();
+                if (parameters.Length == 2 &&
+                    parameters[1].ParameterType == typeof(bool) &&
+                    parameters[0].ParameterType.IsAssignableFrom(
+                        typeof(string[])))
+                {
+                    twoParameters ??= method;
+                    continue;
+                }
+
+                if (parameters.Length == 1 &&
+                    parameters[0].ParameterType.IsAssignableFrom(
+                        typeof(string[])))
+                {
+                    oneParameter ??= method;
+                }
+            }
+
+            return twoParameters ?? oneParameter;
+        }
+
+        private static void ReportNativeBatchRemoveError(
+            NativeRemovePlan plan,
+            string message)
+        {
+            string safeMessage = GitHubUtility.SanitizeUiDiagnostic(message);
+            if (string.IsNullOrWhiteSpace(safeMessage))
+                safeMessage = "The selected packages could not be removed safely.";
+
+            if (plan != null)
+            {
+                for (int index = 0; index < plan.Submodules.Count; index++)
+                {
+                    PackageManagerSubmoduleInfo info = plan.Submodules[index];
+                    ApplyRemoveStateForSubmodule(
+                        null,
+                        info,
+                        details => details.ShowError(safeMessage));
+                }
+            }
+
+            ReportNativeRemoveDiagnostic(safeMessage);
+            ScheduleNativeRemovePresentationRefresh();
+        }
+
+        private static void ScheduleNativeRemovePresentationRefresh()
+        {
+            try
+            {
+                EditorApplication.delayCall += () =>
+                {
+                    RefreshAllEntries();
+                    PackageManagerSubmoduleHarmonyPatch
+                        .RefreshOpenPackageManagerWindows();
+                };
+            }
+            catch
+            {
+                // A domain reload will rebuild Package Manager presentation.
+            }
+        }
+
+        private static void ReportNativeRemoveDiagnostic(string message)
+        {
+            string safeMessage = GitHubUtility.SanitizeUiDiagnostic(message);
+            if (string.IsNullOrWhiteSpace(safeMessage))
+                safeMessage = "The selected packages could not be removed safely.";
+            Debug.LogWarning("[Git Submodule Manager] " + safeMessage);
         }
 
         internal static bool ShouldBlockNativeEmbeddedRemoval(string packageName)
@@ -682,26 +1842,36 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 return false;
 
             string normalizedName = packageName.Trim();
-            if (PackageManagerSubmoduleSnapshot.TryGet(
-                    normalizedName,
-                    string.Empty,
-                    true,
-                    out _))
-            {
-                return true;
-            }
+            bool snapshotReady =
+                PackageManagerSubmoduleSnapshot.HasCurrentSuccessfulSnapshot;
+            bool foundSubmodule = snapshotReady &&
+                                  PackageManagerSubmoduleSnapshot.TryGet(
+                                      normalizedName,
+                                      string.Empty,
+                                      true,
+                                      out _);
+            bool shouldBlock = ShouldBlockNativeEmbeddedRemovalState(
+                normalizedName,
+                foundSubmodule,
+                snapshotReady);
+            if (!shouldBlock || snapshotReady)
+                return shouldBlock;
 
-            if (PackageManagerSubmoduleSnapshot.IsReady ||
-                !GitUtility.IsValidUpmPackageName(normalizedName))
-            {
-                return false;
-            }
-
-            // Fail closed only during the short initial scan. This prevents a
-            // lower-level embedded removal from bypassing the interactive
-            // action guard before submodule identity is available.
+            // Fail closed while the latest scan is incomplete or failed. This
+            // prevents a lower-level embedded removal from bypassing the
+            // interactive action guard with retained snapshot data.
             PackageManagerSubmoduleSnapshot.Refresh();
             return true;
+        }
+
+        internal static bool ShouldBlockNativeEmbeddedRemovalState(
+            string packageName,
+            bool foundSubmodule,
+            bool snapshotReady)
+        {
+            if (!GitUtility.IsValidUpmPackageName(packageName))
+                return false;
+            return foundSubmodule || !snapshotReady;
         }
 
         internal static bool HasSupportedLiveContract()
@@ -739,8 +1909,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                            primaryActionsField.FieldType) &&
                        detailsLinksProperty != null &&
                        detailsLinksProperty.GetIndexParameters().Length == 0 &&
-                       detailsLinksProperty.PropertyType == linksType &&
-                       PackageManagerSubmoduleManageMenu.IsSupportedContract();
+                       detailsLinksProperty.PropertyType == linksType;
             }
             catch
             {
@@ -889,6 +2058,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 !EntriesByToolbar.TryGetValue(
                     toolbar,
                     out NativeActionEntry entry) ||
+                entry.RemoveDetails == null ||
                 !SameSubmodule(entry.RemoveDetails.CurrentInfo, requestedInfo))
             {
                 ReportRemoveError(
@@ -917,13 +2087,15 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 requestedInfo,
                 details => details.ShowInspecting(
                     $"Inspecting {requestedInfo.PackageName} for local work..."));
-            if (GitSubmoduleRemoveService.TryStartAssessment(
+            if (TryStartMutationHandoffAssessment(
                     requestedInfo,
-                    completion => OnRemoveAssessmentCompleted(
-                        toolbar,
-                        preferredDetails,
-                        requestedInfo,
-                        completion),
+                    (refreshDeferral, completion) =>
+                        OnRemoveAssessmentCompleted(
+                            toolbar,
+                            preferredDetails,
+                            requestedInfo,
+                            refreshDeferral,
+                            completion),
                     out string startError))
             {
                 return true;
@@ -943,12 +2115,14 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             VisualElement toolbar,
             PackageManagerSubmoduleRemoveDetails preferredDetails,
             PackageManagerSubmoduleInfo info,
+            IDisposable refreshDeferral,
             GitSubmoduleRemovalAssessmentCompletion completion)
         {
             if (completion == null ||
                 !completion.Success ||
                 completion.Assessment == null)
             {
+                refreshDeferral?.Dispose();
                 ReportRemoveErrorForSubmodule(
                     preferredDetails,
                     info,
@@ -960,94 +2134,183 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             }
 
             SubmoduleRemovalAssessment assessment = completion.Assessment;
-            EditorApplication.delayCall += () =>
+            ScheduleMutationHandoff(
+                () =>
+                {
+                    if (toolbar == null ||
+                        !EntriesByToolbar.TryGetValue(
+                            toolbar,
+                            out NativeActionEntry entry) ||
+                        entry.RemoveDetails == null ||
+                        !SameSubmodule(entry.RemoveDetails.CurrentInfo, info))
+                    {
+                        ReportRemoveErrorForSubmodule(
+                            preferredDetails,
+                            info,
+                            "The selected package changed while its Git state was " +
+                            "being inspected. Select it again and retry.");
+                        return;
+                    }
+
+                    if (!TryGetAuthoritativeSelectedPackage(
+                            toolbar,
+                            out object selectedPackage))
+                    {
+                        ReportRemoveErrorForSubmodule(
+                            preferredDetails,
+                            info,
+                            "The selected package could not be verified after its " +
+                            "Git state was inspected. Select it again and retry.");
+                        return;
+                    }
+
+                    object selectedVersion =
+                        PackageManagerSubmoduleNativePage.GetPrimaryVersion(
+                            selectedPackage);
+                    if (!PackageManagerSubmodulePresentation.TryGetPresentation(
+                            selectedVersion,
+                            out PackageManagerSubmoduleInfo selectedInfo) ||
+                        !SameSubmodule(selectedInfo, info))
+                    {
+                        ReportRemoveErrorForSubmodule(
+                            preferredDetails,
+                            info,
+                            "The selected package changed while its Git state was " +
+                            "being inspected. Select it again and retry.");
+                        return;
+                    }
+
+                    PackageManagerSubmoduleConfirmationDecision decision =
+                        PackageManagerSubmoduleConfirmationPolicy.Evaluate(
+                            PackageManagerSubmoduleDestructiveAction.Uninstall,
+                            info.PackageName,
+                            info.PackagePath,
+                            assessment,
+                            GitSubmoduleManagerUserSettings.Instance
+                                .SuppressRoutineSubmoduleRemovalConfirmations);
+                    if (decision.IsBlocked)
+                    {
+                        ReportRemoveErrorForSubmodule(
+                            preferredDetails,
+                            info,
+                            decision.Message);
+                        return;
+                    }
+
+                    bool accepted = decision.CanProceedWithoutPrompt ||
+                                    (!Application.isBatchMode &&
+                                     EditorUtility.DisplayDialog(
+                                         decision.Title,
+                                         decision.Message,
+                                         decision.AcceptText,
+                                         decision.CancelText));
+                    if (!accepted)
+                    {
+                        ApplyRemoveStateForSubmodule(
+                            preferredDetails,
+                            info,
+                            details => details.CancelInspection());
+                        return;
+                    }
+
+                    if (entry.RemoveDetails == null ||
+                        !entry.RemoveDetails.TriggerAssessedRemoval(
+                            assessment,
+                            decision.DiscardLocalWorkIfAccepted))
+                    {
+                        ReportRemoveErrorForSubmodule(
+                            preferredDetails,
+                            info,
+                            "The inspected package state could not be bound to the " +
+                            "remove action. Select it again and retry.");
+                    }
+                },
+                refreshDeferral);
+        }
+
+        internal static void ScheduleMutationHandoff(
+            Action continuation,
+            IDisposable refreshDeferral)
+        {
+            try
             {
-                if (toolbar == null ||
-                    !EntriesByToolbar.TryGetValue(
-                        toolbar,
-                        out NativeActionEntry entry) ||
-                    !SameSubmodule(entry.RemoveDetails.CurrentInfo, info))
-                {
-                    ReportRemoveErrorForSubmodule(
-                        preferredDetails,
-                        info,
-                        "The selected package changed while its Git state was " +
-                        "being inspected. Select it again and retry.");
-                    return;
-                }
+                EditorApplication.delayCall += () =>
+                    RunMutationHandoff(continuation, refreshDeferral);
+            }
+            catch
+            {
+                refreshDeferral?.Dispose();
+                throw;
+            }
+        }
 
-                if (!TryGetAuthoritativeSelectedPackage(
-                        toolbar,
-                        out object selectedPackage))
-                {
-                    ReportRemoveErrorForSubmodule(
-                        preferredDetails,
-                        info,
-                        "The selected package could not be verified after its " +
-                        "Git state was inspected. Select it again and retry.");
-                    return;
-                }
+        internal static void RunMutationHandoff(
+            Action continuation,
+            IDisposable refreshDeferral)
+        {
+            try
+            {
+                continuation?.Invoke();
+            }
+            finally
+            {
+                refreshDeferral?.Dispose();
+            }
+        }
 
-                object selectedVersion =
-                    PackageManagerSubmoduleNativePage.GetPrimaryVersion(
-                        selectedPackage);
-                if (!PackageManagerSubmodulePresentation.TryGetPresentation(
-                        selectedVersion,
-                        out PackageManagerSubmoduleInfo selectedInfo) ||
-                    !SameSubmodule(selectedInfo, info))
-                {
-                    ReportRemoveErrorForSubmodule(
-                        preferredDetails,
-                        info,
-                        "The selected package changed while its Git state was " +
-                        "being inspected. Select it again and retry.");
-                    return;
-                }
+        /// <summary>
+        /// Atomically defers Package Manager snapshots before starting the
+        /// shared removal assessment. Once completion is delivered, the callback
+        /// owns the deferral and must dispose it or pass it to the scheduled
+        /// mutation handoff.
+        /// </summary>
+        internal static bool TryStartMutationHandoffAssessment(
+            PackageManagerSubmoduleInfo info,
+            Action<IDisposable, GitSubmoduleRemovalAssessmentCompletion>
+                onComplete,
+            out string error)
+        {
+            if (onComplete == null)
+            {
+                error = "The assessment completion handler was not provided.";
+                return false;
+            }
 
-                PackageManagerSubmoduleConfirmationDecision decision =
-                    PackageManagerSubmoduleConfirmationPolicy.Evaluate(
-                        PackageManagerSubmoduleDestructiveAction.Uninstall,
-                        info.PackageName,
-                        info.PackagePath,
-                        assessment,
-                        GitSubmoduleManagerUserSettings.Instance
-                            .SuppressRoutineSubmoduleRemovalConfirmations);
-                if (decision.IsBlocked)
-                {
-                    ReportRemoveErrorForSubmodule(
-                        preferredDetails,
-                        info,
-                        decision.Message);
-                    return;
-                }
+            if (!PackageManagerSubmoduleSnapshot
+                    .TryDeferRefreshForMutationHandoff(
+                        out IDisposable refreshDeferral))
+            {
+                error = GitSubmoduleRemoveService.BuildUnavailableMessage();
+                return false;
+            }
 
-                bool accepted = decision.CanProceedWithoutPrompt ||
-                                (!Application.isBatchMode &&
-                                 EditorUtility.DisplayDialog(
-                                     decision.Title,
-                                     decision.Message,
-                                     decision.AcceptText,
-                                     decision.CancelText));
-                if (!accepted)
-                {
-                    ApplyRemoveStateForSubmodule(
-                        preferredDetails,
-                        info,
-                        details => details.CancelInspection());
-                    return;
-                }
-
-                if (!entry.RemoveDetails.TriggerAssessedRemoval(
-                        assessment,
-                        decision.DiscardLocalWorkIfAccepted))
-                {
-                    ReportRemoveErrorForSubmodule(
-                        preferredDetails,
-                        info,
-                        "The inspected package state could not be bound to the " +
-                        "uninstall action. Select it again and retry.");
-                }
-            };
+            bool assessmentStarted = false;
+            try
+            {
+                assessmentStarted = GitSubmoduleRemoveService.TryStartAssessment(
+                    info,
+                    completion =>
+                    {
+                        bool ownershipTransferred = false;
+                        try
+                        {
+                            onComplete(refreshDeferral, completion);
+                            ownershipTransferred = true;
+                        }
+                        finally
+                        {
+                            if (!ownershipTransferred)
+                                refreshDeferral.Dispose();
+                        }
+                    },
+                    out error);
+                return assessmentStarted;
+            }
+            finally
+            {
+                if (!assessmentStarted)
+                    refreshDeferral.Dispose();
+            }
         }
 
         private static void OnRemoveRequested(
@@ -1071,6 +2334,14 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 }
 
                 feedbackTarget = entry.RemoveDetails;
+                if (feedbackTarget == null)
+                {
+                    ReportRemoveError(
+                        sourceDetails,
+                        "Package Manager refreshed before the removal request " +
+                        "could be handled. Select the package and retry.");
+                    return;
+                }
                 if (!TryGetAuthoritativeSelectedPackage(
                         toolbar,
                         out object selectedPackage))
@@ -1302,6 +2573,8 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 !EntriesByToolbar.TryGetValue(
                     toolbar,
                     out NativeActionEntry entry) ||
+                entry.ConversionDetails == null ||
+                entry.RemoveDetails == null ||
                 !SameConversionTarget(
                     entry.ConversionDetails.CurrentTarget,
                     requestedTarget) ||
@@ -1334,13 +2607,15 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 details => details.ShowInspecting(
                     requestedTarget,
                     $"Inspecting {requestedTarget.PackageName} for local work..."));
-            if (GitSubmoduleRemoveService.TryStartAssessment(
+            if (TryStartMutationHandoffAssessment(
                     requestedInfo,
-                    completion => OnConversionAssessmentCompleted(
-                        toolbar,
-                        preferredDetails,
-                        requestedTarget,
-                        completion),
+                    (refreshDeferral, completion) =>
+                        OnConversionAssessmentCompleted(
+                            toolbar,
+                            preferredDetails,
+                            requestedTarget,
+                            refreshDeferral,
+                            completion),
                     out string startError))
             {
                 return true;
@@ -1350,7 +2625,8 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 preferredDetails,
                 requestedTarget,
                 string.IsNullOrWhiteSpace(startError)
-                    ? "The submodule could not be inspected safely before conversion."
+                    ? "The submodule could not be inspected safely before " +
+                      "conversion."
                     : startError);
             RefreshAllEntries();
             return false;
@@ -1373,6 +2649,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 !EntriesByToolbar.TryGetValue(
                     toolbar,
                     out NativeActionEntry entry) ||
+                entry.ConversionDetails == null ||
                 !IsCurrentReadOnlyConversionSelection(
                     requestedTarget,
                     requestedInfo,
@@ -1428,12 +2705,14 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             VisualElement toolbar,
             PackageManagerPackageConversionDetails preferredDetails,
             PackageManagerPackageConversionTarget target,
+            IDisposable refreshDeferral,
             GitSubmoduleRemovalAssessmentCompletion completion)
         {
             if (completion == null ||
                 !completion.Success ||
                 completion.Assessment == null)
             {
+                refreshDeferral?.Dispose();
                 ReportConversionError(
                     preferredDetails,
                     target,
@@ -1445,99 +2724,103 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             }
 
             SubmoduleRemovalAssessment assessment = completion.Assessment;
-            EditorApplication.delayCall += () =>
-            {
-                if (toolbar == null ||
-                    !EntriesByToolbar.TryGetValue(
-                        toolbar,
-                        out NativeActionEntry entry) ||
-                    !SameConversionTarget(
-                        entry.ConversionDetails.CurrentTarget,
-                        target))
+            ScheduleMutationHandoff(
+                () =>
                 {
-                    ReportConversionError(
-                        preferredDetails,
-                        target,
-                        "The selected package changed while its Git state was " +
-                        "being inspected. Select it again and retry.");
-                    return;
-                }
+                    if (toolbar == null ||
+                        !EntriesByToolbar.TryGetValue(
+                            toolbar,
+                            out NativeActionEntry entry) ||
+                        entry.ConversionDetails == null ||
+                        !SameConversionTarget(
+                            entry.ConversionDetails.CurrentTarget,
+                            target))
+                    {
+                        ReportConversionError(
+                            preferredDetails,
+                            target,
+                            "The selected package changed while its Git state was " +
+                            "being inspected. Select it again and retry.");
+                        return;
+                    }
 
-                if (!TryGetAuthoritativeSelectedPackage(
-                        toolbar,
-                        out object selectedPackage))
-                {
-                    ReportConversionError(
-                        preferredDetails,
-                        target,
-                        "The selected package could not be verified after its " +
-                        "Git state was inspected. Select it again and retry.");
-                    return;
-                }
+                    if (!TryGetAuthoritativeSelectedPackage(
+                            toolbar,
+                            out object selectedPackage))
+                    {
+                        ReportConversionError(
+                            preferredDetails,
+                            target,
+                            "The selected package could not be verified after its " +
+                            "Git state was inspected. Select it again and retry.");
+                        return;
+                    }
 
-                object selectedVersion =
-                    PackageManagerSubmoduleNativePage.GetPrimaryVersion(
-                        selectedPackage);
-                if (!PackageManagerSubmodulePresentation.TryGetPresentation(
-                        selectedVersion,
-                        out PackageManagerSubmoduleInfo selectedInfo) ||
-                    !SameConversionTarget(
-                        BuildConversionTarget(selectedInfo),
-                        target))
-                {
-                    ReportConversionError(
-                        preferredDetails,
-                        target,
-                        "The selected package changed while its Git state was " +
-                        "being inspected. Select it again and retry.");
-                    return;
-                }
+                    object selectedVersion =
+                        PackageManagerSubmoduleNativePage.GetPrimaryVersion(
+                            selectedPackage);
+                    if (!PackageManagerSubmodulePresentation.TryGetPresentation(
+                            selectedVersion,
+                            out PackageManagerSubmoduleInfo selectedInfo) ||
+                        !SameConversionTarget(
+                            BuildConversionTarget(selectedInfo),
+                            target))
+                    {
+                        ReportConversionError(
+                            preferredDetails,
+                            target,
+                            "The selected package changed while its Git state was " +
+                            "being inspected. Select it again and retry.");
+                        return;
+                    }
 
-                PackageManagerSubmoduleConfirmationDecision decision =
-                    PackageManagerSubmoduleConfirmationPolicy.Evaluate(
-                        PackageManagerSubmoduleDestructiveAction
-                            .ConvertToReadOnly,
-                        target.PackageName,
-                        target.PackagePath,
-                        assessment,
-                        GitSubmoduleManagerUserSettings.Instance
-                            .SuppressRoutineSubmoduleRemovalConfirmations);
-                if (decision.IsBlocked)
-                {
-                    ReportConversionError(
-                        preferredDetails,
-                        target,
-                        decision.Message);
-                    return;
-                }
+                    PackageManagerSubmoduleConfirmationDecision decision =
+                        PackageManagerSubmoduleConfirmationPolicy.Evaluate(
+                            PackageManagerSubmoduleDestructiveAction
+                                .ConvertToReadOnly,
+                            target.PackageName,
+                            target.PackagePath,
+                            assessment,
+                            GitSubmoduleManagerUserSettings.Instance
+                                .SuppressRoutineSubmoduleRemovalConfirmations);
+                    if (decision.IsBlocked)
+                    {
+                        ReportConversionError(
+                            preferredDetails,
+                            target,
+                            decision.Message);
+                        return;
+                    }
 
-                bool accepted = decision.CanProceedWithoutPrompt ||
-                                (!Application.isBatchMode &&
-                                 EditorUtility.DisplayDialog(
-                                     decision.Title,
-                                     decision.Message,
-                                     decision.AcceptText,
-                                     decision.CancelText));
-                if (!accepted)
-                {
-                    ApplyConversionState(
-                        target,
-                        details => details.CancelInspection(target));
-                    return;
-                }
+                    bool accepted = decision.CanProceedWithoutPrompt ||
+                                    (!Application.isBatchMode &&
+                                     EditorUtility.DisplayDialog(
+                                         decision.Title,
+                                         decision.Message,
+                                         decision.AcceptText,
+                                         decision.CancelText));
+                    if (!accepted)
+                    {
+                        ApplyConversionState(
+                            target,
+                            details => details.CancelInspection(target));
+                        return;
+                    }
 
-                if (!entry.ConversionDetails.TriggerAssessedConversion(
-                        target,
-                        assessment,
-                        decision.DiscardLocalWorkIfAccepted))
-                {
-                    ReportConversionError(
-                        preferredDetails,
-                        target,
-                        "The inspected package state could not be bound to the " +
-                        "conversion action. Select it again and retry.");
-                }
-            };
+                    if (entry.ConversionDetails == null ||
+                        !entry.ConversionDetails.TriggerAssessedConversion(
+                            target,
+                            assessment,
+                            decision.DiscardLocalWorkIfAccepted))
+                    {
+                        ReportConversionError(
+                            preferredDetails,
+                            target,
+                            "The inspected package state could not be bound to the " +
+                            "conversion action. Select it again and retry.");
+                    }
+                },
+                refreshDeferral);
         }
 
         private static void OnConversionRequested(
@@ -1562,6 +2845,15 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 }
 
                 feedbackTarget = entry.ConversionDetails;
+                if (feedbackTarget == null)
+                {
+                    ReportConversionError(
+                        sourceDetails,
+                        requestedTarget,
+                        "Package Manager refreshed before conversion could start. " +
+                        "Select the package and retry.");
+                    return;
+                }
                 if (!SameConversionTarget(
                         requestedTarget,
                         feedbackTarget.CurrentTarget))
@@ -2717,6 +4009,15 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             bool promptAccepted)
         {
             return !isBatchMode && promptAccepted;
+        }
+
+        internal static bool ShouldProceedWithNativeBatchRemovalPrompt(
+            bool canProceedWithoutPrompt,
+            bool isBatchMode,
+            bool promptAccepted)
+        {
+            return canProceedWithoutPrompt ||
+                   (!isBatchMode && promptAccepted);
         }
 
         private static string BuildConversionDisabledTooltip(string error)

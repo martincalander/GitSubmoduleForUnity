@@ -1712,6 +1712,126 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
         }
 
         [Test]
+        public void PackageManagerHostLifecycle_AttachmentRequiresLiveNestedRootOwnership()
+        {
+            Assert.That(
+                GitSubmoduleManagerPackageManagerHost.IsHostAttachmentComplete(
+                    isDisposed: false,
+                    windowAlive: true,
+                    windowPanelAttached: true,
+                    retainedRootAlive: true,
+                    retainedRootPanelAttached: true,
+                    projectionRetained: true,
+                    installMenuMounted: true,
+                    nativeActionsMounted: true,
+                    installMenuOwned: true,
+                    nativeActionsOwned: true),
+                Is.True);
+            Assert.That(
+                GitSubmoduleManagerPackageManagerHost.IsHostAttachmentComplete(
+                    isDisposed: false,
+                    windowAlive: true,
+                    windowPanelAttached: true,
+                    retainedRootAlive: true,
+                    retainedRootPanelAttached: true,
+                    projectionRetained: true,
+                    installMenuMounted: true,
+                    nativeActionsMounted: true,
+                    installMenuOwned: true,
+                    nativeActionsOwned: false),
+                Is.False,
+                "A stale mounted flag must not hide a lost Install controller.");
+            Assert.That(
+                GitSubmoduleManagerPackageManagerHost.IsHostAttachmentComplete(
+                    isDisposed: false,
+                    windowAlive: true,
+                    windowPanelAttached: true,
+                    retainedRootAlive: true,
+                    retainedRootPanelAttached: false,
+                    projectionRetained: true,
+                    installMenuMounted: true,
+                    nativeActionsMounted: true,
+                    installMenuOwned: true,
+                    nativeActionsOwned: true),
+                Is.False,
+                "A detached nested Package Manager root must be remounted.");
+            Assert.That(
+                GitSubmoduleManagerPackageManagerHost.IsHostAttachmentComplete(
+                    isDisposed: false,
+                    windowAlive: true,
+                    windowPanelAttached: true,
+                    retainedRootAlive: true,
+                    retainedRootPanelAttached: true,
+                    projectionRetained: true,
+                    installMenuMounted: true,
+                    nativeActionsMounted: true,
+                    installMenuOwned: false,
+                    nativeActionsOwned: true),
+                Is.False,
+                "A recycled add menu must be mounted before polling stops.");
+        }
+
+        [Test]
+        public void PackageManagerHostLifecycle_VisualTreeRepairSurvivesReleaseAndRemountFailure()
+        {
+            var root = new object();
+            int releaseCount = 0;
+            int remountCount = 0;
+            int repairCount = 0;
+
+            Assert.Throws<InvalidOperationException>(() =>
+                GitSubmoduleManagerPackageManagerHost
+                    .ReleaseVisualTreeAndRequestRepair(
+                        root,
+                        _ =>
+                        {
+                            releaseCount++;
+                            throw new InvalidOperationException("teardown failed");
+                        },
+                        repairedRoot =>
+                        {
+                            Assert.That(repairedRoot, Is.SameAs(root));
+                            repairCount++;
+                        }));
+            Assert.That(releaseCount, Is.EqualTo(1));
+            Assert.That(repairCount, Is.EqualTo(1));
+
+            bool remounted = GitSubmoduleManagerPackageManagerHost
+                .RemountVisualTreeOrRequestRepair(
+                    root,
+                    _ => releaseCount++,
+                    _ =>
+                    {
+                        remountCount++;
+                        return false;
+                    },
+                    repairedRoot =>
+                    {
+                        Assert.That(repairedRoot, Is.SameAs(root));
+                        repairCount++;
+                    });
+            Assert.That(remounted, Is.False);
+            Assert.That(releaseCount, Is.EqualTo(2));
+            Assert.That(remountCount, Is.EqualTo(1));
+            Assert.That(repairCount, Is.EqualTo(2));
+
+            remounted = GitSubmoduleManagerPackageManagerHost
+                .RemountVisualTreeOrRequestRepair(
+                    root,
+                    _ => releaseCount++,
+                    _ =>
+                    {
+                        remountCount++;
+                        return true;
+                    },
+                    _ => repairCount++);
+            Assert.That(remounted, Is.True);
+            Assert.That(releaseCount, Is.EqualTo(3));
+            Assert.That(remountCount, Is.EqualTo(2));
+            Assert.That(repairCount, Is.EqualTo(2));
+        }
+
+        [Test]
         public void PackageManagerSourcesLookup_RejectsLegacyFoldoutsWithoutSidebar()
         {
             var root = new VisualElement();

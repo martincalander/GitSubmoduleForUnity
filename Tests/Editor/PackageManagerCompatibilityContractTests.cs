@@ -553,6 +553,213 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
         }
 
         [Test]
+        public void NativeRemoveVisibility_UsesAtomicOwnedPostfixes()
+        {
+            var report = new CompatibilityReport(
+                "native Remove visibility and progress routing");
+            MethodInfo removeVisible = PackageManagerSubmoduleHarmonyPatch
+                .GetRemoveActionVisibilityTargetMethod();
+            MethodInfo customVisible = PackageManagerSubmoduleHarmonyPatch
+                .GetRemoveCustomActionVisibilityTargetMethod();
+            MethodInfo removeProgress = PackageManagerSubmoduleHarmonyPatch
+                .GetRemoveActionProgressTargetMethod();
+            MethodInfo customProgress = PackageManagerSubmoduleHarmonyPatch
+                .GetRemoveCustomActionProgressTargetMethod();
+            MethodInfo removeVisiblePostfix = PackageManagerSubmoduleHarmonyPatch
+                .GetRemoveActionVisibilityPostfixMethod();
+            MethodInfo customVisiblePostfix = PackageManagerSubmoduleHarmonyPatch
+                .GetRemoveCustomActionVisibilityPostfixMethod();
+            MethodInfo removeProgressPostfix = PackageManagerSubmoduleHarmonyPatch
+                .GetRemoveActionProgressPostfixMethod();
+
+            report.Observe("RemoveAction.IsVisible", DescribeMethod(removeVisible));
+            report.Observe(
+                "RemoveCustomAction.IsVisible",
+                DescribeMethod(customVisible));
+            report.Observe(
+                "RemoveAction.IsInProgress",
+                DescribeMethod(removeProgress));
+            report.Observe(
+                "RemoveCustomAction.IsInProgress",
+                DescribeMethod(customProgress));
+            foreach (MethodInfo target in new[]
+                     {
+                         removeVisible,
+                         customVisible,
+                         removeProgress,
+                         customProgress
+                     })
+            {
+                report.Require(
+                    target != null &&
+                    target.ReturnType == typeof(bool) &&
+                    target.GetParameters().Length == 1 &&
+                    string.Equals(
+                        target.GetParameters()[0].ParameterType.FullName,
+                        PackageManagerSubmoduleHarmonyPatch
+                            .PackageVersionInterfaceTypeName,
+                        StringComparison.Ordinal),
+                    "A required native Remove visibility or progress method " +
+                    "does not match bool Method(IPackageVersion): " +
+                    DescribeMethod(target) + ".");
+            }
+
+            foreach (MethodInfo postfix in new[]
+                     {
+                         removeVisiblePostfix,
+                         customVisiblePostfix,
+                         removeProgressPostfix
+                     })
+            {
+                ParameterInfo[] parameters = postfix?.GetParameters() ??
+                                             Array.Empty<ParameterInfo>();
+                report.Require(
+                    postfix != null &&
+                    postfix.ReturnType == typeof(void) &&
+                    parameters.Length == 2 &&
+                    parameters[0].ParameterType == typeof(object) &&
+                    parameters[1].ParameterType ==
+                    typeof(bool).MakeByRefType(),
+                    "A native Remove visibility or progress postfix has an " +
+                    "unexpected Harmony signature.");
+            }
+
+            PackageManagerSubmoduleHarmonyPatch.TryPatch();
+            report.Require(
+                PackageManagerSubmoduleHarmonyPatch
+                    .IsRemoveActionVisibilityPatchApplied(),
+                "RemoveAction.IsVisible lacks the owned postfix.");
+            report.Require(
+                PackageManagerSubmoduleHarmonyPatch
+                    .IsRemoveCustomActionVisibilityPatchApplied(),
+                "RemoveCustomAction.IsVisible lacks the owned postfix.");
+            report.Require(
+                PackageManagerSubmoduleHarmonyPatch
+                    .IsRemoveActionProgressPatchApplied(),
+                "RemoveAction.IsInProgress lacks the owned postfix.");
+            report.Require(
+                PackageManagerSubmoduleHarmonyPatch
+                    .IsRemoveCustomActionProgressPatchApplied(),
+                "RemoveCustomAction.IsInProgress lacks the owned postfix.");
+            report.Require(
+                PackageManagerSubmoduleHarmonyPatch.NativeRemoveOverrideReady,
+                "Verified submodules must not enter native Remove until both " +
+                "trigger guards and every visibility hook are active.");
+
+            Complete(report);
+        }
+
+        [Test]
+        public void NativeRemoveVisibility_ChangesOnlyVerifiedSubmodulesWhenReady()
+        {
+            Assert.That(
+                PackageManagerSubmoduleHarmonyPatch.ResolveNativeRemoveVisibility(
+                    false,
+                    true,
+                    true,
+                    true),
+                Is.True);
+            Assert.That(
+                PackageManagerSubmoduleHarmonyPatch.ResolveNativeRemoveVisibility(
+                    true,
+                    true,
+                    false,
+                    true),
+                Is.False);
+            Assert.That(
+                PackageManagerSubmoduleHarmonyPatch.ResolveNativeRemoveVisibility(
+                    false,
+                    false,
+                    true,
+                    true),
+                Is.False);
+            Assert.That(
+                PackageManagerSubmoduleHarmonyPatch.ResolveNativeRemoveVisibility(
+                    true,
+                    true,
+                    false,
+                    false),
+                Is.True);
+        }
+
+        [Test]
+        public void NativeRemoveSelectionRouting_PreservesOrdinaryOnlyBatches()
+        {
+            Assert.That(
+                PackageManagerGitHubNativeActions
+                    .ResolveNativeRemoveSelectionRouting(
+                        0,
+                        3,
+                        false,
+                        false),
+                Is.EqualTo(
+                    PackageManagerNativeRemoveSelectionRouting.UnityOwned));
+        }
+
+        [Test]
+        public void NativeRemoveSelectionRouting_ClaimsAllSubmoduleAndMixedBatches()
+        {
+            Assert.That(
+                PackageManagerGitHubNativeActions
+                    .ResolveNativeRemoveSelectionRouting(
+                        2,
+                        0,
+                        false,
+                        false),
+                Is.EqualTo(PackageManagerNativeRemoveSelectionRouting.Managed));
+            Assert.That(
+                PackageManagerGitHubNativeActions
+                    .ResolveNativeRemoveSelectionRouting(
+                        2,
+                        3,
+                        false,
+                        false),
+                Is.EqualTo(PackageManagerNativeRemoveSelectionRouting.Managed));
+        }
+
+        [Test]
+        public void NativeRemoveSelectionRouting_BlocksAmbiguousManagedBatches()
+        {
+            Assert.That(
+                PackageManagerGitHubNativeActions
+                    .ResolveNativeRemoveSelectionRouting(
+                        1,
+                        1,
+                        false,
+                        true),
+                Is.EqualTo(PackageManagerNativeRemoveSelectionRouting.Blocked));
+            Assert.That(
+                PackageManagerGitHubNativeActions
+                    .ResolveNativeRemoveSelectionRouting(
+                        0,
+                        1,
+                        true,
+                        false),
+                Is.EqualTo(PackageManagerNativeRemoveSelectionRouting.Blocked));
+        }
+
+        [Test]
+        public void NativeRemoveDeselection_SupportsBothEditorContracts()
+        {
+            MethodInfo legacy = PackageManagerGitHubNativeActions
+                .FindRemoveSelectionMethod(typeof(LegacyRemoveSelectionPage));
+            MethodInfo current = PackageManagerGitHubNativeActions
+                .FindRemoveSelectionMethod(typeof(CurrentRemoveSelectionPage));
+            MethodInfo combined = PackageManagerGitHubNativeActions
+                .FindRemoveSelectionMethod(typeof(CombinedRemoveSelectionPage));
+
+            Assert.That(legacy, Is.Not.Null);
+            Assert.That(legacy.GetParameters(), Has.Length.EqualTo(1));
+            Assert.That(current, Is.Not.Null);
+            Assert.That(current.GetParameters(), Has.Length.EqualTo(2));
+            Assert.That(combined, Is.Not.Null);
+            Assert.That(
+                combined.GetParameters(),
+                Has.Length.EqualTo(2),
+                "Prefer the current overload when an editor exposes both.");
+        }
+
+        [Test]
         public void NativeGitHubPageContract_IsCompleteOnSupportingEditors()
         {
             var report = new CompatibilityReport("native Sources/GitHub seams");
@@ -926,6 +1133,24 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
             RequireParameterNames(
                 report,
                 PackageManagerSubmoduleHarmonyPatch
+                    .GetRemoveActionVisibilityPostfixMethod(),
+                "__0",
+                "__result");
+            RequireParameterNames(
+                report,
+                PackageManagerSubmoduleHarmonyPatch
+                    .GetRemoveCustomActionVisibilityPostfixMethod(),
+                "__0",
+                "__result");
+            RequireParameterNames(
+                report,
+                PackageManagerSubmoduleHarmonyPatch
+                    .GetRemoveActionProgressPostfixMethod(),
+                "__0",
+                "__result");
+            RequireParameterNames(
+                report,
+                PackageManagerSubmoduleHarmonyPatch
                     .GetPackageOperationDispatcherRemoveEmbeddedPrefixMethod(),
                 "__0");
             RequireParameterNames(
@@ -1258,6 +1483,35 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                 builder.AppendLine("Resolved inventory:")
                     .Append(FormatObservations());
                 return builder.ToString();
+            }
+        }
+
+        private sealed class LegacyRemoveSelectionPage
+        {
+            private void RemoveSelection(IEnumerable<string> packageNames)
+            {
+            }
+        }
+
+        private sealed class CurrentRemoveSelectionPage
+        {
+            private void RemoveSelection(
+                IReadOnlyCollection<string> packageNames,
+                bool force)
+            {
+            }
+        }
+
+        private sealed class CombinedRemoveSelectionPage
+        {
+            private void RemoveSelection(IEnumerable<string> packageNames)
+            {
+            }
+
+            private void RemoveSelection(
+                IReadOnlyCollection<string> packageNames,
+                bool force)
+            {
             }
         }
 
