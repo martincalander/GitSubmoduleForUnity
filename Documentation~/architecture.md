@@ -60,7 +60,7 @@ small independent setup/status surface and does not manage packages itself.
 ## Package Manager Integration
 
 On exact Unity `6000.3.22f1`, a Unity `6000.5.*f1` final release, or exact
-Unity `6000.6.0f1` or `6000.6.2f1`, plus the exact `6000.7.0b1` beta, the host registers a native **GitHub** page through Unity's
+Unity `6000.6.0f1` or `6000.6.2f1`, plus the exact `6000.7.0b1` and `6000.7.0b2` betas, the host registers a native **GitHub** page through Unity's
 internal `ExtensionPage` contract and places its row under
 **Sources**. Users reach it through **Window > Package Management > Package
 Manager > Sources > GitHub**, or through the explicit buttons in Welcome and
@@ -190,7 +190,7 @@ page, repository visibility is shown as **Public** or **Private**. The Source
 card reports **GitHub** with the themed Git icon, or **Git** for another host.
 
 The validated Package Manager contract targets are exact Unity `6000.3.22f1`,
-Unity `6000.5.*f1` final releases, and exact Unity `6000.6.0f1` and `6000.6.2f1`, plus the exact `6000.7.0b1` beta.
+Unity `6000.5.*f1` final releases, and exact Unity `6000.6.0f1` and `6000.6.2f1`, plus the exact `6000.7.0b1` and `6000.7.0b2` betas.
 Unity `6000.4` and other `6000.6` versions are not supported contract targets. `package.json`
 declares `6000.3.22f1` only as UPM's minimum
 eligibility version because the manifest cannot encode this non-contiguous
@@ -587,7 +587,7 @@ outcomes.
 
 The `PackageManagerCompatibility` category inventories the reflected Package
 Manager types and exact signatures used by the validated Unity `6000.3.22f1`,
-Unity `6000.5.*f1`, and exact Unity `6000.6.0f1` and `6000.6.2f1`, plus the exact `6000.7.0b1` beta contracts, then verifies Harmony
+Unity `6000.5.*f1`, and exact Unity `6000.6.0f1` and `6000.6.2f1`, plus the exact `6000.7.0b1` and `6000.7.0b2` beta contracts, then verifies Harmony
 ownership for resolved hooks. It reports contract drift with the Unity version
 and platform. Runs on
 any other Editor version, including Unity `6000.4`, are migration diagnostics

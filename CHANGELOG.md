@@ -9,7 +9,7 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
-- Added exact Unity `6000.7.0b1` beta compatibility. Other 6.7 builds remain
+- Added exact Unity `6000.7.0b1` and `6000.7.0b2` beta compatibility. Other 6.7 builds remain
   rejected by the independent runtime and installer gates.
 
 - Added exact Unity `6000.6.0f1` and `6000.6.2f1` as supported Editor targets

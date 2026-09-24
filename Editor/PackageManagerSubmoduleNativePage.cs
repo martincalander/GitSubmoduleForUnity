@@ -22,7 +22,8 @@ namespace MartinCalander.GitSubmoduleManager.Editor
 
         internal static bool IsSupported(string unityVersion)
         {
-            if (string.Equals(unityVersion, "6000.7.0b1", StringComparison.Ordinal))
+            if (string.Equals(unityVersion, "6000.7.0b1", StringComparison.Ordinal) ||
+                string.Equals(unityVersion, "6000.7.0b2", StringComparison.Ordinal))
                 return true;
 
             if (string.IsNullOrEmpty(unityVersion))
@@ -103,7 +104,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
     /// Bridges discovered GitHub packages and installed Git packages into
     /// Unity's internal extension-page contract. The package deliberately
     /// targets the validated Unity 6000.3.22f1, Unity 6000.5, and exact
-    /// Unity 6000.6.0f1, 6000.6.2f1, and the exact 6000.7.0b1 beta contracts.
+    /// Unity 6000.6.0f1, 6000.6.2f1, and the exact 6000.7.0b1 and 6000.7.0b2 beta contracts.
     /// </summary>
     internal static class PackageManagerSubmoduleNativePage
     {

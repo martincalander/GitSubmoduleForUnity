@@ -790,6 +790,7 @@ namespace MartinCalander.GitSubmoduleManager.Installer
                 string.Equals(version, "6000.6.0f1", StringComparison.Ordinal) ||
                 string.Equals(version, "6000.6.2f1", StringComparison.Ordinal) ||
                 string.Equals(version, "6000.7.0b1", StringComparison.Ordinal) ||
+                string.Equals(version, "6000.7.0b2", StringComparison.Ordinal) ||
                 SupportedCurrentVersion.IsMatch(version))
             {
                 error = string.Empty;
@@ -797,7 +798,7 @@ namespace MartinCalander.GitSubmoduleManager.Installer
             }
 
             error =
-                "This package supports exactly Unity 6000.3.22f1, final 6000.5.*f1 releases, exactly 6000.6.0f1 and 6000.6.2f1, and the exact 6000.7.0b1 beta. " +
+                "This package supports exactly Unity 6000.3.22f1, final 6000.5.*f1 releases, exactly 6000.6.0f1 and 6000.6.2f1, and the exact 6000.7.0b1 and 6000.7.0b2 betas. " +
                 "The current Editor is " + version + ", so the installer will not modify the project.";
             return false;
         }
