@@ -10,6 +10,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         private string saveError = string.Empty;
         private string recoveryError = string.Empty;
         private GitSubmoduleManagerSetupProbe setupProbe;
+        private GitSubmoduleManagerNavigationRequest navigation;
 
         private static readonly string[] SearchKeywords =
         {
@@ -63,6 +64,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             UnityEngine.UIElements.VisualElement rootElement)
         {
             base.OnActivate(searchContext, rootElement);
+            EnsureNavigation();
             EnsureSetupProbe();
             EditorApplication.update -= RefreshSetupProbeIfExpired;
             EditorApplication.update += RefreshSetupProbeIfExpired;
@@ -70,6 +72,8 @@ namespace MartinCalander.GitSubmoduleManager.Editor
 
         public override void OnDeactivate()
         {
+            navigation?.Dispose();
+            navigation = null;
             EditorApplication.update -= RefreshSetupProbeIfExpired;
             if (setupProbe != null)
                 setupProbe.Changed -= OnSetupProbeChanged;
@@ -79,6 +83,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
 
         public override void OnGUI(string searchContext)
         {
+            EnsureNavigation();
             EnsureSetupProbe();
             GitSubmoduleManagerUserSettings settings = GitSubmoduleManagerUserSettings.Instance;
 
@@ -172,15 +177,24 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             EditorGUILayout.BeginHorizontal();
             if (GUILayout.Button("Show Welcome", GUILayout.Width(150f)))
                 GitSubmoduleManagerWelcomeWindow.Open();
-            if (GUILayout.Button(
-                    "Open GitHub Package Manager",
-                    GUILayout.Width(210f)))
-            {
-                GitSubmoduleManagerPackageManagerHost.OpenGitHubSource();
-            }
+            GitSubmoduleManagerSetupGUI.DrawPackageManagerOpenButton(
+                navigation,
+                GUILayout.Width(210f));
             EditorGUILayout.EndHorizontal();
+            if (!string.IsNullOrWhiteSpace(navigation.Error))
+                EditorGUILayout.HelpBox(navigation.Error, MessageType.Error);
 
             DrawRecoverySection();
+        }
+
+        private void EnsureNavigation()
+        {
+            if (navigation != null)
+                return;
+
+            navigation = new GitSubmoduleManagerNavigationRequest(
+                GitSubmoduleManagerPackageManagerHost.OpenGitHubSource);
+            navigation.Changed += Repaint;
         }
 
         private void EnsureSetupProbe()

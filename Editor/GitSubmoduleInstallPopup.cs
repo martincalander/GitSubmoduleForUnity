@@ -377,10 +377,20 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             return field;
         }
 
+        private static string GetRepositoryUrl(string input)
+        {
+            return GitUtility.TryCanonicalizeNewInstallRepositoryUrl(
+                input,
+                out string canonicalUrl,
+                out _)
+                ? canonicalUrl
+                : input?.Trim() ?? string.Empty;
+        }
+
         private void OnRepositoryUrlChanged()
         {
             ResetSubmissionState();
-            string url = urlField?.value?.Trim() ?? string.Empty;
+            string url = GetRepositoryUrl(urlField?.value);
             pendingProbeUrl = string.Empty;
             pendingProbeBranch = string.Empty;
             appliedProbeRevision = -1;
@@ -404,12 +414,17 @@ namespace MartinCalander.GitSubmoduleManager.Editor
 
         private void TickProbeAndUpdatePresentation()
         {
+            TickProbeAndUpdatePresentation(EditorApplication.timeSinceStartup);
+        }
+
+        internal void TickProbeAndUpdatePresentation(double currentTime)
+        {
             installProbe?.Tick();
 
             if (!string.IsNullOrWhiteSpace(pendingProbeUrl) &&
-                EditorApplication.timeSinceStartup >= probeNotBefore)
+                currentTime >= probeNotBefore)
             {
-                string currentUrl = urlField?.value?.Trim() ?? string.Empty;
+                string currentUrl = GetRepositoryUrl(urlField?.value);
                 string currentBranch = branchField?.value?.Trim() ?? string.Empty;
                 string requestedUrl = pendingProbeUrl;
                 string requestedBranch = pendingProbeBranch;
@@ -431,14 +446,14 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             }
 
             ApplyCurrentProbeSnapshot();
-            RequestCurrentBranchProbe();
+            RequestCurrentBranchProbe(currentTime);
             UpdatePresentation();
         }
 
         private void ApplyCurrentProbeSnapshot()
         {
             GitSubmoduleInstallProbeSnapshot snapshot = installProbe?.Current;
-            string currentUrl = urlField?.value?.Trim() ?? string.Empty;
+            string currentUrl = GetRepositoryUrl(urlField?.value);
             if (!IsCurrentProbeSnapshot(snapshot, currentUrl) ||
                 snapshot.Revision == appliedProbeRevision)
             {
@@ -551,11 +566,24 @@ namespace MartinCalander.GitSubmoduleManager.Editor
 
         private void RequestCurrentBranchProbe()
         {
-            string url = urlField?.value?.Trim() ?? string.Empty;
+            RequestCurrentBranchProbe(EditorApplication.timeSinceStartup);
+        }
+
+        private void RequestCurrentBranchProbe(double currentTime)
+        {
+            string url = GetRepositoryUrl(urlField?.value);
             string branch = branchField?.value?.Trim() ?? string.Empty;
             if (!GitUtility.IsValidRepositoryUrl(url) ||
                 !GitUtility.IsValidBranchName(branch) ||
                 string.IsNullOrWhiteSpace(branch))
+            {
+                return;
+            }
+
+            // Polling must not move the debounce deadline for unchanged input.
+            // Only a different pending URL or branch starts a new interval.
+            if (string.Equals(pendingProbeUrl, url, StringComparison.Ordinal) &&
+                string.Equals(pendingProbeBranch, branch, StringComparison.Ordinal))
             {
                 return;
             }
@@ -573,8 +601,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             {
                 pendingProbeUrl = url;
                 pendingProbeBranch = branch;
-                probeNotBefore = EditorApplication.timeSinceStartup +
-                                 ProbeDebounceSeconds;
+                probeNotBefore = currentTime + ProbeDebounceSeconds;
             }
         }
 
@@ -596,7 +623,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             if (urlField == null || packageNameField == null || branchField == null)
                 return;
 
-            string currentUrl = urlField.value?.Trim() ?? string.Empty;
+            string currentUrl = GetRepositoryUrl(urlField.value);
             bool validUrl = GitUtility.IsValidRepositoryUrl(currentUrl);
             GitSubmoduleInstallProbeSnapshot snapshot = installProbe?.Current;
             bool hasCurrentSnapshot = IsCurrentProbeSnapshot(snapshot, currentUrl);
@@ -835,7 +862,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             if (isInstalling)
                 return;
 
-            string submittedUrl = urlField?.value?.Trim() ?? string.Empty;
+            string submittedUrl = GetRepositoryUrl(urlField?.value);
             string submittedPackageName =
                 packageNameField?.value?.Trim() ?? string.Empty;
             string submittedBranch = branchField?.value?.Trim() ?? string.Empty;

@@ -469,9 +469,39 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         internal static void Draw(GitSubmoduleManagerSetupSnapshot snapshot)
         {
             snapshot ??= GitSubmoduleManagerSetupSnapshot.Idle;
+            string compatibilityError =
+                GitSubmoduleManagerPackageManagerHost.OpenGitHubSourceError;
+            if (!string.IsNullOrWhiteSpace(compatibilityError))
+            {
+                EditorGUILayout.HelpBox(compatibilityError, MessageType.Warning);
+                EditorGUILayout.Space(5f);
+            }
             DrawGitStatus(snapshot);
             EditorGUILayout.Space(5f);
             DrawGitHubStatus(snapshot);
+        }
+
+        internal static void DrawPackageManagerOpenButton(
+            GitSubmoduleManagerNavigationRequest navigation,
+            params GUILayoutOption[] options)
+        {
+            string unavailable =
+                GitSubmoduleManagerPackageManagerHost.OpenGitHubSourceError;
+            using (new EditorGUI.DisabledScope(
+                       navigation == null || navigation.IsPending ||
+                       !string.IsNullOrWhiteSpace(unavailable)))
+            {
+                if (GUILayout.Button(
+                        new GUIContent(
+                            navigation?.IsPending == true
+                                ? "Opening GitHub Package Manager..."
+                                : "Open GitHub Package Manager",
+                            unavailable),
+                        options))
+                {
+                    navigation?.Open();
+                }
+            }
         }
 
         internal static string FormatInstalledMessage(string version)
@@ -634,6 +664,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
 
         private Vector2 scrollPosition;
         private GitSubmoduleManagerSetupProbe setupProbe;
+        private GitSubmoduleManagerNavigationRequest navigation;
         private string settingsError = string.Empty;
 
         internal static void Open()
@@ -675,6 +706,11 @@ namespace MartinCalander.GitSubmoduleManager.Editor
 
         private void OnEnable()
         {
+            navigation?.Dispose();
+            navigation = new GitSubmoduleManagerNavigationRequest(
+                GitSubmoduleManagerPackageManagerHost.OpenGitHubSource,
+                Close);
+            navigation.Changed += OnSetupProbeChanged;
             titleContent = new GUIContent(
                 "Git Submodule Manager",
                 GitSubmoduleManagerIcons.GitIcon);
@@ -693,6 +729,8 @@ namespace MartinCalander.GitSubmoduleManager.Editor
 
         private void OnDisable()
         {
+            navigation?.Dispose();
+            navigation = null;
             if (setupProbe != null)
                 setupProbe.Changed -= OnSetupProbeChanged;
             setupProbe = null;
@@ -742,13 +780,11 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             }
 
             EditorGUILayout.Space(10f);
-            if (GUILayout.Button(
-                    "Open GitHub Package Manager",
-                    GUILayout.Height(30f)))
-            {
-                GitSubmoduleManagerPackageManagerHost.OpenGitHubSource();
-                Close();
-            }
+            GitSubmoduleManagerSetupGUI.DrawPackageManagerOpenButton(
+                navigation,
+                GUILayout.Height(30f));
+            if (!string.IsNullOrWhiteSpace(navigation?.Error))
+                EditorGUILayout.HelpBox(navigation.Error, MessageType.Error);
 
             if (GUILayout.Button("Open Documentation", GUILayout.Height(22f)))
                 Application.OpenURL(DocumentationUrl);

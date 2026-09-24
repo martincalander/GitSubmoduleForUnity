@@ -12,6 +12,102 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
 {
     public sealed class GitSubmoduleInstallPopupTests
     {
+        [TestCase("", false, "main")]
+        [TestCase("release", true, "release")]
+        public void BranchProbe_RepeatedTicksPreserveThePendingDeadline(
+            string initialBranch,
+            bool editedByUser,
+            string expectedBranch)
+        {
+            var window = ScriptableObject.CreateInstance<GitSubmoduleInstallPopup>();
+            try
+            {
+                ConfigureCompletedDefaultProbe(window, initialBranch, editedByUser);
+
+                window.TickProbeAndUpdatePresentation(10d);
+                double initialDeadline = ReadPopupField<double>(window, "probeNotBefore");
+                Assert.That(initialDeadline, Is.EqualTo(10.4d).Within(0.00001d));
+                Assert.That(ReadPopupField<string>(window, "pendingProbeBranch"),
+                    Is.EqualTo(expectedBranch));
+
+                // The real 100 ms popup timer must not postpone this 400 ms
+                // debounce. Keep every tick before dispatch to avoid Git I/O.
+                window.TickProbeAndUpdatePresentation(10.1d);
+                window.TickProbeAndUpdatePresentation(10.2d);
+                window.TickProbeAndUpdatePresentation(10.3d);
+
+                Assert.That(ReadPopupField<double>(window, "probeNotBefore"),
+                    Is.EqualTo(initialDeadline));
+                Assert.That(ReadPopupField<string>(window, "pendingProbeBranch"),
+                    Is.EqualTo(expectedBranch));
+            }
+            finally
+            {
+                Object.DestroyImmediate(window);
+            }
+        }
+
+        [Test]
+        public void BranchProbe_ChangedSelectionRestartsThePendingDeadline()
+        {
+            var window = ScriptableObject.CreateInstance<GitSubmoduleInstallPopup>();
+            try
+            {
+                ConfigureCompletedDefaultProbe(window, "", false);
+                window.TickProbeAndUpdatePresentation(10d);
+                window.rootVisualElement.Q<TextField>("git-submodule-branch")
+                    .SetValueWithoutNotify("release");
+                SetPopupField(window, "branchEditedByUser", true);
+
+                window.TickProbeAndUpdatePresentation(10.2d);
+
+                Assert.That(ReadPopupField<string>(window, "pendingProbeBranch"),
+                    Is.EqualTo("release"));
+                Assert.That(ReadPopupField<double>(window, "probeNotBefore"),
+                    Is.EqualTo(10.6d).Within(0.00001d));
+                window.TickProbeAndUpdatePresentation(10.3d);
+                Assert.That(ReadPopupField<double>(window, "probeNotBefore"),
+                    Is.EqualTo(10.6d).Within(0.00001d));
+            }
+            finally
+            {
+                Object.DestroyImmediate(window);
+            }
+        }
+
+        [Test]
+        public void RelativeRepositoryInput_UsesCanonicalProbeAndConfirmationIdentity()
+        {
+            const string relativeUrl = "./relative-popup-package";
+            Assert.That(GitUtility.TryCanonicalizeNewInstallRepositoryUrl(
+                relativeUrl, out string canonicalUrl, out string error), Is.True, error);
+            var window = ScriptableObject.CreateInstance<GitSubmoduleInstallPopup>();
+            try
+            {
+                ConfigureCompletedDefaultProbe(window, "", false, canonicalUrl);
+                window.rootVisualElement.Q<TextField>("git-submodule-url")
+                    .SetValueWithoutNotify(relativeUrl);
+
+                window.TickProbeAndUpdatePresentation(10d);
+
+                Assert.That(ReadPopupField<string>(window, "pendingProbeUrl"),
+                    Is.EqualTo(canonicalUrl));
+                Assert.That(window.rootVisualElement.Q<TextField>("git-submodule-package-name").value,
+                    Is.EqualTo("com.example.package"));
+                MethodInfo submit = typeof(GitSubmoduleInstallPopup).GetMethod(
+                    "Submit", BindingFlags.Instance | BindingFlags.NonPublic);
+                submit.Invoke(window, null);
+                string confirmation = window.rootVisualElement.Q<HelpBox>("git-submodule-status").text;
+                Assert.That(confirmation, Does.Contain(canonicalUrl));
+                Assert.That(confirmation, Does.Not.Contain("Repository:\n" + relativeUrl));
+                Assert.That(ReadPopupField<bool>(window, "isInstalling"), Is.False);
+            }
+            finally
+            {
+                Object.DestroyImmediate(window);
+            }
+        }
+
         [Test]
         public void Popup_UsesCompactPackageManagerSizedBounds()
         {
@@ -715,6 +811,38 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
             window.maxSize = size;
             window.position = new Rect(100f, 100f, size.x, size.y);
             window.Show();
+        }
+
+        private static void ConfigureCompletedDefaultProbe(
+            GitSubmoduleInstallPopup window,
+            string initialBranch,
+            bool editedByUser,
+            string repositoryUrl = "https://github.com/example/package.git")
+        {
+            window.CreateGUI();
+            window.rootVisualElement.Q<TextField>("git-submodule-url")
+                .SetValueWithoutNotify(repositoryUrl);
+            window.rootVisualElement.Q<TextField>("git-submodule-branch")
+                .SetValueWithoutNotify(initialBranch);
+            SetPopupField(window, "branchEditedByUser", editedByUser);
+            SetReadyProbeSnapshot(window, new GitSubmoduleInstallProbeSnapshot(
+                1, repositoryUrl, GitSubmoduleInstallProbeStatus.Ready,
+                new[] { "main", "release" }, "main", "com.example.package",
+                "Example Package", "1.0.0", requestedBranch: string.Empty,
+                inspectedBranch: "main", inspectedCommit:
+                    "0123456789abcdef0123456789abcdef01234567"));
+        }
+
+        private static T ReadPopupField<T>(GitSubmoduleInstallPopup window, string name)
+        {
+            return (T)typeof(GitSubmoduleInstallPopup).GetField(
+                name, BindingFlags.Instance | BindingFlags.NonPublic).GetValue(window);
+        }
+
+        private static void SetPopupField(GitSubmoduleInstallPopup window, string name, object value)
+        {
+            typeof(GitSubmoduleInstallPopup).GetField(
+                name, BindingFlags.Instance | BindingFlags.NonPublic).SetValue(window, value);
         }
 
         private static void SendNavigationSubmit(VisualElement target)

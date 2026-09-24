@@ -102,6 +102,127 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
         }
 
         [Test]
+        public void NavigationFailure_KeepsWelcomeOpenAndAllowsRetry()
+        {
+            Action<bool, string> completion = null;
+            int requests = 0;
+            int closed = 0;
+            using var navigation = new GitSubmoduleManagerNavigationRequest(
+                callback =>
+                {
+                    requests++;
+                    completion = callback;
+                },
+                () => closed++);
+
+            navigation.Open();
+            navigation.Open();
+            Assert.That(requests, Is.EqualTo(1));
+            Assert.That(navigation.IsPending, Is.True);
+            Assert.That(closed, Is.Zero, "Starting navigation must not close Welcome.");
+            Action<bool, string> firstCompletion = completion;
+            completion(false, "Package Manager activation timed out.");
+            Assert.That(navigation.IsPending, Is.False);
+            Assert.That(navigation.Error, Does.Contain("timed out"));
+            Assert.That(closed, Is.Zero, "Failed activation must preserve Welcome.");
+
+            navigation.Open();
+            Assert.That(requests, Is.EqualTo(2));
+            Assert.That(navigation.Error, Is.Empty);
+            firstCompletion(true, string.Empty);
+            Assert.That(closed, Is.Zero, "An old completion cannot finish a retry.");
+            Assert.That(navigation.IsPending, Is.True);
+            completion(true, string.Empty);
+            Assert.That(navigation.IsPending, Is.False);
+            Assert.That(closed, Is.EqualTo(1));
+        }
+
+        [TestCase("6000.4.0f1")]
+        [TestCase("6000.6.1f1")]
+        [TestCase("6000.6.3f1")]
+        [TestCase("6000.7.0a4")]
+        [TestCase("6000.7.0b2")]
+        [TestCase("6000.7.0f1")]
+        public void UnsupportedEditor_NavigationReportsCompatibilityAndPreservesWelcome(
+            string unityVersion)
+        {
+            int closed = 0;
+            using var navigation = new GitSubmoduleManagerNavigationRequest(
+                callback => callback(
+                    false,
+                    GitSubmoduleManagerPackageManagerHost.GetOpenGitHubSourceError(
+                        unityVersion,
+                        false)),
+                () => closed++);
+
+            navigation.Open();
+
+            Assert.That(navigation.IsPending, Is.False);
+            Assert.That(closed, Is.Zero);
+            Assert.That(navigation.Error, Does.Contain(unityVersion));
+            Assert.That(navigation.Error, Does.Contain("unavailable"));
+            Assert.That(navigation.Error, Does.Contain("6000.3.22f1"));
+            Assert.That(navigation.Error, Does.Contain("6000.5.*f1"));
+            Assert.That(navigation.Error, Does.Contain("6000.6.0f1"));
+            Assert.That(navigation.Error, Does.Contain("6000.6.2f1"));
+            Assert.That(navigation.Error, Does.Contain("6000.7.0b1"));
+        }
+
+        [TestCase("6000.3.22f1")]
+        [TestCase("6000.5.10f1")]
+        [TestCase("6000.6.0f1")]
+        [TestCase("6000.6.2f1")]
+        [TestCase("6000.7.0b1")]
+        public void SupportedEditor_NavigationRemainsAvailableUntilShutdown(
+            string unityVersion)
+        {
+            Assert.That(
+                GitSubmoduleManagerPackageManagerHost.GetOpenGitHubSourceError(
+                    unityVersion,
+                    false),
+                Is.Empty);
+            Assert.That(
+                GitSubmoduleManagerPackageManagerHost.GetOpenGitHubSourceError(
+                    unityVersion,
+                    true),
+                Does.Contain("reloading"));
+        }
+
+        [Test]
+        public void DisposedNavigation_IgnoresLateCompletion()
+        {
+            Action<bool, string> completion = null;
+            int closed = 0;
+            var navigation = new GitSubmoduleManagerNavigationRequest(
+                callback => completion = callback,
+                () => closed++);
+            navigation.Open();
+            navigation.Dispose();
+
+            completion(true, string.Empty);
+
+            Assert.That(closed, Is.Zero);
+            Assert.That(navigation.IsPending, Is.False);
+        }
+
+        [Test]
+        public void Navigation_PresentationFailureCannotPreventCompletion()
+        {
+            Action<bool, string> completion = null;
+            int closed = 0;
+            using var navigation = new GitSubmoduleManagerNavigationRequest(
+                callback => completion = callback,
+                () => closed++);
+            navigation.Changed += () => throw new InvalidOperationException("Repaint failed.");
+
+            navigation.Open();
+            completion(true, string.Empty);
+
+            Assert.That(navigation.IsPending, Is.False);
+            Assert.That(closed, Is.EqualTo(1));
+        }
+
+        [Test]
         public void SetupPresentation_InstalledStatusShowsCheckmarkAndFirstVersionLine()
         {
             Assert.That(

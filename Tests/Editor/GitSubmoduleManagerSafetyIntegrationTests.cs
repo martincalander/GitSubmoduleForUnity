@@ -2143,6 +2143,163 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
             Assert.That(File.ReadAllText(lateFile), Is.EqualTo("new work\n"));
         }
 
+        [TestCase("tracked")]
+        [TestCase("staged")]
+        [TestCase("untracked")]
+        [TestCase("ignored")]
+        [TestCase("ignored-directory")]
+        public void Remove_ExplicitDiscardRefusesChangedBytesWithUnchangedDirtyStatus(string kind)
+        {
+            string packageRoot = Path.Combine(parentRoot, PackagePath);
+            bool tracked = kind == "tracked" || kind == "staged";
+            string relativePath = tracked
+                ? "package.json"
+                : kind == "ignored-directory" ? "local-cache/nested/work.bin" : "work.bin";
+            string filePath = Path.Combine(packageRoot, relativePath);
+            if (kind.StartsWith("ignored", StringComparison.Ordinal))
+            {
+                Assert.That(
+                    GitUtility.TryResolveSubmoduleGitDir(PackagePath, out string gitDir, out string resolveError),
+                    Is.True,
+                    resolveError);
+                Directory.CreateDirectory(Path.Combine(gitDir, "info"));
+                File.AppendAllText(
+                    Path.Combine(gitDir, "info", "exclude"),
+                    kind == "ignored-directory" ? "\nlocal-cache/\n" : "\nwork.bin\n");
+            }
+            Directory.CreateDirectory(Path.GetDirectoryName(filePath));
+            byte[] original = tracked ? File.ReadAllBytes(filePath) : new byte[] { 0, 1, 255, 3 };
+            var before = new byte[original.Length + 1];
+            Buffer.BlockCopy(original, 0, before, 0, original.Length);
+            before[before.Length - 1] = 32;
+            File.WriteAllBytes(filePath, before);
+            DateTime writeTime = File.GetLastWriteTimeUtc(filePath).AddMinutes(-2);
+            File.SetLastWriteTimeUtc(filePath, writeTime);
+            if (kind == "staged")
+            {
+                ExpectGit(packageRoot, "config core.trustctime false");
+                ExpectGit(packageRoot, "add -- package.json");
+            }
+            Assert.That(
+                GitUtility.TryAssessSubmoduleRemoval(
+                    PackagePath, out SubmoduleRemovalAssessment confirmed, out string assessmentError),
+                Is.True,
+                assessmentError);
+            var after = (byte[])before.Clone();
+            after[after.Length - 1] = 9;
+            File.WriteAllBytes(filePath, after);
+            File.SetLastWriteTimeUtc(filePath, writeTime);
+            Assert.That(
+                GitUtility.TryAssessSubmoduleRemoval(
+                    PackagePath, out SubmoduleRemovalAssessment current, out assessmentError),
+                Is.True,
+                assessmentError);
+            Assert.That(current.WorktreeStatus, Is.EqualTo(confirmed.WorktreeStatus));
+            Assert.That(GitUtility.RemovalAssessmentMatches(confirmed.CreateSnapshot(), current), Is.False);
+
+            bool removed = GitUtility.TryRemoveSubmodule(PackagePath, confirmed, true, out string error);
+
+            Assert.That(removed, Is.False);
+            Assert.That(error, Does.Contain("changed after the removal warning"));
+            Assert.That(File.ReadAllBytes(filePath), Is.EqualTo(after));
+            Assert.That(
+                Git(parentRoot, "ls-files --error-unmatch -- " + GitUtility.Quote(PackagePath)).IsSuccess,
+                Is.True);
+        }
+
+        [Test]
+        public void Remove_ExplicitDiscardRefusesNewFileInsideAlreadyIgnoredDirectory()
+        {
+            string packageRoot = Path.Combine(parentRoot, PackagePath);
+            Assert.That(
+                GitUtility.TryResolveSubmoduleGitDir(PackagePath, out string gitDir, out string resolveError),
+                Is.True,
+                resolveError);
+            Directory.CreateDirectory(Path.Combine(gitDir, "info"));
+            File.AppendAllText(Path.Combine(gitDir, "info", "exclude"), "\nlocal-cache/\n");
+            string cacheRoot = Path.Combine(packageRoot, "local-cache");
+            Directory.CreateDirectory(cacheRoot);
+            File.WriteAllText(Path.Combine(cacheRoot, "before.txt"), "previous work\n");
+            Assert.That(
+                GitUtility.TryAssessSubmoduleRemoval(
+                    PackagePath, out SubmoduleRemovalAssessment confirmed, out string assessmentError),
+                Is.True,
+                assessmentError);
+            string lateFile = Path.Combine(cacheRoot, "after.txt");
+            File.WriteAllText(lateFile, "later work\n");
+            Assert.That(
+                GitUtility.TryAssessSubmoduleRemoval(
+                    PackagePath, out SubmoduleRemovalAssessment current, out assessmentError),
+                Is.True,
+                assessmentError);
+            Assert.That(current.WorktreeStatus, Is.EqualTo(confirmed.WorktreeStatus));
+
+            bool removed = GitUtility.TryRemoveSubmodule(PackagePath, confirmed, true, out string error);
+
+            Assert.That(removed, Is.False);
+            Assert.That(error, Does.Contain("changed after the removal warning"));
+            Assert.That(File.ReadAllText(lateFile), Is.EqualTo("later work\n"));
+        }
+
+        [TestCase(1, 16 * 1024 * 1024 + 1)]
+        [TestCase(5, 13 * 1024 * 1024)]
+        public void Remove_AssessmentRefusesDirtyContentsBeyondReadBounds(int fileCount, int fileBytes)
+        {
+            string packageRoot = Path.Combine(parentRoot, PackagePath);
+            for (int i = 0; i < fileCount; i++)
+            {
+                using (var stream = File.Create(Path.Combine(packageRoot, "local-work-" + i + ".bin")))
+                    stream.SetLength(fileBytes);
+            }
+
+            bool assessed = GitUtility.TryAssessSubmoduleRemoval(
+                PackagePath, out _, out string error);
+
+            Assert.That(assessed, Is.False);
+            Assert.That(error, Does.Contain("16 MiB per file and 64 MiB total"));
+            Assert.That(new FileInfo(Path.Combine(packageRoot, "local-work-0.bin")).Length, Is.EqualTo(fileBytes));
+            Assert.That(File.Exists(Path.Combine(packageRoot, "package.json")), Is.True);
+        }
+
+        [TestCase("truncated")]
+        [TestCase("invalid-utf8")]
+        [TestCase("unterminated")]
+        [TestCase("too-many-paths")]
+        [TestCase("unconfirmed-termination")]
+        public void Remove_AssessmentRefusesIncompleteDirtyPathEvidence(string failure)
+        {
+            File.WriteAllText(Path.Combine(parentRoot, PackagePath, "local-work.txt"), "preserve this work\n");
+            CliCommandRunner.CurrentRunner = new SingleCommandMutationRunner(
+                CliCommandRunner.CurrentRunner,
+                spec => spec.ArgumentList != null && spec.ArgumentList.Count > 2 && spec.ArgumentList[2] == "ls-files",
+                (spec, result) =>
+                {
+                    Assert.That(spec.RequireStrictUtf8StdOut, Is.True);
+                    result.StdOutTruncated = failure == "truncated";
+                    result.StdOutInvalidUtf8 = failure == "invalid-utf8";
+                    if (failure == "unterminated")
+                        result.StdOut = "local-work.txt";
+                    if (failure == "too-many-paths")
+                    {
+                        var paths = new StringBuilder();
+                        for (int i = 0; i < 4097; i++)
+                            paths.Append("work-").Append(i).Append(".txt\0");
+                        result.StdOut = paths.ToString();
+                    }
+                    if (failure == "unconfirmed-termination")
+                        result.TerminationConfirmed = false;
+                });
+
+            bool assessed = GitUtility.TryAssessSubmoduleRemoval(PackagePath, out _, out string error);
+
+            if (failure == "unconfirmed-termination")
+                Assert.That(GitUtility.ConsumeUnconfirmedCommandTermination(), Is.True);
+
+            Assert.That(assessed, Is.False);
+            Assert.That(error, Does.Contain("consent"));
+            Assert.That(File.Exists(Path.Combine(parentRoot, PackagePath, "local-work.txt")), Is.True);
+        }
+
         [Test]
         public void Remove_CleanSubmoduleRemovesGitlinkAndWorktree()
         {

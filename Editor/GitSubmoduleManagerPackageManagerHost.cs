@@ -9,6 +9,90 @@ using UnityEngine.UIElements;
 
 namespace MartinCalander.GitSubmoduleManager.Editor
 {
+    internal sealed class GitSubmoduleManagerNavigationRequest : IDisposable
+    {
+        private readonly Action<Action<bool, string>> requestOpen;
+        private readonly Action activated;
+        private bool disposed;
+        private int generation;
+
+        internal GitSubmoduleManagerNavigationRequest(
+            Action<Action<bool, string>> requestOpen,
+            Action activated = null)
+        {
+            this.requestOpen = requestOpen ??
+                throw new ArgumentNullException(nameof(requestOpen));
+            this.activated = activated;
+        }
+
+        internal event Action Changed;
+        internal bool IsPending { get; private set; }
+        internal string Error { get; private set; } = string.Empty;
+
+        internal void Open()
+        {
+            if (disposed || IsPending)
+                return;
+
+            int requestGeneration = ++generation;
+            IsPending = true;
+            Error = string.Empty;
+            NotifyChanged();
+            try
+            {
+                requestOpen((success, error) =>
+                    Complete(requestGeneration, success, error));
+            }
+            catch (Exception exception)
+            {
+                Complete(requestGeneration, false, exception.Message);
+            }
+        }
+
+        private void Complete(int requestGeneration, bool success, string error)
+        {
+            if (disposed || !IsPending || requestGeneration != generation)
+                return;
+
+            IsPending = false;
+            Error = success
+                ? string.Empty
+                : GitHubUtility.SanitizeUiDiagnostic(
+                    string.IsNullOrWhiteSpace(error)
+                        ? "Sources > GitHub could not be opened. Try again."
+                        : error);
+            NotifyChanged();
+            if (success)
+                activated?.Invoke();
+        }
+
+        private void NotifyChanged()
+        {
+            Delegate[] callbacks = Changed?.GetInvocationList();
+            if (callbacks == null)
+                return;
+
+            foreach (Delegate callback in callbacks)
+            {
+                try
+                {
+                    ((Action)callback).Invoke();
+                }
+                catch
+                {
+                    // Presentation callbacks cannot own request completion.
+                }
+            }
+        }
+
+        public void Dispose()
+        {
+            disposed = true;
+            IsPending = false;
+            Changed = null;
+        }
+    }
+
     /// <summary>
     /// Installs the native Sources &gt; GitHub extension into Unity's Package
     /// Manager. This host never replaces or hides Unity's Package Manager UI.
@@ -49,6 +133,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         private static bool patchRetryActive;
         private static bool isShuttingDown;
         private static bool openRequested;
+        private static Action<bool, string> openRequestCompleted;
         private static double openRequestDeadline;
         private static double nextWindowScanTime;
         private static double patchRetryDeadline;
@@ -111,8 +196,40 @@ namespace MartinCalander.GitSubmoduleManager.Editor
 
         internal static void OpenGitHubSource()
         {
-            if (isShuttingDown ||
-                !PackageManagerUnityVersionSupport.IsCurrentVersionSupported)
+            OpenGitHubSource(null);
+        }
+
+        internal static string OpenGitHubSourceError =>
+            GetOpenGitHubSourceError(Application.unityVersion, isShuttingDown);
+
+        internal static string GetOpenGitHubSourceError(
+            string unityVersion,
+            bool shuttingDown)
+        {
+            if (!PackageManagerUnityVersionSupport.IsSupported(unityVersion))
+            {
+                return GitHubUtility.SanitizeUiDiagnostic(
+                    "Sources > GitHub is unavailable in Unity " + unityVersion +
+                    ". Supported Editors are Unity 6000.3.22f1, " +
+                    "6000.5.*f1 final releases, exact 6000.6.0f1 and 6000.6.2f1, and the exact 6000.7.0b1 beta.");
+            }
+
+            return shuttingDown
+                ? "Unity is reloading scripts or closing. Try opening Sources > GitHub again after the reload."
+                : string.Empty;
+        }
+
+        internal static void OpenGitHubSource(Action<bool, string> completed)
+        {
+            string error = OpenGitHubSourceError;
+            if (!string.IsNullOrWhiteSpace(error))
+            {
+                NotifyOpenRequestCompleted(completed, false, error);
+                return;
+            }
+
+            openRequestCompleted += completed;
+            if (openRequested)
                 return;
 
             if (!isPatched && !TryPatch(out _))
@@ -122,8 +239,49 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             openRequestDeadline =
                 EditorApplication.timeSinceStartup + OpenRequestTimeoutSeconds;
             SubscribeUpdate();
-            TryOpenPackageManagerThroughReflection();
+            if (!TryOpenPackageManagerThroughReflection(out error))
+            {
+                CompleteOpenRequest(false, error);
+                return;
+            }
             EditorApplication.delayCall += AttachExistingWindows;
+        }
+
+        private static void CompleteOpenRequest(bool success, string error)
+        {
+            Action<bool, string> completed = openRequestCompleted;
+            openRequestCompleted = null;
+            openRequested = false;
+            UpdateSubscription();
+            NotifyOpenRequestCompleted(completed, success, error);
+        }
+
+        private static void NotifyOpenRequestCompleted(
+            Action<bool, string> completed,
+            bool success,
+            string error)
+        {
+            string safeError = success
+                ? string.Empty
+                : GitHubUtility.SanitizeUiDiagnostic(error);
+            if (!success)
+                Debug.LogWarning("[Git Submodule Manager] " + safeError);
+
+            Delegate[] callbacks = completed?.GetInvocationList();
+            if (callbacks == null)
+                return;
+
+            foreach (Delegate callback in callbacks)
+            {
+                try
+                {
+                    ((Action<bool, string>)callback).Invoke(success, safeError);
+                }
+                catch
+                {
+                    // A closed presentation surface must not stop other callers.
+                }
+            }
         }
 
         internal static bool TryPatch()
@@ -137,7 +295,8 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             if (!PackageManagerUnityVersionSupport.IsCurrentVersionSupported)
             {
                 error = "The native Package Manager integration supports only " +
-                        "Unity 6000.3.22f1 and Unity 6000.5.*f1 final releases.";
+                        "Unity 6000.3.22f1, Unity 6000.5.*f1 final releases, " +
+                        "exact Unity 6000.6.0f1 and 6000.6.2f1, and the exact Unity 6000.7.0b1 beta.";
                 return false;
             }
 
@@ -579,10 +738,10 @@ namespace MartinCalander.GitSubmoduleManager.Editor
 
             if (openRequested && now > openRequestDeadline)
             {
-                openRequested = false;
-                Debug.LogWarning(
-                    "[Git Submodule Manager] Sources > GitHub could not be opened " +
-                    "before Unity's Package Manager activation timed out.");
+                CompleteOpenRequest(
+                    false,
+                    "Sources > GitHub could not be opened before Unity's " +
+                    "Package Manager activation timed out. Try opening it again.");
             }
 
             UpdateSubscription();
@@ -620,8 +779,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 return;
             }
 
-            openRequested = false;
-            UpdateSubscription();
+            CompleteOpenRequest(true, string.Empty);
         }
 
         private static HostSession TryAttachWindow(
@@ -666,11 +824,15 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             }
         }
 
-        private static void TryOpenPackageManagerThroughReflection()
+        private static bool TryOpenPackageManagerThroughReflection(out string error)
         {
+            error = string.Empty;
             Type windowType = GetPackageManagerWindowType();
             if (windowType == null)
-                return;
+            {
+                error = "Unity's Package Manager window type could not be found.";
+                return false;
+            }
 
             try
             {
@@ -684,7 +846,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 if (open != null)
                 {
                     open.Invoke(null, new object[] { null });
-                    return;
+                    return true;
                 }
 
                 const BindingFlags flags = BindingFlags.Static | BindingFlags.Public;
@@ -701,20 +863,26 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 {
                     window.Show();
                     window.Focus();
+                    return true;
                 }
+
+                error = "Unity's Package Manager window could not be created.";
+                return false;
             }
             catch (Exception exception)
             {
-                Debug.LogWarning(
-                    "[Git Submodule Manager] Unity's Package Manager window " +
-                    "could not be opened: " +
-                    GitHubUtility.SanitizeUiDiagnostic(exception.Message));
+                error = "Unity's Package Manager window could not be opened: " +
+                        GitHubUtility.SanitizeUiDiagnostic(
+                            exception.GetBaseException().Message);
+                return false;
             }
         }
 
         private static void BeforeEditorQuits()
         {
             isShuttingDown = true;
+            if (openRequested)
+                CompleteOpenRequest(false, "Unity closed before Sources > GitHub could open.");
             UnsubscribeUpdate();
             DisposeAllSessions();
         }
@@ -722,6 +890,12 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         private static void BeforeAssemblyReload()
         {
             isShuttingDown = true;
+            if (openRequested)
+            {
+                CompleteOpenRequest(
+                    false,
+                    "Unity reloaded scripts before Sources > GitHub could open. Try again after the reload.");
+            }
             UnsubscribeUpdate();
             DisposeAllSessions();
             try

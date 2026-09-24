@@ -80,14 +80,13 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         {
             request = null;
             error = string.Empty;
-            string url = repositoryUrl?.Trim() ?? string.Empty;
             string branch = selectedBranch?.Trim() ?? string.Empty;
             string packageName = expectedPackageName?.Trim() ?? string.Empty;
-            if (!GitUtility.IsValidRepositoryUrl(url))
-            {
-                error = "A valid repository URL is required.";
+            if (!GitUtility.TryCanonicalizeNewInstallRepositoryUrl(
+                    repositoryUrl,
+                    out string url,
+                    out error))
                 return false;
-            }
 
             if (string.IsNullOrEmpty(branch) ||
                 string.Equals(branch, ".", StringComparison.Ordinal) ||

@@ -25,7 +25,28 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
         [TestCase("6000.3.21f1", false)]
         [TestCase("6000.3.23f1", false)]
         [TestCase("6000.4.0f1", false)]
-        [TestCase("6000.6.0f1", false)]
+        [TestCase("6000.6.0f1", true)]
+        [TestCase("6000.6.1f1", false)]
+        [TestCase("6000.6.2f1", true)]
+        [TestCase("6000.6.3f1", false)]
+        [TestCase("6000.6.2b1", false)]
+        [TestCase("6000.6.2f2", false)]
+        [TestCase("6000.6.02f1", false)]
+        [TestCase("6000.6.2f1c1", false)]
+        [TestCase("6000.6.0b1", false)]
+        [TestCase("6000.6.0f2", false)]
+        [TestCase("6000.7.0a4", false)]
+        [TestCase("6000.7.0b1", true)]
+        [TestCase("6000.7.0b0", false)]
+        [TestCase("6000.7.0b2", false)]
+        [TestCase("6000.7.1b1", false)]
+        [TestCase("6000.7.0b01", false)]
+        [TestCase("6000.07.0b1", false)]
+        [TestCase("6000.7.00b1", false)]
+        [TestCase("6000.7.0b1c1", false)]
+        [TestCase(" 6000.7.0b1", false)]
+        [TestCase("6000.7.0b1 ", false)]
+        [TestCase("6000.7.0f1", false)]
         [TestCase("6000.5.0f2", false)]
         [TestCase("6000.5.0f01", false)]
         [TestCase("06000.5.0f1", false)]
@@ -35,7 +56,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
         [TestCase("6000.5f1", false)]
         [TestCase("", false)]
         [TestCase(null, false)]
-        public void RuntimeSupportGate_AcceptsOnlyValidatedFinalEditors(
+        public void RuntimeSupportGate_AcceptsOnlyValidatedEditors(
             string unityVersion,
             bool expected)
         {

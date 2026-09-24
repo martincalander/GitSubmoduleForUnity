@@ -4,10 +4,11 @@
 
 ### Unity
 
-The validated Editor targets are exact Unity `6000.3.22f1` and Unity
-`6000.5.*f1` final releases. Unity `6000.4` is not currently supported. The
-package manifest declares `6000.3.22f1` as its minimum eligibility version. All
-package assemblies are editor-only.
+The validated Editor targets are exact Unity `6000.3.22f1`, Unity
+`6000.5.*f1` final releases, and exact Unity `6000.6.0f1` and `6000.6.2f1`, plus the exact `6000.7.0b1` beta.
+Unity `6000.4` and other `6000.6` versions are not currently supported. The package manifest
+declares `6000.3.22f1` as its minimum eligibility version. All package assemblies
+are editor-only.
 
 ### Git CLI
 
@@ -264,7 +265,7 @@ The supported Editor targets are listed under [Prerequisites](#unity). Unity
 package manifests can express a minimum version, but not a disjoint support
 set. For that reason, `package.json` uses `unity: 6000.3` with
 `unityRelease: 22f1` to admit the supported 6000.3 target. Those fields do not
-declare Unity 6000.4 support.
+declare support for Unity 6000.4 or other unvalidated Editor versions.
 
 | Platform | CLI discovery locations |
 | --- | --- |

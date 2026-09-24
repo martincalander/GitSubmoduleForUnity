@@ -7,6 +7,15 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- Added exact Unity `6000.7.0b1` beta compatibility. Other 6.7 builds remain
+  rejected by the independent runtime and installer gates.
+
+- Added exact Unity `6000.6.0f1` and `6000.6.2f1` as supported Editor targets
+  alongside Unity `6000.3.22f1` and `6000.5.*f1` final releases. Other `6000.6` versions remain
+  unvalidated.
+
 ### Changed
 
 - Verified installed submodules now use Unity Package Manager's standard
@@ -25,6 +34,24 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- Fixed branch inspection staying pending in the URL installer when repeated
+  presentation updates postponed the same probe.
+- Fixed **Open GitHub Package Manager** silently doing nothing on unsupported
+  Editors. Setup now explains compatibility and activation failures, and the
+  Welcome window closes only after successful activation.
+- Fixed new `./` and `../` repository inputs resolving differently during
+  inspection and installation. They now resolve against the Unity project root
+  before probing, confirmation, and installation.
+- Fixed a matching installed dependency clearing an earlier incompatible
+  version requirement. Conflicting requirements remain blocking.
+- Fixed unsafe filesystem entries reaching metadata reads. Existing files are
+  checked through their opened handles before bounded reads; links, pipes,
+  devices, and identity changes are rejected.
+- Fixed discard consent remaining valid after dirty file contents changed.
+  Removal and conversion now bind consent to staged, modified, untracked, and
+  ignored file contents, with limits of 4096 paths, 16 MiB per file, and 64 MiB
+  total. Linked or special files, nested repositories, and work beyond those
+  limits require manual review before retrying.
 - Fixed Install actions disappearing when Unity recycled Package Manager's
   nested visual root or action containers. Failed remounts now restart the
   bounded repair pass, and optional Remove, conversion, or Manage-menu failures

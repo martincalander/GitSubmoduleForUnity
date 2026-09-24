@@ -1,7 +1,5 @@
 using System;
-using System.ComponentModel;
 using System.IO;
-using System.Runtime.InteropServices;
 using System.Text;
 using System.Threading;
 using UnityEditor;
@@ -73,25 +71,6 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             internal GitOperationJournal Journal;
         }
 
-        [DllImport("libc", EntryPoint = "open", SetLastError = true)]
-        private static extern int OpenUnixFileNoFollow(
-            string path,
-            int flags);
-
-        [DllImport("libc", EntryPoint = "read", SetLastError = true)]
-        private static extern IntPtr ReadUnixFile(
-            int descriptor,
-            byte[] buffer,
-            UIntPtr count);
-
-        [DllImport("libc", EntryPoint = "lseek", SetLastError = true)]
-        private static extern long SeekUnixFile(
-            int descriptor,
-            long offset,
-            int origin);
-
-        [DllImport("libc", EntryPoint = "close", SetLastError = true)]
-        private static extern int CloseUnixFile(int descriptor);
 
         private static readonly object Gate = new object();
         private static readonly string CurrentJournalPath = Path.Combine(
@@ -1945,145 +1924,12 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             out string error)
         {
             count = 0;
-            error = string.Empty;
-            try
-            {
-                if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
-                {
-                    using (var stream = new FileStream(
-                               journalPath,
-                               FileMode.Open,
-                               FileAccess.Read,
-                               FileShare.Read))
-                    {
-                        if (!stream.CanSeek || stream.Length > MaximumJournalBytes)
-                        {
-                            error = !stream.CanSeek
-                                ? "The operation journal must be one seekable regular file."
-                                : "The operation journal exceeds the safety size limit.";
-                            return false;
-                        }
-
-                        long openedLength = stream.Length;
-                        while (count < buffer.Length)
-                        {
-                            int read = stream.Read(
-                                buffer,
-                                count,
-                                buffer.Length - count);
-                            if (read <= 0)
-                                break;
-                            count += read;
-                        }
-
-                        if (openedLength != count || stream.Length != count)
-                        {
-                            error =
-                                "The operation journal changed length while it was being read.";
-                            return false;
-                        }
-                    }
-                    return true;
-                }
-
-                int flags;
-                if (RuntimeInformation.IsOSPlatform(OSPlatform.OSX))
-                {
-                    const int darwinNonBlock = 0x0004;
-                    const int darwinNoFollow = 0x0100;
-                    const int darwinCloseOnExec = 0x01000000;
-                    flags = darwinNonBlock | darwinNoFollow | darwinCloseOnExec;
-                }
-                else
-                {
-                    const int linuxNonBlock = 0x00000800;
-                    const int linuxNoFollow = 0x00020000;
-                    const int linuxCloseOnExec = 0x00080000;
-                    flags = linuxNonBlock | linuxNoFollow | linuxCloseOnExec;
-                }
-
-                int descriptor = OpenUnixFileNoFollow(journalPath, flags);
-                if (descriptor < 0)
-                {
-                    throw new IOException(
-                        "The operation journal could not be opened without following links: " +
-                        new Win32Exception(Marshal.GetLastWin32Error()).Message);
-                }
-
-                try
-                {
-                    const int seekCurrent = 1;
-                    const int seekEnd = 2;
-                    if (SeekUnixFile(descriptor, 0, seekCurrent) < 0)
-                    {
-                        throw new IOException(
-                            "The operation journal must be one seekable regular file: " +
-                            new Win32Exception(Marshal.GetLastWin32Error()).Message);
-                    }
-
-                    var chunk = new byte[8192];
-                    while (count < buffer.Length)
-                    {
-                        int requested = Math.Min(
-                            chunk.Length,
-                            buffer.Length - count);
-                        long read;
-                        do
-                        {
-                            read = ReadUnixFile(
-                                    descriptor,
-                                    chunk,
-                                    new UIntPtr((uint)requested))
-                                .ToInt64();
-                        }
-                        while (read < 0 && Marshal.GetLastWin32Error() == 4);
-
-                        if (read < 0)
-                        {
-                            throw new IOException(
-                                "The operation journal could not be read safely: " +
-                                new Win32Exception(Marshal.GetLastWin32Error()).Message);
-                        }
-                        if (read == 0)
-                            break;
-
-                        Buffer.BlockCopy(
-                            chunk,
-                            0,
-                            buffer,
-                            count,
-                            (int)read);
-                        count += (int)read;
-                    }
-
-                    long openedLength = SeekUnixFile(descriptor, 0, seekEnd);
-                    if (openedLength < 0)
-                    {
-                        throw new IOException(
-                            "The operation journal must be one seekable regular file: " +
-                            new Win32Exception(Marshal.GetLastWin32Error()).Message);
-                    }
-                    if (openedLength != count)
-                    {
-                        error =
-                            "The operation journal changed length while it was being read.";
-                        return false;
-                    }
-
-                    return true;
-                }
-                finally
-                {
-                    CloseUnixFile(descriptor);
-                }
-            }
-            catch (Exception exception)
-            {
-                error =
-                    "The operation journal is not a safely readable regular file: " +
-                    exception.Message;
+            if (!BoundedRegularFile.TryRead(
+                    journalPath, (int)MaximumJournalBytes, out byte[] bytes, out error))
                 return false;
-            }
+            count = bytes.Length;
+            Buffer.BlockCopy(bytes, 0, buffer, 0, count);
+            return true;
         }
 
         private static bool TryInspectJournalEntry(

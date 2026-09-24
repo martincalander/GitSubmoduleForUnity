@@ -1,9 +1,9 @@
 # User Guide
 
-Git Submodule Manager extends Unity's existing Package Manager. On a validated
-Editor target—exact Unity `6000.3.22f1` or a Unity `6000.5.*f1` final
-release—open **Window > Package Management > Package Manager**, then select
-**GitHub** under **Sources**. There is no separate package management window.
+Git Submodule Manager extends Unity's existing Package Manager. On exact Unity
+`6000.3.22f1`, a Unity `6000.5.*f1` final release, or exact Unity `6000.6.0f1` or `6000.6.2f1`, plus the exact `6000.7.0b1` beta,
+open **Window > Package Management > Package Manager**, then select **GitHub**
+under **Sources**. There is no separate package management window.
 
 The GitHub source uses Unity's native package list, search, sorting, filters,
 selection, details tabs, action toolbar, and loading state. It combines
@@ -41,7 +41,9 @@ check always discards it first.
 
 Choose **Open GitHub Package Manager** to continue into Package Manager. Reopen
 the window at any time from **Preferences > Git Submodule Manager > Show
-Welcome**.
+Welcome**. Setup explains unsupported Editor versions and disables navigation
+on those versions. If Package Manager activation fails, the Welcome window
+stays open and displays the reason so you can retry.
 
 ## Preferences
 
@@ -171,7 +173,9 @@ When dependencies are missing, the confirmation lists each requirement and its
 resolved source. Choose **Install Dependencies & Continue** only after reviewing
 that plan. If any requirement has no source or multiple possible sources, the
 install stops with **Missing Dependencies Need Attention** rather than choosing
-one automatically. Version-mismatched sources are also blocking.
+one automatically. Version-mismatched sources are also blocking. If packages
+require incompatible versions of the same dependency, an installed version
+that satisfies one requirement does not clear the conflict.
 
 The Preferences option to install dependencies automatically applies only when
 every missing dependency has one resolved source. It never bypasses an
@@ -185,8 +189,13 @@ Submodule...**. This workflow needs Git but not GitHub CLI.
 Enter a secure HTTPS or SSH repository URL, or an explicit local path. **Package
 Name** and **Branch** remain disabled while Git inspects the remote. A successful
 probe reads the exact name from the root `package.json`, checks the sibling
-`package.json.meta`, selects the remote default branch, and adds available
-branches to the branch menu.
+`package.json.meta`, selects `main` when available or otherwise the remote
+default, and adds available branches to the branch menu. After selecting another
+branch, wait for its metadata probe to finish before confirming.
+
+New local paths beginning with `./` or `../` are relative to the Unity project
+root. The manager resolves them to an absolute path before probing, trust
+confirmation, or installation, so each step uses the same repository.
 
 Before cloning, review the inline trust confirmation with the redacted
 repository URL, selected revision, and exact `Packages/<package-name>`
@@ -209,6 +218,10 @@ Before installation completes, the checked-out manifest must match the name,
 version, and dependencies found by the branch probe. If the probe verified a
 Unity meta GUID, the checked-out meta file must match it too. A mismatch stops
 the operation; the manager rolls back only state it can tie to that operation.
+
+Filesystem metadata reads check the opened file handle before reading bounded
+contents. Links, pipes, devices, and files that change identity during inspection
+are rejected.
 
 ## Convert Package Source
 
@@ -285,10 +298,17 @@ recovery.
 
 Modified, untracked, ignored, conflicted, staged, unpushed, local-only, or
 otherwise ambiguous work is never silently discarded. Review every warning and
-the parent repository's staged result before committing. Git metadata is kept
-when possible so the submodule can be inspected or safely added again. The
-[architecture and safety model](architecture.md) describes the index and
-recovery checks in detail.
+the parent repository's staged result before committing. Removal and conversion
+consent binds the inspected staged, modified, untracked, and ignored file
+contents; changed contents require a new review. Inspection is limited to 4096
+paths, 16 MiB per file, and 64 MiB total. Linked or special files, nested
+repositories, and work beyond those limits block automatic removal or
+conversion. Inspect the reported paths and move the affected work to safety
+before retrying, or manage it manually with Git.
+
+Git metadata is kept when possible so the submodule can be inspected or safely
+added again. The [architecture and safety model](architecture.md) describes the
+index and recovery checks in detail.
 
 ## Private Repositories
 

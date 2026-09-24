@@ -1023,6 +1023,59 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                 Is.True);
         }
 
+        [TestCase("tracked")]
+        [TestCase("untracked")]
+        [TestCase("ignored-directory")]
+        public void SubmoduleToReadOnly_ChangedDirtyBytesLeaveManifestAndWorktreeUntouched(string kind)
+        {
+            PackageManagerSubmoduleInfo info = CreateInstalledSubmodule();
+            string packageRoot = Path.Combine(projectRoot, PackagePath);
+            string relativePath = kind == "tracked"
+                ? "package.json"
+                : kind == "ignored-directory" ? "local-cache/notes.txt" : "notes.txt";
+            if (kind == "ignored-directory")
+            {
+                Assert.That(
+                    GitUtility.TryResolveSubmoduleGitDir(PackagePath, out string gitDir, out string resolveError),
+                    Is.True,
+                    resolveError);
+                Directory.CreateDirectory(Path.Combine(gitDir, "info"));
+                File.AppendAllText(Path.Combine(gitDir, "info", "exclude"), "\nlocal-cache/\n");
+            }
+            string filePath = Path.Combine(packageRoot, relativePath);
+            Directory.CreateDirectory(Path.GetDirectoryName(filePath));
+            File.AppendAllText(filePath, "\n ");
+            Assert.That(
+                GitUtility.TryAssessSubmoduleRemoval(
+                    PackagePath, out SubmoduleRemovalAssessment confirmed, out string assessmentError),
+                Is.True,
+                assessmentError);
+            DateTime writeTime = File.GetLastWriteTimeUtc(filePath);
+            byte[] laterBytes = File.ReadAllBytes(filePath);
+            laterBytes[laterBytes.Length - 1] = 9;
+            File.WriteAllBytes(filePath, laterBytes);
+            File.SetLastWriteTimeUtc(filePath, writeTime);
+            Assert.That(
+                GitUtility.TryAssessSubmoduleRemoval(
+                    PackagePath, out SubmoduleRemovalAssessment current, out assessmentError),
+                Is.True,
+                assessmentError);
+            Assert.That(current.WorktreeStatus, Is.EqualTo(confirmed.WorktreeStatus));
+            byte[] manifestBefore = File.ReadAllBytes(Path.Combine(projectRoot, "Packages", "manifest.json"));
+            var state = new GitPackageConversionTaskState();
+
+            CommandResult result = GitPackageConversionService.RunToReadOnlyTask(
+                info, confirmed.CreateSnapshot(), true, state, CancellationToken.None);
+
+            Assert.That(result.IsSuccess, Is.False);
+            Assert.That(state.Message, Does.Contain("changed after the conversion warning"));
+            Assert.That(state.ConvertedSuccessfully, Is.False);
+            Assert.That(File.ReadAllBytes(filePath), Is.EqualTo(laterBytes));
+            Assert.That(
+                File.ReadAllBytes(Path.Combine(projectRoot, "Packages", "manifest.json")),
+                Is.EqualTo(manifestBefore));
+        }
+
         [Test]
         public void SubmoduleToReadOnly_RemovalRaceRollsBackTemporaryManifestDependency()
         {

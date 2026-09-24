@@ -112,6 +112,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         internal string GitModulesTargetStatus = string.Empty;
         internal string ParentStatus = string.Empty;
         internal string WorktreeStatus = string.Empty;
+        internal string WorktreeContentsFingerprint = string.Empty;
 
         internal bool IsSafe =>
             !HasWorkingTreeChanges &&
@@ -140,7 +141,8 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 GitModulesTargetFingerprint = GitModulesTargetFingerprint,
                 GitModulesTargetStatus = GitModulesTargetStatus,
                 ParentStatus = ParentStatus,
-                WorktreeStatus = WorktreeStatus
+                WorktreeStatus = WorktreeStatus,
+                WorktreeContentsFingerprint = WorktreeContentsFingerprint
             };
         }
 
@@ -587,6 +589,37 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             return string.IsNullOrEmpty(uri.UserInfo) || uri.UserInfo.IndexOf(':') < 0;
         }
 
+        internal static bool TryCanonicalizeNewInstallRepositoryUrl(
+            string url,
+            out string canonicalUrl,
+            out string error)
+        {
+            canonicalUrl = string.Empty;
+            error = string.Empty;
+            if (!IsValidRepositoryUrl(url))
+            {
+                error =
+                    "Repository URL is invalid or uses an unsupported transport. Use HTTPS, SSH, or an explicit local path without embedded credentials; plaintext HTTP and Git transports are blocked.";
+                return false;
+            }
+
+            string value = url.Trim();
+            if (IsRelativeLocalRepositoryUrl(value))
+            {
+                // New install input is relative to the Unity project. Existing
+                // .gitmodules URLs keep Git's parent-origin-relative semantics.
+                if (!TryGetCanonicalLocalRepositoryPath(value, out value) ||
+                    !IsValidRepositoryUrl(value))
+                {
+                    error = "The local repository path could not be resolved safely against the Unity project root.";
+                    return false;
+                }
+            }
+
+            canonicalUrl = value;
+            return true;
+        }
+
         internal static bool TryGetRepositoryWebUrl(string repositoryUrl, out string webUrl)
         {
             webUrl = string.Empty;
@@ -672,7 +705,12 @@ namespace MartinCalander.GitSubmoduleManager.Editor
 
             try
             {
-                string content = File.ReadAllText(packageJsonPath);
+                if (!BoundedRegularFile.TryRead(
+                        packageJsonPath, MaxPackageJsonBytes,
+                        out byte[] bytes, out _))
+                    return false;
+                int offset = HasUtf8Bom(bytes) ? 3 : 0;
+                string content = StrictUtf8Encoding.GetString(bytes, offset, bytes.Length - offset);
                 return TryReadPackageNameFromJson(content, out packageName);
             }
             catch
@@ -775,25 +813,11 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                     return false;
                 }
 
-                var bytes = new byte[MaxPackageJsonBytes + 1];
-                int byteCount = 0;
-                using (var stream = new FileStream(
-                           packageJsonPath,
-                           FileMode.Open,
-                           FileAccess.Read,
-                           FileShare.Read))
-                {
-                    int read;
-                    while (byteCount < bytes.Length &&
-                           (read = stream.Read(
-                               bytes,
-                               byteCount,
-                               bytes.Length - byteCount)) > 0)
-                    {
-                        cancellationToken.ThrowIfCancellationRequested();
-                        byteCount += read;
-                    }
-                }
+                if (!BoundedRegularFile.TryRead(
+                        packageJsonPath, MaxPackageJsonBytes,
+                        out byte[] bytes, out error, cancellationToken))
+                    return false;
+                int byteCount = bytes.Length;
 
                 if (byteCount > MaxPackageJsonBytes)
                 {
@@ -895,25 +919,11 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                     return false;
                 }
 
-                var bytes = new byte[MaxPackageManifestMetaLength + 1];
-                int byteCount = 0;
-                using (var stream = new FileStream(
-                           packageManifestMetaPath,
-                           FileMode.Open,
-                           FileAccess.Read,
-                           FileShare.Read))
-                {
-                    int read;
-                    while (byteCount < bytes.Length &&
-                           (read = stream.Read(
-                               bytes,
-                               byteCount,
-                               bytes.Length - byteCount)) > 0)
-                    {
-                        cancellationToken.ThrowIfCancellationRequested();
-                        byteCount += read;
-                    }
-                }
+                if (!BoundedRegularFile.TryRead(
+                        packageManifestMetaPath, MaxPackageManifestMetaLength,
+                        out byte[] bytes, out error, cancellationToken))
+                    return false;
+                int byteCount = bytes.Length;
 
                 if (byteCount > MaxPackageManifestMetaLength)
                 {
@@ -2097,6 +2107,8 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             CancellationToken cancellationToken = default(CancellationToken))
         {
             cancellationToken.ThrowIfCancellationRequested();
+            if (!TryCanonicalizeNewInstallRepositoryUrl(url, out url, out error))
+                return false;
             if (!TryPrepareAddSubmodule(
                     url,
                     path,
@@ -2187,6 +2199,8 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         {
             plan = null;
             cancellationToken.ThrowIfCancellationRequested();
+            if (!TryCanonicalizeNewInstallRepositoryUrl(url, out url, out error))
+                return false;
             if (!TryValidateExistingRepositoryUrl(url, "The repository URL selected for this add operation", out error))
                 return false;
 
@@ -2438,12 +2452,11 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         {
             arguments = string.Empty;
             error = string.Empty;
-            if (!IsValidRepositoryUrl(url))
-            {
-                error =
-                    "Repository URL is invalid or uses an unsupported transport. Use HTTPS, SSH, or an explicit local path without embedded credentials; plaintext HTTP and Git transports are blocked.";
+            if (!TryCanonicalizeNewInstallRepositoryUrl(
+                    url,
+                    out string canonicalUrl,
+                    out error))
                 return false;
-            }
 
             if (!IsPackagePath(path))
             {
@@ -2457,16 +2470,15 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 return false;
             }
 
-            string trimmedUrl = url.Trim();
             string normalizedPath = NormalizePath(path);
             string trimmedBranch = branch?.Trim() ?? string.Empty;
-            string prefix = IsLocalRepositoryUrl(trimmedUrl)
+            string prefix = IsLocalRepositoryUrl(canonicalUrl)
                 ? "-c protocol.file.allow=always "
                 : string.Empty;
             string force = reuseExistingMetadata ? " --force" : string.Empty;
             arguments = string.IsNullOrWhiteSpace(trimmedBranch)
-                ? $"{prefix}submodule add{force} {Quote(trimmedUrl)} {Quote(normalizedPath)}"
-                : $"{prefix}submodule add{force} -b {Quote(trimmedBranch)} {Quote(trimmedUrl)} {Quote(normalizedPath)}";
+                ? $"{prefix}submodule add{force} {Quote(canonicalUrl)} {Quote(normalizedPath)}"
+                : $"{prefix}submodule add{force} -b {Quote(trimmedBranch)} {Quote(canonicalUrl)} {Quote(normalizedPath)}";
 
             return true;
         }
@@ -2624,6 +2636,14 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             assessment.HasWorkingTreeChanges = !string.IsNullOrWhiteSpace(status);
             assessment.HasConflicts = status.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries)
                 .Any(line => line.StartsWith("u ", StringComparison.Ordinal));
+
+            if (assessment.HasWorkingTreeChanges &&
+                !TryCaptureRemovalWorktreeFingerprint(
+                    normalizedPath,
+                    out assessment.WorktreeContentsFingerprint,
+                    out error,
+                    cancellationToken))
+                return false;
 
             var localCommitsResult = RunGit(
                 $"-C {Quote(normalizedPath)} rev-list --count HEAD --not --remotes",
@@ -3581,7 +3601,179 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                        current.GitModulesTargetStatus,
                        StringComparison.Ordinal) &&
                    string.Equals(expected.ParentStatus, current.ParentStatus, StringComparison.Ordinal) &&
-                   string.Equals(expected.WorktreeStatus, current.WorktreeStatus, StringComparison.Ordinal);
+                   string.Equals(expected.WorktreeStatus, current.WorktreeStatus, StringComparison.Ordinal) &&
+                   string.Equals(
+                       expected.WorktreeContentsFingerprint,
+                       current.WorktreeContentsFingerprint,
+                       StringComparison.Ordinal);
+        }
+
+        private const int RemovalFingerprintMaximumPaths = 4096;
+        private const int RemovalFingerprintMaximumFileBytes = 16 * 1024 * 1024;
+        private const int RemovalFingerprintMaximumTotalBytes = 64 * 1024 * 1024;
+
+        private static bool TryCaptureRemovalWorktreeFingerprint(
+            string normalizedPath,
+            out string fingerprint,
+            out string error,
+            CancellationToken cancellationToken)
+        {
+            fingerprint = string.Empty;
+            error = string.Empty;
+            if (!TryReadRemovalWorktreePaths(
+                    normalizedPath, out string[] paths, out error, cancellationToken))
+                return false;
+
+            try
+            {
+                string packageRoot = Path.GetFullPath(Path.Combine(ProjectRoot, normalizedPath));
+                int totalBytes = 0;
+                using (var evidence = new MemoryStream())
+                using (var writer = new BinaryWriter(evidence, Encoding.UTF8, true))
+                using (var hash = SHA256.Create())
+                {
+                    foreach (string relativePath in paths)
+                    {
+                        cancellationToken.ThrowIfCancellationRequested();
+                        string fullPath = Path.GetFullPath(Path.Combine(packageRoot, relativePath));
+                        if (HasReparsePointBetween(packageRoot, fullPath))
+                        {
+                            error = $"Cannot record discard consent for '{relativePath}' through a symbolic link or junction. Move this work to safety before retrying.";
+                            return false;
+                        }
+
+                        writer.Write(relativePath);
+                        bool exists = File.Exists(fullPath) || Directory.Exists(fullPath);
+                        if (!exists && !TryInspectFileSystemEntryPresence(
+                                fullPath, out exists, out error, cancellationToken))
+                            return false;
+                        writer.Write(exists);
+                        if (!exists)
+                            continue;
+
+                        int remainingBytes = RemovalFingerprintMaximumTotalBytes - totalBytes;
+                        if (!BoundedRegularFile.TryRead(
+                                fullPath,
+                                Math.Min(RemovalFingerprintMaximumFileBytes, remainingBytes),
+                                out byte[] bytes,
+                                out string readError,
+                                cancellationToken))
+                        {
+                            error = $"Cannot record discard consent for '{relativePath}': {readError} Move this work to safety before retrying. Inspection is limited to 16 MiB per file and 64 MiB total.";
+                            return false;
+                        }
+                        if (HasReparsePointBetween(packageRoot, fullPath))
+                        {
+                            error = $"The path to '{relativePath}' changed during discard-consent inspection. Review the package and retry.";
+                            return false;
+                        }
+
+                        totalBytes += bytes.Length;
+                        writer.Write(bytes.Length);
+                        writer.Write(hash.ComputeHash(bytes));
+                    }
+
+                    // Porcelain binds staged changes to index object IDs, but its
+                    // dirty markers do not bind existing worktree files to bytes.
+                    // Recheck the path set too: ignored directory contents may
+                    // change without changing the directory's porcelain record.
+                    if (!TryReadRemovalWorktreePaths(
+                            normalizedPath, out string[] closingPaths, out error, cancellationToken))
+                        return false;
+                    if (!paths.SequenceEqual(closingPaths, StringComparer.Ordinal))
+                    {
+                        error = "Package files changed during discard-consent inspection. Review the package and retry.";
+                        return false;
+                    }
+
+                    writer.Flush();
+                    fingerprint = Convert.ToBase64String(hash.ComputeHash(evidence.ToArray()));
+                    return true;
+                }
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                error = $"Failed to record package contents for discard consent: {ex.Message}";
+                return false;
+            }
+        }
+
+        private static bool TryReadRemovalWorktreePaths(
+            string normalizedPath,
+            out string[] paths,
+            out string error,
+            CancellationToken cancellationToken)
+        {
+            paths = Array.Empty<string>();
+            error = string.Empty;
+            var uniquePaths = new SortedSet<string>(StringComparer.Ordinal);
+            // No ignore exclusions: --others includes ignored files and expands
+            // their directories. Include staged paths separately so their current
+            // bytes are verified even when Git trusts an unchanged stat cache.
+            string[][] commands =
+            {
+                new[]
+                {
+                    "-C", normalizedPath, "ls-files", "--modified", "--deleted", "--others", "-z", "--"
+                },
+                new[]
+                {
+                    "-C", normalizedPath, "diff", "--cached", "--name-only", "--no-renames", "-z", "--"
+                }
+            };
+            foreach (string[] arguments in commands)
+            {
+                CommandResult result = CliCommandRunner.CurrentRunner.Run(new CommandSpec
+                {
+                    FileName = GitExecutable,
+                    ArgumentList = arguments,
+                    WorkingDirectory = ProjectRoot,
+                    TimeoutMs = CliCommandRunner.DefaultTimeoutMs,
+                    CancellationToken = cancellationToken,
+                    RequireStrictUtf8StdOut = true
+                });
+                TrackCommandTermination(result);
+                if (result == null || !result.IsSuccess || !result.TerminationConfirmed ||
+                    result.Cancelled || result.TimedOut || result.StdOutTruncated || result.StdOutInvalidUtf8)
+                {
+                    error = "The package's dirty file paths could not be inspected completely for discard consent. Review the package and retry.";
+                    return false;
+                }
+
+                string output = result.StdOut ?? string.Empty;
+                if (output.Length == 0)
+                    continue;
+                if (output[output.Length - 1] != '\0')
+                {
+                    error = "Git returned incomplete dirty file paths. Discard consent could not be recorded safely.";
+                    return false;
+                }
+
+                string[] entries = output.Substring(0, output.Length - 1).Split('\0');
+                foreach (string entry in entries)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    if (entry.Length == 0 || Path.IsPathRooted(entry) ||
+                        (Path.DirectorySeparatorChar == '\\' && entry.IndexOf('\\') >= 0) ||
+                        entry.Split('/').Any(segment => segment.Length == 0 || segment == "." || segment == ".."))
+                    {
+                        error = "Git returned a directory or unsafe dirty file path. Move nested repositories or unverified work to safety before retrying.";
+                        return false;
+                    }
+                    uniquePaths.Add(entry);
+                    if (uniquePaths.Count > RemovalFingerprintMaximumPaths)
+                    {
+                        error = "The package exceeds the 4096 dirty-file safety limit for discard consent. Move this work to safety before retrying.";
+                        return false;
+                    }
+                }
+            }
+            paths = uniquePaths.ToArray();
+            return true;
         }
 
         internal static bool TryCleanupFailedAdd(
@@ -5827,7 +6019,13 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                     return false;
                 }
 
-                string marker = File.ReadAllText(markerPath);
+                if (!BoundedRegularFile.TryRead(
+                        markerPath, 4096, out byte[] markerBytes, out error,
+                        cancellationToken))
+                    return false;
+                int markerOffset = HasUtf8Bom(markerBytes) ? 3 : 0;
+                string marker = StrictUtf8Encoding.GetString(
+                    markerBytes, markerOffset, markerBytes.Length - markerOffset);
                 FileAttributes attributesAfterRead = File.GetAttributes(markerPath);
                 if ((attributesAfterRead & (FileAttributes.Directory | FileAttributes.ReparsePoint)) != 0)
                 {
@@ -8013,7 +8211,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
 
             if (!TryVerifyGitProducedGitModulesState(
                     plan,
-                    out FileStream lockedWorktreeStream,
+                    out BoundedRegularFile.OpenedFile lockedWorktreeStream,
                     out error,
                     cancellationToken))
                 return false;
@@ -8078,7 +8276,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
 
                 if (lockedWorktreeStream != null)
                 {
-                    WriteBytesToLockedStream(lockedWorktreeStream, plan.ExpectedContents);
+                    lockedWorktreeStream.Write(plan.ExpectedContents ?? Array.Empty<byte>());
                     lockedWorktreeStream.Dispose();
                     lockedWorktreeStream = null;
                 }
@@ -8873,11 +9071,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 recoveryPath = destination;
 
                 byte[] movedContents;
-                using (var movedStream = new FileStream(
-                           destination,
-                           FileMode.Open,
-                           FileAccess.Read,
-                           FileShare.None))
+                using (var movedStream = BoundedRegularFile.Open(destination))
                 {
                     if (!TryReadLockedStreamBytes(movedStream, out movedContents, out error))
                     {
@@ -9055,7 +9249,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
 
         private static bool TryVerifyGitProducedGitModulesState(
             RemoveSubmoduleGitModulesPlan plan,
-            out FileStream lockedWorktreeStream,
+            out BoundedRegularFile.OpenedFile lockedWorktreeStream,
             out string error,
             CancellationToken cancellationToken)
         {
@@ -9092,7 +9286,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
 
         private static bool TryOpenVerifiedGitProducedGitModulesWorktree(
             RemoveSubmoduleGitModulesPlan plan,
-            out FileStream lockedWorktreeStream,
+            out BoundedRegularFile.OpenedFile lockedWorktreeStream,
             out string error,
             CancellationToken cancellationToken)
         {
@@ -9123,11 +9317,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                         return false;
                     }
 
-                    var stream = new FileStream(
-                        gitModulesPath,
-                        FileMode.Open,
-                        FileAccess.ReadWrite,
-                        FileShare.None);
+                    var stream = BoundedRegularFile.Open(gitModulesPath, writable: true);
                     if (!TryReadLockedStreamBytes(stream, out byte[] currentContents, out error))
                     {
                         stream.Dispose();
@@ -9161,37 +9351,22 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         }
 
         private static bool TryReadLockedStreamBytes(
-            FileStream stream,
+            BoundedRegularFile.OpenedFile stream,
             out byte[] contents,
             out string error)
         {
             contents = Array.Empty<byte>();
             error = string.Empty;
-            if (stream.Length > MaxGitModulesBytes)
+            try
             {
-                error =
-                    $".gitmodules exceeds the {MaxGitModulesBytes / 1024} KiB safety limit.";
+                contents = stream.Read(MaxGitModulesBytes, CancellationToken.None);
+                return true;
+            }
+            catch (Exception exception)
+            {
+                error = ".gitmodules could not be read safely: " + exception.Message;
                 return false;
             }
-
-            contents = new byte[(int)stream.Length];
-            stream.Position = 0;
-            int offset = 0;
-            while (offset < contents.Length)
-            {
-                int read = stream.Read(contents, offset, contents.Length - offset);
-                if (read <= 0)
-                {
-                    error = ".gitmodules changed length while it was being verified.";
-                    contents = Array.Empty<byte>();
-                    return false;
-                }
-
-                offset += read;
-            }
-
-            stream.Position = 0;
-            return true;
         }
 
         private static bool TryReadBoundedGitModulesBytes(
@@ -9223,26 +9398,11 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                     return false;
                 }
 
-                var buffer = new byte[MaxGitModulesBytes + 1];
-                int count = 0;
-                using (var stream = new FileStream(
-                           path,
-                           FileMode.Open,
-                           FileAccess.Read,
-                           FileShare.Read))
-                {
-                    while (count < buffer.Length)
-                    {
-                        cancellationToken.ThrowIfCancellationRequested();
-                        int read = stream.Read(
-                            buffer,
-                            count,
-                            buffer.Length - count);
-                        if (read <= 0)
-                            break;
-                        count += read;
-                    }
-                }
+                if (!BoundedRegularFile.TryRead(
+                        path, MaxGitModulesBytes, out byte[] buffer,
+                        out error, cancellationToken))
+                    return false;
+                int count = buffer.Length;
 
                 if (count > MaxGitModulesBytes)
                 {

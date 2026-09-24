@@ -726,14 +726,8 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             }
 
             requirement.RequestedBy.Add(requestedBy?.Trim() ?? string.Empty);
-            if (!string.Equals(
-                    requirement.Version,
-                    requiredVersion,
-                    StringComparison.Ordinal))
-            {
-                requirement.SetVersionConflict(requiredVersion);
+            if (!requirement.TryAddRequestedVersion(requiredVersion))
                 return true;
-            }
 
             if (matches.Count == 1 &&
                 matches[0].HasCompleteIdentity &&
@@ -815,11 +809,8 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             }
 
             existing.RequestedBy.Add(requestedBy?.Trim() ?? string.Empty);
-            if (!string.Equals(existing.Version, version, StringComparison.Ordinal))
-            {
-                existing.SetVersionConflict(version);
+            if (!existing.TryAddRequestedVersion(version))
                 return;
-            }
 
             if (string.Equals(name, rootPackageName, StringComparison.Ordinal))
             {
@@ -1397,15 +1388,19 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 IsSatisfiedByRegisteredPackage = true;
             }
 
-            internal void SetVersionConflict(string conflictingVersion)
+            internal bool TryAddRequestedVersion(string version)
             {
-                requestedVersions.Add(conflictingVersion ?? string.Empty);
+                requestedVersions.Add(version ?? string.Empty);
+                if (requestedVersions.Count == 1)
+                    return true;
+
                 Version = requestedVersions.First();
                 SetTerminal(
                     PackageDependencyResolutionStatus.Unresolved,
                     Array.Empty<PackageDependencyCandidate>(),
                     $"{Name} is requested with conflicting versions " +
                     string.Join(", ", requestedVersions) + ".");
+                return false;
             }
 
             internal void SetTerminal(

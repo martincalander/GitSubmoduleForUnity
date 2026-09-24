@@ -59,9 +59,9 @@ small independent setup/status surface and does not manage packages itself.
 
 ## Package Manager Integration
 
-On a validated Editor target—exact Unity `6000.3.22f1` or a Unity
-`6000.5.*f1` final release—the host registers a native **GitHub** page through
-Unity's internal `ExtensionPage` contract and places its row under
+On exact Unity `6000.3.22f1`, a Unity `6000.5.*f1` final release, or exact
+Unity `6000.6.0f1` or `6000.6.2f1`, plus the exact `6000.7.0b1` beta, the host registers a native **GitHub** page through Unity's
+internal `ExtensionPage` contract and places its row under
 **Sources**. Users reach it through **Window > Package Management > Package
 Manager > Sources > GitHub**, or through the explicit buttons in Welcome and
 Preferences.
@@ -103,8 +103,15 @@ submodule or a normal read-only UPM Git dependency.
 The package extends Package Manager's native **+** menu with **Install package
 as Git Submodule...**. Its Git-only probe reads the repository's default branch,
 remote branches, root package identity, and sibling meta marker before enabling
-the corresponding fields. Both files come from the same temporary clone commit.
-The probe first parses exact NUL-delimited Git tree records, accepts only
+the corresponding fields. Selection prefers `main` when available, then the
+remote default. The popup debounces changed repository or branch input; repeated
+ticks for the same pending request preserve its deadline. Explicit new `./` and
+`../` repository inputs are canonicalized against the Unity project root before
+the probe, consent identity, dependency plan, and mutation. Existing relative
+URLs in `.gitmodules` retain Git's submodule URL semantics.
+
+The root manifest and its meta marker come from the same temporary clone
+commit. The probe first parses exact NUL-delimited Git tree records, accepts only
 `100644` or `100755` blob entries, and reads each file by its validated object
 ID. A valid regular manifest with missing, invalid, or symbolic-link meta remains
 eligible only in this explicit URL workflow and adds a mandatory warning to
@@ -182,14 +189,21 @@ validated independently. Installed package submodules are labelled
 page, repository visibility is shown as **Public** or **Private**. The Source
 card reports **GitHub** with the themed Git icon, or **Git** for another host.
 
-The validated Package Manager contract targets are exact Unity `6000.3.22f1`
-and Unity `6000.5.*f1` final releases; Unity `6000.4` is not a supported
-contract target. `package.json` declares `6000.3.22f1` only as UPM's minimum
+The validated Package Manager contract targets are exact Unity `6000.3.22f1`,
+Unity `6000.5.*f1` final releases, and exact Unity `6000.6.0f1` and `6000.6.2f1`, plus the exact `6000.7.0b1` beta.
+Unity `6000.4` and other `6000.6` versions are not supported contract targets. `package.json`
+declares `6000.3.22f1` only as UPM's minimum
 eligibility version because the manifest cannot encode this non-contiguous
 matrix. If a required internal contract cannot be verified, that extension
 feature is not installed. The package does not replace, hide, or broadly clear
 Unity's package database or standard Package Manager UI, and no legacy manager
 fallback is injected.
+
+Welcome and Preferences explain an unsupported Editor and disable their Package
+Manager navigation action. Supported navigation reports activation failure or
+timeout, coalesces pending requests without extending their deadline, and
+ignores stale callbacks after disposal. Welcome closes only when the GitHub
+page has been activated successfully.
 
 ## Native Filters and Defaults
 
@@ -211,8 +225,9 @@ disabled.
 
 ## Dependency Planning
 
-Before a root install mutates the project, dependency preflight considers only
-manifest dependencies that are not already registered directly or transitively.
+Before a root install mutates the project, dependency preflight checks manifest
+requirements against packages registered directly or transitively and plans
+installation for missing dependencies.
 The resolver combines immutable installed-package state, Unity/default and
 configured-registry search results, and the current GitHub catalogue.
 
@@ -226,6 +241,11 @@ catalogue coverage proves that no GitHub package exists. A discovery error,
 coverage warning, unavailable manifest, incomplete owner scan, duplicate GitHub
 match, or mismatched GitHub version or install identity is blocking; registry
 fallback is deliberately skipped in those cases.
+
+Every requested version is retained for each dependency, including requirements
+already satisfied by an installed package. Incompatible requirements remain
+blocking regardless of traversal order; a later matching installed version
+cannot reset an earlier conflict.
 
 Each custom-package registry fallback is bound to the exact successful terminal
 catalogue revision that proved absence. If discovery revision or coverage
@@ -291,6 +311,13 @@ non-linked file whose size, encoding, bytes, and identity have been checked for
 that operation. When Git is authoritative, the snapshot also records the
 relevant stage-0 blob or gitlink instead of relying on a mutable worktree read.
 
+`BoundedRegularFile` checks the type and identity of the opened handle before
+bounded reads of filesystem metadata and consent evidence. Native opens reject
+final-component links and prevent waiting for a FIFO writer; non-regular files
+are rejected before reading. Snapshot reads recheck handle metadata and reopen
+the path to detect replacement. Callers still validate ancestor directories and
+mutation ownership; this does not impose a timeout on a slow regular filesystem.
+
 Submodule preflight records the root manifest, destination, repository, branch,
 revision, and Git registration it expects to create. After Git finishes, the
 worker requires the checkout `HEAD` to match the commit whose root metadata was
@@ -350,6 +377,15 @@ remain recoverable whether it changed the file in place or replaced it.
 The confirmation preference can suppress only clean routine removal or
 conversion prompts. Dirty, unpushed, changed, or unverified-state decisions are
 never silently approved.
+
+Discard consent also binds a SHA-256 fingerprint of the modified, staged,
+untracked, and ignored paths and their current bytes, together with the existing
+Git status and index evidence. Deleted paths are recorded as absent. The path
+set is enumerated again after reading, and the complete evidence is reassessed
+before mutation. Limits are 4096 paths, 16 MiB per file, and 64 MiB total. Links,
+special files, nested repository directories, or exceeded limits stop the
+operation with a diagnostic to review and move the affected work to safety.
+They cannot be approved by skipping routine confirmation.
 
 Cached local tracking refs are not proof that a commit was published. Before
 removing a clean initialized worktree, bounded Git protocol queries must find
@@ -550,9 +586,10 @@ completion, conversion eligibility, confirmation policy, and mutation rollback
 outcomes.
 
 The `PackageManagerCompatibility` category inventories the reflected Package
-Manager types and exact signatures used by the validated Unity `6000.3.22f1`
-and Unity `6000.5.*f1` contracts, then verifies Harmony ownership for resolved
-hooks. It reports contract drift with the Unity version and platform. Runs on
+Manager types and exact signatures used by the validated Unity `6000.3.22f1`,
+Unity `6000.5.*f1`, and exact Unity `6000.6.0f1` and `6000.6.2f1`, plus the exact `6000.7.0b1` beta contracts, then verifies Harmony
+ownership for resolved hooks. It reports contract drift with the Unity version
+and platform. Runs on
 any other Editor version, including Unity `6000.4`, are migration diagnostics
 and do not constitute a support claim.
 

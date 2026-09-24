@@ -943,6 +943,64 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
             Assert.That(GitUtility.IsValidRepositoryUrl(url), Is.EqualTo(expected));
         }
 
+        [TestCase("https://github.com/owner/repo.git")]
+        [TestCase("ssh://git@example.com/team/repo.git")]
+        [TestCase("git@example.com:team/repo.git")]
+        [TestCase("file:///tmp/local-package")]
+        public void NewInstallRepositoryUrl_PreservesApprovedRemoteAndFileUrls(string url)
+        {
+            Assert.That(GitUtility.TryCanonicalizeNewInstallRepositoryUrl(
+                " " + url + " ", out string canonicalUrl, out string error), Is.True, error);
+            Assert.That(canonicalUrl, Is.EqualTo(url));
+        }
+
+        [TestCase("http://example.com/repo.git")]
+        [TestCase("git://example.com/repo.git")]
+        [TestCase("https://user:secret@example.com/repo.git")]
+        [TestCase("ssh://git:secret@example.com/repo.git")]
+        [TestCase("https://example.com/repo.git?token=secret")]
+        [TestCase("ext::sh -c malicious")]
+        [TestCase("../repo\n--config=bad")]
+        public void NewInstallRepositoryUrl_DoesNotNormalizeUnsafeInputIntoAnAcceptedUrl(string url)
+        {
+            Assert.That(GitUtility.TryCanonicalizeNewInstallRepositoryUrl(
+                url, out string canonicalUrl, out string error), Is.False);
+            Assert.That(canonicalUrl, Is.Empty);
+            Assert.That(error, Is.Not.Empty);
+            Assert.That(error, Does.Not.Contain("secret"));
+        }
+
+        [TestCase("./local package")]
+        [TestCase("../local package")]
+        public void TryBuildAddSubmoduleArguments_RelativeLocalInputUsesProjectRoot(string relativeUrl)
+        {
+            string project = Path.Combine(Path.GetTempPath(), "relative-install-project");
+            using (GitUtility.OverrideProjectRootForTests(project))
+            {
+                string expected = Path.GetFullPath(Path.Combine(project, relativeUrl));
+                Assert.That(GitUtility.TryCanonicalizeNewInstallRepositoryUrl(
+                    relativeUrl, out string canonicalUrl, out string normalizationError),
+                    Is.True, normalizationError);
+                Assert.That(canonicalUrl, Is.EqualTo(expected));
+                Assert.That(GitUtility.TryCanonicalizeNewInstallRepositoryUrl(
+                    canonicalUrl, out string repeatedUrl, out normalizationError),
+                    Is.True, normalizationError);
+                Assert.That(repeatedUrl, Is.EqualTo(canonicalUrl));
+
+                Assert.That(GitUtility.TryBuildAddSubmoduleArguments(
+                    relativeUrl,
+                    "Packages/com.example.local-package",
+                    "main",
+                    out string arguments,
+                    out string error), Is.True, error);
+                Assert.That(ProcessCommandRunner.TryTokenizeArguments(
+                    arguments, out IReadOnlyList<string> tokens), Is.True);
+                Assert.That(tokens, Does.Contain(expected));
+                Assert.That(tokens, Does.Not.Contain(relativeUrl));
+                Assert.That(tokens, Does.Contain("protocol.file.allow=always"));
+            }
+        }
+
         [Test]
         public void Quote_PreservesWindowsBackslashes()
         {

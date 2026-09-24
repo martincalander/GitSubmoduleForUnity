@@ -39,7 +39,10 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             if (string.IsNullOrWhiteSpace(url))
                 return "Git URL is required.";
 
-            if (!GitUtility.IsValidRepositoryUrl(url))
+            if (!GitUtility.TryCanonicalizeNewInstallRepositoryUrl(
+                    url,
+                    out _,
+                    out _))
             {
                 return "Use a secure HTTPS, SSH, or explicit local repository URL without embedded credentials. " +
                        "Plain HTTP and git:// transports are blocked.";
@@ -83,6 +86,11 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             error = ValidateInput(url, packageName, branch);
             if (!string.IsNullOrEmpty(error))
                 return false;
+            if (!GitUtility.TryCanonicalizeNewInstallRepositoryUrl(
+                    url,
+                    out string canonicalUrl,
+                    out error))
+                return false;
             string version = expectedVersion?.Trim() ?? string.Empty;
             if (!string.IsNullOrEmpty(version) &&
                 !GitUtility.IsValidSemanticVersion(version))
@@ -120,7 +128,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             return GitOperationService.TryStartTask(
                 $"Adding {packageName}...",
                 cancellationToken => RunAddSubmoduleTask(
-                    url,
+                    canonicalUrl,
                     branch,
                     packageName,
                     version,
@@ -194,6 +202,15 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             string inspectedCommit = "")
         {
             cancellationToken.ThrowIfCancellationRequested();
+            if (!GitUtility.TryCanonicalizeNewInstallRepositoryUrl(
+                    url,
+                    out url,
+                    out string repositoryError))
+            {
+                state.Outcome = GitOperationCompletionOutcome.FailedButRolledBack;
+                state.Message = repositoryError;
+                return SafeTaskFailure(repositoryError);
+            }
             string metaGuid = expectedPackageManifestMetaGuid?.Trim() ?? string.Empty;
             if (!TryValidatePackageManifestMetaEvidence(
                     packageManifestMetaVerification,

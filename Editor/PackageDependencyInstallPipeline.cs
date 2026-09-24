@@ -189,14 +189,13 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 return false;
             }
 
-            string url = repositoryUrl?.Trim() ?? string.Empty;
             string selectedBranch = branch?.Trim() ?? string.Empty;
             string packageName = expectedPackageName?.Trim() ?? string.Empty;
-            if (!GitUtility.IsValidRepositoryUrl(url))
-            {
-                error = "A valid repository URL is required.";
+            if (!GitUtility.TryCanonicalizeNewInstallRepositoryUrl(
+                    repositoryUrl,
+                    out string url,
+                    out error))
                 return false;
-            }
 
             if (string.IsNullOrWhiteSpace(selectedBranch) ||
                 string.Equals(selectedBranch, ".", StringComparison.Ordinal) ||

@@ -144,6 +144,91 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
             Assert.That(facade.SearchCalls, Is.Empty);
         }
 
+        [TestCase(false, "1.0.0", "2.0.0", "1.0.0")]
+        [TestCase(false, "1.0.0", "1.0.0", "2.0.0")]
+        [TestCase(false, "2.0.0", "1.0.0", "1.0.0")]
+        [TestCase(false, "3.0.0", "2.0.0", "1.0.0")]
+        [TestCase(true, "1.0.0", "2.0.0", "1.0.0")]
+        [TestCase(true, "1.0.0", "1.0.0", "2.0.0")]
+        [TestCase(true, "2.0.0", "1.0.0", "1.0.0")]
+        [TestCase(true, "3.0.0", "2.0.0", "1.0.0")]
+        public void RegisteredVersionConflict_RemainsBlockingAcrossTransitiveRequestOrders(
+            bool useGitHub,
+            string firstVersion,
+            string secondVersion,
+            string thirdVersion)
+        {
+            const string root = "com.example.root";
+            const string shared = "com.example.shared";
+            string prefix = useGitHub ? "com.example." : "com.unity.";
+            string[] parents =
+            {
+                prefix + "alpha",
+                prefix + "beta",
+                prefix + "gamma"
+            };
+            string[] requestedVersions =
+            {
+                firstVersion,
+                secondVersion,
+                thirdVersion
+            };
+            var facade = new FakeFacade
+            {
+                RegisteredPackages = new[]
+                {
+                    Registered(shared, "1.0.0", "Registry")
+                },
+                Snapshot = SuccessfulSnapshot()
+            };
+            if (useGitHub)
+            {
+                facade.Snapshot = SuccessfulSnapshot(parents
+                    .Select((parent, index) => Repository(
+                        "owner",
+                        "parent-" + index,
+                        parent,
+                        "1.0.0",
+                        Dependency(shared, requestedVersions[index])))
+                    .ToArray());
+            }
+            else
+            {
+                for (int index = 0; index < parents.Length; index++)
+                {
+                    facade.Searches[parents[index]] = FakeSearch.Successful(
+                        RegistryPackage(
+                            parents[index],
+                            "1.0.0",
+                            true,
+                            "Unity",
+                            Dependency(shared, requestedVersions[index])));
+                }
+            }
+
+            using var service = new PackageDependencyResolutionService(facade);
+            Assert.That(service.TryStart(
+                root,
+                new[] { Dependency(shared, "1.0.0") }
+                    .Concat(parents.Select(parent => Dependency(parent, "1.0.0"))),
+                out string error), Is.True, error);
+
+            RunUntilComplete(service);
+
+            Assert.That(service.Current.HasBlockingIssues, Is.True,
+                "A repeated installed version must not erase an incompatible transitive requirement.");
+            Assert.That(PackageDependencyInstallPrompt.CanInstall(service.Current), Is.False);
+            Assert.That(service.Current.Results, Has.Count.EqualTo(4));
+            PackageDependencyResolutionResult result = Find(service.Current, shared);
+            Assert.That(result.Status, Is.EqualTo(PackageDependencyResolutionStatus.Unresolved));
+            Assert.That(result.Requirement.Version, Is.EqualTo("1.0.0"));
+            Assert.That(result.Requirement.RequestedBy,
+                Is.EquivalentTo(new[] { root }.Concat(parents)));
+            Assert.That(result.Message, Does.Contain("conflicting versions"));
+            foreach (string version in requestedVersions.Concat(new[] { "1.0.0" }))
+                Assert.That(result.Message, Does.Contain(version));
+        }
+
         [Test]
         public void RegisteredUnknownSourceAtExactVersion_IsAlreadySatisfied()
         {

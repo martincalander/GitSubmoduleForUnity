@@ -1740,63 +1740,8 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             out byte[] bytes,
             out string error)
         {
-            bytes = Array.Empty<byte>();
-            error = string.Empty;
-            try
-            {
-                var fileInfo = new FileInfo(fullPath);
-                if (!fileInfo.Exists || fileInfo.Length > MaximumManifestByteCount)
-                {
-                    error = !fileInfo.Exists
-                        ? "Packages/manifest.json does not exist."
-                        : "Packages/manifest.json exceeds the 2 MiB safety limit.";
-                    return false;
-                }
-
-                using (var stream = new FileStream(
-                           fullPath,
-                           FileMode.Open,
-                           FileAccess.Read,
-                           FileShare.Read))
-                {
-                    if (stream.Length > MaximumManifestByteCount)
-                    {
-                        error = "Packages/manifest.json exceeds the 2 MiB safety limit.";
-                        return false;
-                    }
-
-                    bytes = new byte[(int)stream.Length];
-                    int offset = 0;
-                    while (offset < bytes.Length)
-                    {
-                        int read = stream.Read(bytes, offset, bytes.Length - offset);
-                        if (read <= 0)
-                        {
-                            error = "Packages/manifest.json changed while it was being read.";
-                            bytes = Array.Empty<byte>();
-                            return false;
-                        }
-
-                        offset += read;
-                    }
-
-                    if (stream.ReadByte() >= 0)
-                    {
-                        error = "Packages/manifest.json changed while it was being read.";
-                        bytes = Array.Empty<byte>();
-                        return false;
-                    }
-                }
-
-                return true;
-            }
-            catch (Exception exception)
-            {
-                error = SanitizeFileError(
-                    "Packages/manifest.json could not be read safely: ",
-                    exception);
-                return false;
-            }
+            return BoundedRegularFile.TryRead(
+                fullPath, MaximumManifestByteCount, out bytes, out error);
         }
 
         private static bool IsValidGitRevision(string revision)

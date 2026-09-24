@@ -244,11 +244,13 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         internal bool Request(string url, string branch)
         {
             if (disposed ||
-                !GitUtility.IsValidRepositoryUrl(url) ||
+                !GitUtility.TryCanonicalizeNewInstallRepositoryUrl(
+                    url,
+                    out string normalizedUrl,
+                    out _) ||
                 !GitUtility.IsValidBranchName(branch))
                 return false;
 
-            string normalizedUrl = url.Trim();
             string normalizedBranch = branch?.Trim() ?? string.Empty;
             if (commandHandle != null)
             {

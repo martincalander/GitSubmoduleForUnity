@@ -22,6 +22,9 @@ namespace MartinCalander.GitSubmoduleManager.Editor
 
         internal static bool IsSupported(string unityVersion)
         {
+            if (string.Equals(unityVersion, "6000.7.0b1", StringComparison.Ordinal))
+                return true;
+
             if (string.IsNullOrEmpty(unityVersion))
                 return false;
 
@@ -50,7 +53,8 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             }
 
             return major == 6000 &&
-                   (minor == 3 && patch == 22 || minor == 5);
+                   (minor == 3 && patch == 22 || minor == 5 ||
+                    minor == 6 && (patch == 0 || patch == 2));
         }
 
         private static bool TryParseDigits(string value, out int parsed)
@@ -98,8 +102,8 @@ namespace MartinCalander.GitSubmoduleManager.Editor
     /// <summary>
     /// Bridges discovered GitHub packages and installed Git packages into
     /// Unity's internal extension-page contract. The package deliberately
-    /// targets the validated Unity 6000.3.22f1 and Unity 6000.5 Package Manager
-    /// contracts.
+    /// targets the validated Unity 6000.3.22f1, Unity 6000.5, and exact
+    /// Unity 6000.6.0f1, 6000.6.2f1, and the exact 6000.7.0b1 beta contracts.
     /// </summary>
     internal static class PackageManagerSubmoduleNativePage
     {
