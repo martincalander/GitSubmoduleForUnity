@@ -217,6 +217,10 @@ namespace MartinCalander.GitSubmoduleManager.Editor
     /// Git runs only on this verifier's worker thread. A second index/HEAD pass
     /// closes the seam between the parent gitlink and initialized worktree reads.
     /// </summary>
+#if UNITY_6000_5_OR_NEWER
+    // Strict encoding is shared configuration and has no per-play state.
+    [Unity.Scripting.LifecycleManagement.NoAutoStaticsCleanup]
+#endif
     internal sealed class PackageDependencySubmoduleCommitVerifier : IDisposable
     {
         private const int CommandTimeoutMilliseconds = 5000;
@@ -1504,6 +1508,10 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         }
     }
 
+#if UNITY_6000_5_OR_NEWER
+    // The shared executor retains ownership of its active verification work.
+    [Unity.Scripting.LifecycleManagement.NoAutoStaticsCleanup]
+#endif
     internal sealed class UnityPackageDependencyInstallExecutor :
         IPackageDependencyInstallExecutor
     {
@@ -1777,6 +1785,10 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         }
     }
 
+#if UNITY_6000_5_OR_NEWER
+    // This stateless facade keeps the same Editor session storage identity.
+    [Unity.Scripting.LifecycleManagement.NoAutoStaticsCleanup]
+#endif
     internal sealed class SessionPackageDependencyInstallStateStore :
         IPackageDependencyInstallStateStore
     {
@@ -3459,6 +3471,10 @@ namespace MartinCalander.GitSubmoduleManager.Editor
     /// publishes one retained terminal completion.
     /// </summary>
     [InitializeOnLoad]
+#if UNITY_6000_5_OR_NEWER
+    // Install recovery and completion subscriptions must retain their shared owner.
+    [Unity.Scripting.LifecycleManagement.NoAutoStaticsCleanup]
+#endif
     internal static class PackageDependencyInstallCoordinator
     {
         private static readonly PackageDependencyInstallCoordinatorCore Core;

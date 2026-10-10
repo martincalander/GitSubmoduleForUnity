@@ -5,6 +5,10 @@ using UnityEngine;
 
 namespace MartinCalander.GitSubmoduleManager.Editor
 {
+#if UNITY_6000_5_OR_NEWER
+    // The immutable idle snapshot is safe to share across Play mode sessions.
+    [Unity.Scripting.LifecycleManagement.NoAutoStaticsCleanup]
+#endif
     internal sealed class GitSubmoduleManagerSetupSnapshot
     {
         internal static readonly GitSubmoduleManagerSetupSnapshot Idle = new(
@@ -78,6 +82,10 @@ namespace MartinCalander.GitSubmoduleManager.Editor
     /// Welcome window and Preferences share one probe and receive completed
     /// snapshots through normal Editor update callbacks.
     /// </summary>
+#if UNITY_6000_5_OR_NEWER
+    // The shared setup probe and its cached result belong to the Editor session.
+    [Unity.Scripting.LifecycleManagement.NoAutoStaticsCleanup]
+#endif
     internal sealed class GitSubmoduleManagerSetupProbe : IDisposable
     {
         internal const double CacheLifetimeSeconds = 30d;

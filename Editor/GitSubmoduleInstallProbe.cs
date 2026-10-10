@@ -157,6 +157,10 @@ namespace MartinCalander.GitSubmoduleManager.Editor
     /// install form. The caller owns polling through <see cref="Tick"/> so no UI
     /// framework or synchronization context is required.
     /// </summary>
+#if UNITY_6000_5_OR_NEWER
+    // Reader reservations must remain paired with their live Editor probes.
+    [Unity.Scripting.LifecycleManagement.NoAutoStaticsCleanup]
+#endif
     internal sealed class GitSubmoduleInstallProbe : IDisposable
     {
         internal const int RemoteRefsTimeoutMs = 15000;

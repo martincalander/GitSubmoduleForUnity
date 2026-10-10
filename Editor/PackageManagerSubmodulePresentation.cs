@@ -42,6 +42,10 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         internal string SourceTooltip => GitUtility.FormatRepositoryUrlForDisplay(RepositoryUrl);
     }
 
+#if UNITY_6000_5_OR_NEWER
+    // Path comparison and the immutable empty snapshot have no per-play state.
+    [Unity.Scripting.LifecycleManagement.NoAutoStaticsCleanup]
+#endif
     internal sealed class PackageManagerSubmoduleSnapshotData
     {
         private static readonly StringComparer PathComparer =

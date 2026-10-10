@@ -135,6 +135,13 @@ the `PackageManagerCompatibility` category. After it passes, run the complete
 `MartinCalander.GitSubmoduleManager.Editor.Tests` assembly because behavior and
 state-transition coverage intentionally lives outside the compatibility subset.
 
+The `PlayModeLifecycle` EditMode category runs two Play mode entry/exit cycles
+with domain reload disabled and scene reload enabled. It checks persistent
+Editor services and Package Manager removal guards, observes lifecycle callbacks,
+and restores the prior play mode settings. Run this category after changing
+static-state ownership or lifecycle callbacks, then run the full test assembly
+once the focused checks pass. Finish active package operations before running it.
+
 CI runs license-free structure, Markdown, archive, and portability checks on
 every pull request and push to `main`. Hosted workflows do not launch the Unity
 Editor or run EditMode tests; contributors and maintainers run the applicable

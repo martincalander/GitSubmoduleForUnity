@@ -22,6 +22,10 @@ namespace MartinCalander.GitSubmoduleManager.Editor
     [FilePath(
         SettingsFilePath,
         FilePathAttribute.Location.ProjectFolder)]
+#if UNITY_6000_5_OR_NEWER
+    // Settings migration runs once per Editor session.
+    [Unity.Scripting.LifecycleManagement.NoAutoStaticsCleanup]
+#endif
     internal sealed class GitSubmoduleManagerUserSettings : ScriptableSingleton<GitSubmoduleManagerUserSettings>
     {
         internal const string SettingsFilePath =

@@ -480,6 +480,29 @@ rather than repaired or renewed. Branch listing remains lazy.
 
 ## Threading and Reload Handoff
 
+### Play Mode Without Domain Reload
+
+Play mode transitions and code unload are different lifetimes. The package has
+no gameplay static state. Its Editor services, discovery retention deadlines,
+event subscriptions, Harmony ownership, and mutation recovery evidence remain
+live across Play mode when domain reload is disabled. They must not be cleared
+by per-play static cleanup or a Play mode exit callback. An actual code reload
+or Editor shutdown still performs the existing bounded teardown and recovery.
+Audited Editor-session state owners use Unity's `NoAutoStaticsCleanup` attribute
+where that API is available. This keeps resource handles and their subscription
+flags together; the annotation does not suppress the assembly's analyzer or
+replace resource disposal.
+
+The Play mode lifecycle regression test enters and exits Play mode twice with
+domain reload disabled and scene reload enabled. On Unity 7 it observes the
+paired lifecycle attributes from Unity's code lifecycle API; older supported
+Editors use a temporary, explicitly removed event subscription. The test checks
+that code unload does not occur, services retain their identity, and Package
+Manager patches remain installed across both cycles. It restores the project's
+play mode settings after the run.
+
+### Background Work and Recovery
+
 Network-heavy CLI work runs on background threads. Completion is published with
 a memory barrier before the Editor thread consumes it. Unity API calls and UI
 mutations remain on the Editor thread.

@@ -24,6 +24,10 @@ namespace MartinCalander.GitSubmoduleManager.Editor
     /// verified Package Manager seams at run time and the entire optional
     /// integration fails closed when they drift.
     /// </summary>
+#if UNITY_6000_5_OR_NEWER
+    // Native controls and queued repository actions retain their Editor ownership.
+    [Unity.Scripting.LifecycleManagement.NoAutoStaticsCleanup]
+#endif
     internal static class PackageManagerGitHubNativeActions
     {
         internal const string PackageManagerWindowRootTypeName =
@@ -4324,6 +4328,10 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             internal EventCallback<DetachFromPanelEvent> DetachedCallback { get; }
         }
 
+#if UNITY_6000_5_OR_NEWER
+        // The comparer has no session state and can be shared by retained controls.
+        [Unity.Scripting.LifecycleManagement.NoAutoStaticsCleanup]
+#endif
         private sealed class ReferenceComparer : IEqualityComparer<object>
         {
             internal static ReferenceComparer Instance { get; } = new();

@@ -49,6 +49,10 @@ namespace MartinCalander.GitSubmoduleManager.Editor
     /// marker when Unity exits unexpectedly.
     /// </summary>
     [InitializeOnLoad]
+#if UNITY_6000_5_OR_NEWER
+    // Operation ownership and recovery evidence outlive individual Play mode sessions.
+    [Unity.Scripting.LifecycleManagement.NoAutoStaticsCleanup]
+#endif
     internal static class GitOperationService
     {
         private const int LifecycleDrainTimeoutMs = 10000;

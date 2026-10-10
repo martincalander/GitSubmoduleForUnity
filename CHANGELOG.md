@@ -9,6 +9,10 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Added repeated Play mode transition coverage with domain reload disabled and
+  scene reload enabled, plus guidance for keeping Editor service state alive
+  while game code resets its own per-play state.
+
 - Added exact Unity `6000.7.0b1` and `6000.7.0b2` beta compatibility. Other 6.7 builds remain
   rejected by the independent runtime and installer gates.
 
@@ -17,6 +21,10 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   unvalidated.
 
 ### Changed
+
+- Declare the manager's Editor-session static state as persistent across Play
+  mode with Unity's lifecycle attributes, preserving worker ownership,
+  subscriptions, and recovery state when domain reload is disabled.
 
 - Verified installed submodules now use Unity Package Manager's standard
   **Remove** action instead of a separate **Uninstall Submodule** command.

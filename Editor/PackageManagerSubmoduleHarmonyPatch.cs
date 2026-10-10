@@ -11,6 +11,10 @@ using UnityEngine.UIElements;
 namespace MartinCalander.GitSubmoduleManager.Editor
 {
     [InitializeOnLoad]
+#if UNITY_6000_5_OR_NEWER
+    // Native mutation guards and their Harmony owner stay installed during Play mode.
+    [Unity.Scripting.LifecycleManagement.NoAutoStaticsCleanup]
+#endif
     internal static class PackageManagerSubmoduleHarmonyPatch
     {
         internal const string HarmonyId =

@@ -83,6 +83,25 @@ On first use after the package rename, an existing
 `UserSettings/GitPackageManagerSettings.asset` file is copied to the new path
 without deleting the original.
 
+## Faster Play Mode Entry
+
+Git Submodule Manager can stay loaded when entering and leaving Play mode with
+domain reload disabled. In **Project Settings > Editor > Enter Play Mode
+Settings**, choose **Reload Scene only**. This keeps scene reload enabled while
+skipping code reload. The package does not change this project setting.
+
+The manager's Editor services, event registrations, and active operation
+ownership persist across these transitions. Entering Play mode does not reset
+discovery, repeat an installation, or extend the catalogue retention window.
+Script recompilation still uses the normal cleanup and recovery paths.
+
+Game scripts must separately reset their own per-play static state and event
+subscriptions. Follow Unity's [code lifecycle guide][code-lifecycle] when adding
+those callbacks. Faster entry depends on the scene and other installed packages;
+disabling domain reload alone does not guarantee an instant transition.
+
+[code-lifecycle]: https://docs.unity.com/en-us/engine/7000.0/manual/programming-environment/code-reload-serialization/code-reload/code-lifecycle
+
 ## GitHub Discovery and Filters
 
 Entering **Sources > GitHub** starts the authenticated catalogue scan and shows

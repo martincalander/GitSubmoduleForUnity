@@ -98,6 +98,10 @@ namespace MartinCalander.GitSubmoduleManager.Editor
     /// Manager. This host never replaces or hides Unity's Package Manager UI.
     /// </summary>
     [InitializeOnLoad]
+#if UNITY_6000_5_OR_NEWER
+    // Host sessions and patch ownership follow Editor windows, not Play mode sessions.
+    [Unity.Scripting.LifecycleManagement.NoAutoStaticsCleanup]
+#endif
     internal static class GitSubmoduleManagerPackageManagerHost
     {
         internal enum DetachedWindowAction

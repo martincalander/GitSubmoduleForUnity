@@ -7,6 +7,10 @@ using UnityEditor;
 namespace MartinCalander.GitSubmoduleManager.Editor
 {
     [InitializeOnLoad]
+#if UNITY_6000_5_OR_NEWER
+    // Snapshot workers, generations, and observers share an Editor session lifetime.
+    [Unity.Scripting.LifecycleManagement.NoAutoStaticsCleanup]
+#endif
     internal static class PackageManagerSubmoduleSnapshot
     {
         private const int MaximumAutomaticRetries = 3;

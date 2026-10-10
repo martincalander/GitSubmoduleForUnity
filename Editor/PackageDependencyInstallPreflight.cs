@@ -396,6 +396,10 @@ namespace MartinCalander.GitSubmoduleManager.Editor
     /// Main-thread, single-flight wrapper. It owns only read-only discovery and
     /// registry searches; project mutation starts later in the coordinator.
     /// </summary>
+#if UNITY_6000_5_OR_NEWER
+    // Live preflight work keeps its owner and completion subscribers until finished.
+    [Unity.Scripting.LifecycleManagement.NoAutoStaticsCleanup]
+#endif
     internal static class PackageDependencyPreflightService
     {
         private static PackageDependencyPreflightRunner runner;

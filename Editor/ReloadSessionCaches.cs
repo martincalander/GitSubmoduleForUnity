@@ -48,6 +48,10 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         }
     }
 
+#if UNITY_6000_5_OR_NEWER
+    // Strict encoding is shared configuration and has no per-play state.
+    [Unity.Scripting.LifecycleManagement.NoAutoStaticsCleanup]
+#endif
     internal static class StrictSessionCacheJson
     {
         internal const int MaximumStructuralTokenCount = 160000;
@@ -615,6 +619,10 @@ namespace MartinCalander.GitSubmoduleManager.Editor
     /// data, never coverage or mutation evidence, and is accepted only after the
     /// current GitHub account has been resolved again by a live request.
     /// </summary>
+#if UNITY_6000_5_OR_NEWER
+    // The cache encoding remains valid across Play mode sessions.
+    [Unity.Scripting.LifecycleManagement.NoAutoStaticsCleanup]
+#endif
     internal sealed class PackageManagerGitHubCatalogueSessionCache
     {
         internal const int MaximumPayloadByteCount = 4 * 1024 * 1024;

@@ -99,6 +99,10 @@ namespace MartinCalander.GitSubmoduleManager.Editor
     /// manifest. This class deliberately knows nothing about packages-lock.json:
     /// lockfile resolution remains exclusively owned by Unity Package Manager.
     /// </summary>
+#if UNITY_6000_5_OR_NEWER
+    // Manifest caches and mutation locks follow repository changes within the Editor.
+    [Unity.Scripting.LifecycleManagement.NoAutoStaticsCleanup]
+#endif
     internal static class PackageManifestGitDependencyStore
     {
         internal const int MaximumManifestByteCount = 2 * 1024 * 1024;

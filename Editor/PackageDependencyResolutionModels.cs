@@ -163,6 +163,10 @@ namespace MartinCalander.GitSubmoduleManager.Editor
     /// always ordered by exact package name, independent of discovery, request,
     /// or dependency declaration order.
     /// </summary>
+#if UNITY_6000_5_OR_NEWER
+    // The empty plan and its results are immutable shared values.
+    [Unity.Scripting.LifecycleManagement.NoAutoStaticsCleanup]
+#endif
     internal sealed class PackageDependencyResolutionPlan
     {
         private static readonly IReadOnlyList<PackageDependencyResolutionResult>

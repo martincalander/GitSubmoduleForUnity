@@ -16,6 +16,10 @@ namespace MartinCalander.GitSubmoduleManager.Editor
     /// public UI Toolkit controls for the extra submodule-specific fields.
     /// Repository mutation remains owned by <see cref="GitSubmoduleAddService"/>.
     /// </summary>
+#if UNITY_6000_5_OR_NEWER
+    // The active Editor window remains owned across Play mode transitions.
+    [Unity.Scripting.LifecycleManagement.NoAutoStaticsCleanup]
+#endif
     internal sealed class GitSubmoduleInstallPopup : EditorWindow
     {
         internal const string WindowTitle = "Install package as Git Submodule";

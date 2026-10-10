@@ -37,6 +37,10 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         internal string Version { get; }
     }
 
+#if UNITY_6000_5_OR_NEWER
+    // The empty dependency collection is immutable and shared across reads.
+    [Unity.Scripting.LifecycleManagement.NoAutoStaticsCleanup]
+#endif
     internal sealed class PackageManifestMetadata
     {
         private static readonly IReadOnlyList<PackageManifestDependency>
@@ -231,6 +235,10 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         internal string GitlinkObjectId = string.Empty;
     }
 
+#if UNITY_6000_5_OR_NEWER
+    // Project identity, command failure state, and proof issuer identity outlive Play mode.
+    [Unity.Scripting.LifecycleManagement.NoAutoStaticsCleanup]
+#endif
     internal static class GitUtility
     {
         /// <summary>

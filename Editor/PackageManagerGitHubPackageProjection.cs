@@ -20,6 +20,10 @@ namespace MartinCalander.GitSubmoduleManager.Editor
     /// If the contract changes, GitHub discovery simply remains unavailable.
     /// </summary>
     [InitializeOnLoad]
+#if UNITY_6000_5_OR_NEWER
+    // Transient projections stay paired with their Package Manager host owners.
+    [Unity.Scripting.LifecycleManagement.NoAutoStaticsCleanup]
+#endif
     internal static class PackageManagerGitHubPackageProjection
     {
         internal const string ReservedPackageIdPrefix =
@@ -1077,6 +1081,10 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             }
         }
 
+#if UNITY_6000_5_OR_NEWER
+        // Reference comparison is stateless and shared by Editor projections.
+        [Unity.Scripting.LifecycleManagement.NoAutoStaticsCleanup]
+#endif
         private sealed class ReferenceComparer : IEqualityComparer<object>
         {
             internal static ReferenceComparer Instance { get; } =

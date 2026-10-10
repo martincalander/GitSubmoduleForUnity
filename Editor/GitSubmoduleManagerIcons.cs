@@ -3,6 +3,10 @@ using UnityEngine;
 
 namespace MartinCalander.GitSubmoduleManager.Editor
 {
+#if UNITY_6000_5_OR_NEWER
+    // Cached package icons can be reused across Play mode transitions.
+    [Unity.Scripting.LifecycleManagement.NoAutoStaticsCleanup]
+#endif
     internal static class GitSubmoduleManagerIcons
     {
         internal const string DarkThemeIconFileName = "GitEditorWindowIcon.png";

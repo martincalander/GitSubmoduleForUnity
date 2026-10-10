@@ -34,6 +34,10 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         void ShowBlocking(PackageDependencyPromptContent content);
     }
 
+#if UNITY_6000_5_OR_NEWER
+    // The shared dialog facade has no per-play state.
+    [Unity.Scripting.LifecycleManagement.NoAutoStaticsCleanup]
+#endif
     internal sealed class UnityPackageDependencyModalDialog :
         IPackageDependencyModalDialog
     {

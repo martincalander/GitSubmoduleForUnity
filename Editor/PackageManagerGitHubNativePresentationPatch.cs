@@ -15,6 +15,10 @@ namespace MartinCalander.GitSubmoduleManager.Editor
     /// labeling so older Package Manager versions can omit them independently.
     /// </summary>
     [InitializeOnLoad]
+#if UNITY_6000_5_OR_NEWER
+    // Patches and scheduled presentation work remain installed for the Editor session.
+    [Unity.Scripting.LifecycleManagement.NoAutoStaticsCleanup]
+#endif
     internal static class PackageManagerGitHubNativePresentationPatch
     {
         internal const string HarmonyId =

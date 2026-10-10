@@ -48,6 +48,10 @@ namespace MartinCalander.GitSubmoduleManager.Editor
     /// then reconciled across the domain reload that resolution can trigger.
     /// </summary>
     [InitializeOnLoad]
+#if UNITY_6000_5_OR_NEWER
+    // Package resolution keeps its active request state across Play mode transitions.
+    [Unity.Scripting.LifecycleManagement.NoAutoStaticsCleanup]
+#endif
     internal static class PackageManagerProjectResolutionService
     {
         private const int CurrentSchemaVersion = 1;
@@ -970,6 +974,10 @@ namespace MartinCalander.GitSubmoduleManager.Editor
     /// domain reload from issuing the ordinary removal more than once.
     /// </summary>
     [InitializeOnLoad]
+#if UNITY_6000_5_OR_NEWER
+    // A live removal handoff must not lose its request handle or issue it twice.
+    [Unity.Scripting.LifecycleManagement.NoAutoStaticsCleanup]
+#endif
     internal static class PackageManagerNativeRemoveHandoffService
     {
         private const int CurrentSchemaVersion = 2;

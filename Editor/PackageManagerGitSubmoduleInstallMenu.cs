@@ -11,6 +11,10 @@ namespace MartinCalander.GitSubmoduleManager.Editor
     /// menu rebuild, ordering, keyboard handling, and styling; this class only
     /// registers one reflected extension item and removes it with its host root.
     /// </summary>
+#if UNITY_6000_5_OR_NEWER
+    // Installed menu entries follow their Editor window lifetime.
+    [Unity.Scripting.LifecycleManagement.NoAutoStaticsCleanup]
+#endif
     internal static class PackageManagerGitSubmoduleInstallMenu
     {
         internal const string PackageManagerWindowRootTypeName =
@@ -356,6 +360,10 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             internal EventCallback<DetachFromPanelEvent> DetachedCallback { get; }
         }
 
+#if UNITY_6000_5_OR_NEWER
+        // The comparer has no session state and can be shared by retained menus.
+        [Unity.Scripting.LifecycleManagement.NoAutoStaticsCleanup]
+#endif
         private sealed class ReferenceComparer : IEqualityComparer<object>
         {
             internal static ReferenceComparer Instance { get; } = new();

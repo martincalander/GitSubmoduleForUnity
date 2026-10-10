@@ -16,6 +16,9 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
         private const BindingFlags InstanceMembers =
             BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
 
+#if UNITY_6000_5_OR_NEWER
+        [Unity.Scripting.LifecycleManagement.NoAutoStaticsCleanup]
+#endif
         private static readonly Type ProjectionType =
             typeof(PackageManagerGitHubPackageProjection);
 

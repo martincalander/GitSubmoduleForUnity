@@ -137,6 +137,10 @@ namespace MartinCalander.GitSubmoduleManager.Editor
     /// <summary>
     /// Atomic catalogue state consumed by Package Manager presentation code.
     /// </summary>
+#if UNITY_6000_5_OR_NEWER
+    // The empty catalogue and repository list are immutable shared values.
+    [Unity.Scripting.LifecycleManagement.NoAutoStaticsCleanup]
+#endif
     internal sealed class PackageManagerGitHubDiscoverySnapshot
     {
         private static readonly IReadOnlyList<PackageManagerGitHubRepository>
@@ -214,6 +218,10 @@ namespace MartinCalander.GitSubmoduleManager.Editor
     /// main thread and published as immutable page-sized progress.
     /// </summary>
     [InitializeOnLoad]
+#if UNITY_6000_5_OR_NEWER
+    // Discovery workers, observers, and catalogue retention belong to the Editor session.
+    [Unity.Scripting.LifecycleManagement.NoAutoStaticsCleanup]
+#endif
     internal static class PackageManagerGitHubDiscovery
     {
         // A failed or unusually slow refresh must not make installed packages

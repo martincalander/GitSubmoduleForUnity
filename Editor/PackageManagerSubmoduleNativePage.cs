@@ -106,6 +106,10 @@ namespace MartinCalander.GitSubmoduleManager.Editor
     /// targets the validated Unity 6000.3.22f1, Unity 6000.5, and exact
     /// Unity 6000.6.0f1, 6000.6.2f1, and the exact 6000.7.0b1 and 6000.7.0b2 beta contracts.
     /// </summary>
+#if UNITY_6000_5_OR_NEWER
+    // Applied filter markers follow native Editor pages across Play mode transitions.
+    [Unity.Scripting.LifecycleManagement.NoAutoStaticsCleanup]
+#endif
     internal static class PackageManagerSubmoduleNativePage
     {
         internal const string ExtensionPageName = "git-submodule-manager";

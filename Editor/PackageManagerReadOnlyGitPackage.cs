@@ -66,6 +66,10 @@ namespace MartinCalander.GitSubmoduleManager.Editor
     /// Reflection is limited to a small set of property names on Unity-owned UI
     /// models; all authoritative source checks use public Package Manager APIs.
     /// </summary>
+#if UNITY_6000_5_OR_NEWER
+    // The registered-package cache is invalidated by package changes, not Play mode.
+    [Unity.Scripting.LifecycleManagement.NoAutoStaticsCleanup]
+#endif
     internal static class PackageManagerReadOnlyGitPackage
     {
         private const int MaximumCandidateNameLength = 512;

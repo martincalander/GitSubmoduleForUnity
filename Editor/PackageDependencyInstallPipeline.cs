@@ -98,6 +98,10 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         void Show(PackageDependencyInstallCompletionDialogContent content);
     }
 
+#if UNITY_6000_5_OR_NEWER
+    // The shared dialog facade has no per-play state.
+    [Unity.Scripting.LifecycleManagement.NoAutoStaticsCleanup]
+#endif
     internal sealed class UnityPackageDependencyInstallCompletionDialog :
         IPackageDependencyInstallCompletionDialog
     {
@@ -126,6 +130,10 @@ namespace MartinCalander.GitSubmoduleManager.Editor
     /// dependency resolution and consent before handing the only mutation to
     /// the reload-safe coordinator.
     /// </summary>
+#if UNITY_6000_5_OR_NEWER
+    // Pending Editor installs and their observers survive Play mode transitions.
+    [Unity.Scripting.LifecycleManagement.NoAutoStaticsCleanup]
+#endif
     internal static class PackageDependencyInstallPipeline
     {
         private const double PreMutationTimeoutSeconds = 600d;

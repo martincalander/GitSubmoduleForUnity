@@ -154,6 +154,10 @@ namespace MartinCalander.GitSubmoduleManager.Editor
     /// manager window from starting replacement discovery work while commands
     /// from a disposed window are still running.
     /// </summary>
+#if UNITY_6000_5_OR_NEWER
+    // Retired process handles remain tracked until termination is confirmed.
+    [Unity.Scripting.LifecycleManagement.NoAutoStaticsCleanup]
+#endif
     internal static class AsyncCommandDrainRegistry
     {
         private static readonly object Gate = new();
@@ -255,6 +259,10 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         }
     }
 
+#if UNITY_6000_5_OR_NEWER
+    // Command ownership and concurrency reservations outlive Play mode transitions.
+    [Unity.Scripting.LifecycleManagement.NoAutoStaticsCleanup]
+#endif
     internal static class CliCommandRunner
     {
         internal const int DefaultTimeoutMs = 30000;
@@ -771,6 +779,10 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         }
     }
 
+#if UNITY_6000_5_OR_NEWER
+    // Process synchronization and encoding remain shared while commands run.
+    [Unity.Scripting.LifecycleManagement.NoAutoStaticsCleanup]
+#endif
     internal sealed class ProcessCommandRunner : ICommandRunner
     {
         private const int WaitPollIntervalMs = 50;

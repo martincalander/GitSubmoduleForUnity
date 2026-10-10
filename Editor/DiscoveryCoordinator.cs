@@ -8,6 +8,10 @@ using UnityEngine;
 
 namespace MartinCalander.GitSubmoduleManager.Editor
 {
+#if UNITY_6000_5_OR_NEWER
+    // Strict encoding is shared configuration and has no per-play state.
+    [Unity.Scripting.LifecycleManagement.NoAutoStaticsCleanup]
+#endif
     internal sealed class DiscoveryCoordinator : IDisposable
     {
         private const int PageSize = 50;

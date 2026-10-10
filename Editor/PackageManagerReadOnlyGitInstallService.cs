@@ -49,6 +49,10 @@ namespace MartinCalander.GitSubmoduleManager.Editor
     /// resolution before terminal failure is reported.
     /// </summary>
     [InitializeOnLoad]
+#if UNITY_6000_5_OR_NEWER
+    // Package installs retain their request state and completion subscribers.
+    [Unity.Scripting.LifecycleManagement.NoAutoStaticsCleanup]
+#endif
     internal static class PackageManagerReadOnlyGitInstallService
     {
         private const string ActiveStateKey =

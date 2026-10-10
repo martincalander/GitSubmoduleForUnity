@@ -103,6 +103,10 @@ namespace MartinCalander.GitSubmoduleManager.Editor
     /// routed through Client.Search so Unity owns scoped-registry selection,
     /// authentication, caching, and transport.
     /// </summary>
+#if UNITY_6000_5_OR_NEWER
+    // The shared Package Manager facade has no per-play state.
+    [Unity.Scripting.LifecycleManagement.NoAutoStaticsCleanup]
+#endif
     internal sealed class UnityPackageDependencyResolutionFacade :
         IPackageDependencyResolutionFacade,
         IPackageDependencyRegisteredPackageFacade,
