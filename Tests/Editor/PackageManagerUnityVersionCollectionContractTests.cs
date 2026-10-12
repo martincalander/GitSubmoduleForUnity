@@ -61,6 +61,93 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
             }
         }
 
+        private sealed class ReadOnlyListDatabaseWithSource
+        {
+            public void UpdatePackages(
+                IReadOnlyList<IFakePackage> additions,
+                IReadOnlyList<string> removals,
+                FakePackagesChangedSource source)
+            {
+            }
+        }
+
+        private sealed class AllCollectionShapesDatabase
+        {
+            public void UpdatePackages(
+                IReadOnlyList<IFakePackage> additions,
+                IReadOnlyList<string> removals,
+                FakePackagesChangedSource source)
+            {
+            }
+
+            public void UpdatePackages(
+                IReadOnlyCollection<IFakePackage> additions,
+                IReadOnlyCollection<string> removals)
+            {
+            }
+
+            public void UpdatePackages(IList<IFakePackage> additions, IList<string> removals)
+            {
+            }
+        }
+
+        private sealed class ReadOnlyListDatabaseWithoutSource
+        {
+            public void UpdatePackages(
+                IReadOnlyList<IFakePackage> additions,
+                IReadOnlyList<string> removals)
+            {
+            }
+        }
+
+        private sealed class MixedReadOnlyListDatabase
+        {
+            public void UpdatePackages(
+                IReadOnlyList<IFakePackage> additions,
+                IReadOnlyCollection<string> removals,
+                FakePackagesChangedSource source)
+            {
+            }
+        }
+
+        private sealed class WrongElementReadOnlyListDatabase
+        {
+            public void UpdatePackages(
+                IReadOnlyList<object> additions,
+                IReadOnlyList<string> removals,
+                FakePackagesChangedSource source)
+            {
+            }
+        }
+
+        private sealed class WrongSourceReadOnlyListDatabase
+        {
+            public void UpdatePackages(
+                IReadOnlyList<IFakePackage> additions,
+                IReadOnlyList<string> removals,
+                int source)
+            {
+            }
+        }
+
+        private sealed class WrongReturnReadOnlyListDatabase
+        {
+            public bool UpdatePackages(
+                IReadOnlyList<IFakePackage> additions,
+                IReadOnlyList<string> removals,
+                FakePackagesChangedSource source) => true;
+        }
+
+        private sealed class GenericReadOnlyListDatabase
+        {
+            public void UpdatePackages<T>(
+                IReadOnlyList<IFakePackage> additions,
+                IReadOnlyList<string> removals,
+                FakePackagesChangedSource source)
+            {
+            }
+        }
+
         private sealed class BroadCollectionDatabase
         {
             public void UpdatePackages(
@@ -101,6 +188,72 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
             {
                 return packages != null;
             }
+        }
+
+        private class ReadOnlyListRemoveAction
+        {
+            public bool TriggerActionImplementation(
+                IReadOnlyList<IFakePackage> packages)
+            {
+                return packages != null;
+            }
+        }
+
+        private sealed class InheritedReadOnlyListRemoveAction : ReadOnlyListRemoveAction
+        {
+        }
+
+        private sealed class AllCollectionShapesRemoveAction
+        {
+            public bool TriggerActionImplementation(IList<IFakePackage> packages) =>
+                packages != null;
+
+            public bool TriggerActionImplementation(IReadOnlyList<IFakePackage> packages) =>
+                packages != null;
+
+            public bool TriggerActionImplementation(IReadOnlyCollection<IFakePackage> packages) =>
+                packages != null;
+        }
+
+        private sealed class ReadOnlyAndLegacyListRemoveAction
+        {
+            public bool TriggerActionImplementation(IList<IFakePackage> packages) =>
+                packages != null;
+
+            public bool TriggerActionImplementation(IReadOnlyList<IFakePackage> packages) =>
+                packages != null;
+        }
+
+        private sealed class WrongElementReadOnlyListRemoveAction
+        {
+            public bool TriggerActionImplementation(IReadOnlyList<object> packages) =>
+                packages != null;
+        }
+
+        private sealed class AdditionalParameterReadOnlyListRemoveAction
+        {
+            public bool TriggerActionImplementation(
+                IReadOnlyList<IFakePackage> packages,
+                bool force) => packages != null;
+        }
+
+        private sealed class WrongReturnReadOnlyListRemoveAction
+        {
+            public void TriggerActionImplementation(IReadOnlyList<IFakePackage> packages)
+            {
+            }
+        }
+
+        private sealed class StaticReadOnlyListRemoveAction
+        {
+            public static bool TriggerActionImplementation(IReadOnlyList<IFakePackage> packages) =>
+                packages != null;
+        }
+
+        private sealed class GenericReadOnlyListRemoveAction
+        {
+            public bool TriggerActionImplementation<T>(IReadOnlyList<IFakePackage> packages) =>
+                packages != null;
         }
 
         [Test]
@@ -158,6 +311,41 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
         }
 
         [Test]
+        public void ProjectionUpdatePackages_AcceptsExactReadOnlyListShapeWithSource()
+        {
+            MethodInfo method = FindUpdatePackagesMethod(typeof(ReadOnlyListDatabaseWithSource));
+
+            Assert.That(method, Is.Not.Null);
+            ParameterInfo[] parameters = method.GetParameters();
+            Assert.That(parameters, Has.Length.EqualTo(3));
+            Assert.That(parameters[0].ParameterType, Is.EqualTo(typeof(IReadOnlyList<IFakePackage>)));
+            Assert.That(parameters[1].ParameterType, Is.EqualTo(typeof(IReadOnlyList<string>)));
+            Assert.That(parameters[2].ParameterType, Is.EqualTo(typeof(FakePackagesChangedSource)));
+        }
+
+        [Test]
+        public void ProjectionUpdatePackages_KeepsReadOnlyCollectionPreferenceOverReadOnlyList()
+        {
+            MethodInfo method = FindUpdatePackagesMethod(typeof(AllCollectionShapesDatabase));
+
+            Assert.That(method, Is.Not.Null);
+            Assert.That(
+                method.GetParameters()[0].ParameterType,
+                Is.EqualTo(typeof(IReadOnlyCollection<IFakePackage>)));
+        }
+
+        [TestCase(typeof(ReadOnlyListDatabaseWithoutSource))]
+        [TestCase(typeof(MixedReadOnlyListDatabase))]
+        [TestCase(typeof(WrongElementReadOnlyListDatabase))]
+        [TestCase(typeof(WrongSourceReadOnlyListDatabase))]
+        [TestCase(typeof(WrongReturnReadOnlyListDatabase))]
+        [TestCase(typeof(GenericReadOnlyListDatabase))]
+        public void ProjectionUpdatePackages_RejectsUnverifiedReadOnlyListShapes(Type databaseType)
+        {
+            Assert.That(FindUpdatePackagesMethod(databaseType), Is.Null);
+        }
+
+        [Test]
         public void RemoveActionCollection_AcceptsOnlyExactKnownShapes()
         {
             Type packageInterface =
@@ -179,7 +367,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                 Is.False);
             Assert.That(
                 IsSupportedCollection(typeof(IReadOnlyList<>), packageInterface),
-                Is.False);
+                Is.True);
             Assert.That(
                 IsSupportedCollection(typeof(List<>), packageInterface),
                 Is.False);
@@ -207,6 +395,64 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                 legacy.GetParameters()[0].ParameterType
                     .GetGenericTypeDefinition(),
                 Is.EqualTo(typeof(IList<>)));
+        }
+
+        [Test]
+        public void RemoveActionCollection_AcceptsExactReadOnlyListShape()
+        {
+            MethodInfo method = PackageManagerSubmoduleHarmonyPatch
+                .FindRemoveActionCollectionTargetMethod(
+                    typeof(ReadOnlyListRemoveAction),
+                    typeof(IFakePackage));
+
+            Assert.That(method, Is.Not.Null);
+            Assert.That(method.DeclaringType, Is.EqualTo(typeof(ReadOnlyListRemoveAction)));
+            Assert.That(
+                method.GetParameters()[0].ParameterType,
+                Is.EqualTo(typeof(IReadOnlyList<IFakePackage>)));
+        }
+
+        [Test]
+        public void RemoveActionCollection_KeepsReadOnlyCollectionPreferenceOverReadOnlyList()
+        {
+            MethodInfo method = PackageManagerSubmoduleHarmonyPatch
+                .FindRemoveActionCollectionTargetMethod(
+                    typeof(AllCollectionShapesRemoveAction),
+                    typeof(IFakePackage));
+
+            Assert.That(method, Is.Not.Null);
+            Assert.That(
+                method.GetParameters()[0].ParameterType,
+                Is.EqualTo(typeof(IReadOnlyCollection<IFakePackage>)));
+        }
+
+        [Test]
+        public void RemoveActionCollection_PrefersReadOnlyListOverLegacyList()
+        {
+            MethodInfo method = PackageManagerSubmoduleHarmonyPatch
+                .FindRemoveActionCollectionTargetMethod(
+                    typeof(ReadOnlyAndLegacyListRemoveAction),
+                    typeof(IFakePackage));
+
+            Assert.That(method, Is.Not.Null);
+            Assert.That(
+                method.GetParameters()[0].ParameterType,
+                Is.EqualTo(typeof(IReadOnlyList<IFakePackage>)));
+        }
+
+        [TestCase(typeof(WrongElementReadOnlyListRemoveAction))]
+        [TestCase(typeof(AdditionalParameterReadOnlyListRemoveAction))]
+        [TestCase(typeof(WrongReturnReadOnlyListRemoveAction))]
+        [TestCase(typeof(StaticReadOnlyListRemoveAction))]
+        [TestCase(typeof(GenericReadOnlyListRemoveAction))]
+        [TestCase(typeof(InheritedReadOnlyListRemoveAction))]
+        public void RemoveActionCollection_RejectsUnverifiedReadOnlyListShapes(Type actionType)
+        {
+            Assert.That(
+                PackageManagerSubmoduleHarmonyPatch.FindRemoveActionCollectionTargetMethod(
+                    actionType,
+                    typeof(IFakePackage)),
+                Is.Null);
         }
 
         private static MethodInfo FindUpdatePackagesMethod(Type databaseType)

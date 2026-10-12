@@ -59,9 +59,10 @@ small independent setup/status surface and does not manage packages itself.
 
 ## Package Manager Integration
 
-On exact Unity `6000.3.22f1`, a Unity `6000.5.*f1` final release, or exact
-Unity `6000.6.0f1` or `6000.6.2f1`, plus the exact `6000.7.0b1` and `6000.7.0b2` betas, the host registers a native **GitHub** page through Unity's
-internal `ExtensionPage` contract and places its row under
+On exact Unity `6000.3.22f1`, a Unity `6000.5.*f1` final release, exact Unity
+`6000.6.0f1` or `6000.6.2f1`, the exact `6000.7.0b1` and `6000.7.0b2` betas,
+or the exact `7000.0.0a7` and `7000.0.0a8` alphas, the host registers a native
+**GitHub** page through Unity's internal `ExtensionPage` contract and places its row under
 **Sources**. Users reach it through **Window > Package Management > Package
 Manager > Sources > GitHub**, or through the explicit buttons in Welcome and
 Preferences.
@@ -109,6 +110,12 @@ ticks for the same pending request preserve its deadline. Explicit new `./` and
 `../` repository inputs are canonicalized against the Unity project root before
 the probe, consent identity, dependency plan, and mutation. Existing relative
 URLs in `.gitmodules` retain Git's submodule URL semantics.
+
+On Unix, the probe requires temporary clone directories to have exact `0700`
+permissions. Mono reads the mode through Mono.Posix; Unity 7 CoreCLR uses the
+runtime's `File.GetUnixFileMode` API through guarded reflection because the
+compile-time profile does not expose it. Missing APIs, read failures, or broader
+permissions reject the clone before Git runs.
 
 The root manifest and its meta marker come from the same temporary clone
 commit. The probe first parses exact NUL-delimited Git tree records, accepts only
@@ -189,8 +196,26 @@ validated independently. Installed package submodules are labelled
 page, repository visibility is shown as **Public** or **Private**. The Source
 card reports **GitHub** with the themed Git icon, or **Git** for another host.
 
+Plugin constraints select the patching libraries for the Editor runtime. Mono
+retains the byte-identical Harmony 2.4.1 `net472` DLL under `!ENABLE_CORECLR`.
+CoreCLR uses eleven original upstream DLLs under `ENABLE_CORECLR`: HarmonyX
+2.16.1 targeting .NET Standard 2.0, the pinned MonoMod libraries targeting .NET
+Standard 2.1, and the complete Mono.Cecil 0.11.6 assembly set targeting .NET
+Standard 2.0: `Mono.Cecil`, `Mono.Cecil.Mdb`, `Mono.Cecil.Pdb`, and
+`Mono.Cecil.Rocks`. Keeping all four Cecil assemblies at the same version
+prevents symbol-reader interface mismatches during a cold Editor startup.
+These builds work with Unity 7's compilation profile while supplying detours for its .NET 10
+runtime. Every plugin is imported only for the Editor and requires an explicit
+assembly reference. No dependency is rebuilt or merged locally. Exact artifact
+and archive hashes are pinned in the repository's
+`.github/scripts/coreclr_harmony_artifacts.json`, with provenance and licenses
+in [Third Party Notices](../Third%20Party%20Notices.md).
+
 The validated Package Manager contract targets are exact Unity `6000.3.22f1`,
-Unity `6000.5.*f1` final releases, and exact Unity `6000.6.0f1` and `6000.6.2f1`, plus the exact `6000.7.0b1` and `6000.7.0b2` betas.
+Unity `6000.5.*f1` final releases, exact Unity `6000.6.0f1` and `6000.6.2f1`,
+the exact `6000.7.0b1` and `6000.7.0b2` betas, and the exact `7000.0.0a7` and
+`7000.0.0a8` alphas.
+Other Unity 7 builds remain unsupported until separately validated.
 Unity `6000.4` and other `6000.6` versions are not supported contract targets. `package.json`
 declares `6000.3.22f1` only as UPM's minimum
 eligibility version because the manifest cannot encode this non-contiguous
@@ -198,6 +223,28 @@ matrix. If a required internal contract cannot be verified, that extension
 feature is not installed. The package does not replace, hide, or broadly clear
 Unity's package database or standard Package Manager UI, and no legacy manager
 fallback is injected.
+
+Multi-select removal resolves only the exact declared non-generic
+`bool TriggerActionImplementation` overload accepting
+`IReadOnlyCollection<IPackage>`, Unity 7's `IReadOnlyList<IPackage>`, or the legacy
+`IList<IPackage>`. Each shape requires the same exact package interface; broader
+enumerables, different element types, and inherited overloads are rejected.
+The read-only collection remains preferred when multiple validated shapes are
+present, followed by the read-only list and then the legacy list.
+
+Transient projection also accepts Unity 7's exact `void UpdatePackages`
+overload with paired `IReadOnlyList<IPackage>` and `IReadOnlyList<string>`
+parameters and the package-change source enum containing `Other`. It rejects
+mixed collection shapes and requires that source argument for the Unity 7
+contract. Existing Unity 6 collection contracts retain their preference.
+
+Package construction prefers the existing `PackageFactory` service. When that
+type is absent, early Unity `6000.5` releases use the registered
+`UpmPackageFactory` service only if it directly inherits `Package.Factory`.
+The fallback requires that base's declared, non-generic, non-virtual
+seven-argument `CreatePackage` method returning the exact `Package` type.
+A changed modern factory contract does not trigger the legacy fallback, and
+projected package identity and ownership checks remain unchanged.
 
 Welcome and Preferences explain an unsupported Editor and disable their Package
 Manager navigation action. Supported navigation reports activation failure or
@@ -610,8 +657,9 @@ outcomes.
 
 The `PackageManagerCompatibility` category inventories the reflected Package
 Manager types and exact signatures used by the validated Unity `6000.3.22f1`,
-Unity `6000.5.*f1`, and exact Unity `6000.6.0f1` and `6000.6.2f1`, plus the exact `6000.7.0b1` and `6000.7.0b2` beta contracts, then verifies Harmony
-ownership for resolved hooks. It reports contract drift with the Unity version
+Unity `6000.5.*f1`, exact Unity `6000.6.0f1` and `6000.6.2f1`, the exact
+`6000.7.0b1` and `6000.7.0b2` beta contracts, and the exact `7000.0.0a7` and
+`7000.0.0a8` alpha contracts, then verifies Harmony ownership for resolved hooks. It reports contract drift with the Unity version
 and platform. Runs on
 any other Editor version, including Unity `6000.4`, are migration diagnostics
 and do not constitute a support claim.

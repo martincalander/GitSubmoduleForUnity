@@ -1219,7 +1219,6 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                         "UnityEditor.PackageManager.UI.Internal.";
                     Type servicesContainerType = FindType(Namespace + "ServicesContainer");
                     Type packageDatabaseType = FindType(Namespace + "PackageDatabase");
-                    Type packageFactoryType = FindType(Namespace + "PackageFactory");
                     Type packageType = FindType(Namespace + "Package");
                     Type packageInterfaceType = FindType(Namespace + "IPackage");
                     Type packageVersionInterfaceType =
@@ -1232,7 +1231,6 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                     Type packageTagType = FindType(Namespace + "PackageTag");
                     if (servicesContainerType == null ||
                         packageDatabaseType == null ||
-                        packageFactoryType == null ||
                         packageType == null ||
                         packageInterfaceType == null ||
                         packageVersionInterfaceType == null ||
@@ -1270,10 +1268,13 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                             null,
                             new[] { placeholderPackageVersionType },
                             null);
-                    MethodInfo createPackageMethod = FindCreatePackageMethod(
-                        packageFactoryType,
+                    Type packageFactoryType = FindPackageFactoryContract(
+                        FindType(Namespace + "PackageFactory"),
+                        packageType,
+                        FindType(Namespace + "UpmPackageFactory"),
                         packageInterfaceType,
-                        placeholderVersionListType);
+                        placeholderVersionListType,
+                        out MethodInfo createPackageMethod);
 
                     PropertyInfo packageNameProperty = FindPropertyInTypeOrInterfaces(
                         packageInterfaceType,
@@ -1348,6 +1349,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                          packagesChangedSourceOther == null) ||
                         placeholderConstructor == null ||
                         placeholderVersionListConstructor == null ||
+                        packageFactoryType == null ||
                         createPackageMethod == null ||
                         packageNameProperty == null ||
                         packageUniqueIdProperty == null ||
@@ -1728,8 +1730,8 @@ namespace MartinCalander.GitSubmoduleManager.Editor
 
             private static Type FindType(string fullName)
             {
-                Assembly[] assemblies = AppDomain.CurrentDomain.GetAssemblies();
-                for (int index = 0; index < assemblies.Length; index++)
+                IReadOnlyList<Assembly> assemblies = EditorAssemblyCompatibility.GetLoadedAssemblies();
+                for (int index = 0; index < assemblies.Count; index++)
                 {
                     try
                     {
@@ -1770,6 +1772,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             {
                 MethodInfo readOnlyThreeParameterShape = null;
                 MethodInfo readOnlyTwoParameterShape = null;
+                MethodInfo readOnlyListThreeParameterShape = null;
                 MethodInfo listThreeParameterShape = null;
                 MethodInfo listTwoParameterShape = null;
                 MethodInfo[] methods = packageDatabaseType.GetMethods(AnyInstance);
@@ -1779,7 +1782,9 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                     if (!string.Equals(
                             method.Name,
                             "UpdatePackages",
-                            StringComparison.Ordinal))
+                            StringComparison.Ordinal) ||
+                        method.ContainsGenericParameters ||
+                        method.ReturnType != typeof(void))
                     {
                         continue;
                     }
@@ -1804,7 +1809,15 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                         IsListOf(
                             parameters[1].ParameterType,
                             typeof(string));
-                    if (!isReadOnlyShape && !isListShape)
+                    bool isReadOnlyListShape =
+                        parameters.Length == 3 &&
+                        IsReadOnlyListOf(
+                            parameters[0].ParameterType,
+                            packageInterfaceType) &&
+                        IsReadOnlyListOf(
+                            parameters[1].ParameterType,
+                            typeof(string));
+                    if (!isReadOnlyShape && !isReadOnlyListShape && !isListShape)
                         continue;
 
                     if (parameters.Length == 3)
@@ -1814,6 +1827,8 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                         {
                             if (isReadOnlyShape)
                                 readOnlyThreeParameterShape = method;
+                            else if (isReadOnlyListShape)
+                                readOnlyListThreeParameterShape = method;
                             else
                                 listThreeParameterShape = method;
                         }
@@ -1827,10 +1842,12 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 }
 
                 // Unity 6000.5 uses IReadOnlyCollection<T>. Keep that exact
-                // contract preferred when both shapes are present. Unity 6000.3
-                // exposes the otherwise equivalent legacy IList<T> overload.
+                // contract preferred when multiple shapes are present. Unity 7
+                // uses paired IReadOnlyList<T> parameters with an explicit source.
+                // Unity 6000.3 exposes the legacy IList<T> overload.
                 return readOnlyThreeParameterShape ??
                        readOnlyTwoParameterShape ??
+                       readOnlyListThreeParameterShape ??
                        listThreeParameterShape ??
                        listTwoParameterShape;
             }
@@ -1864,6 +1881,14 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                        candidate.GetGenericArguments()[0] == elementType;
             }
 
+            private static bool IsReadOnlyListOf(Type candidate, Type elementType)
+            {
+                return candidate != null &&
+                       candidate.IsGenericType &&
+                       candidate.GetGenericTypeDefinition() == typeof(IReadOnlyList<>) &&
+                       candidate.GetGenericArguments()[0] == elementType;
+            }
+
             private static ConstructorInfo FindPlaceholderConstructor(
                 Type placeholderType,
                 Type packageTagType)
@@ -1886,6 +1911,55 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 }
 
                 return null;
+            }
+
+            private static Type FindPackageFactoryContract(
+                Type packageFactoryType,
+                Type packageType,
+                Type upmPackageFactoryType,
+                Type packageInterfaceType,
+                Type placeholderVersionListType,
+                out MethodInfo createPackageMethod)
+            {
+                createPackageMethod = null;
+                if (packageFactoryType != null)
+                {
+                    createPackageMethod = FindCreatePackageMethod(
+                        packageFactoryType,
+                        packageInterfaceType,
+                        placeholderVersionListType);
+                    return createPackageMethod != null ? packageFactoryType : null;
+                }
+
+                // Early Unity 6000.5 registers UpmPackageFactory, while its
+                // nested Package.Factory base owns package construction.
+                Type legacyFactoryType = packageType?.GetNestedType(
+                    "Factory",
+                    BindingFlags.Public | BindingFlags.NonPublic);
+                if (legacyFactoryType == null ||
+                    upmPackageFactoryType == null ||
+                    upmPackageFactoryType.IsAbstract ||
+                    upmPackageFactoryType.ContainsGenericParameters ||
+                    upmPackageFactoryType.BaseType != legacyFactoryType)
+                {
+                    return null;
+                }
+
+                MethodInfo legacyCreatePackageMethod = FindCreatePackageMethod(
+                    legacyFactoryType,
+                    packageInterfaceType,
+                    placeholderVersionListType);
+                if (legacyCreatePackageMethod == null ||
+                    legacyCreatePackageMethod.DeclaringType != legacyFactoryType ||
+                    legacyCreatePackageMethod.IsGenericMethod ||
+                    legacyCreatePackageMethod.IsVirtual ||
+                    legacyCreatePackageMethod.ReturnType != packageType)
+                {
+                    return null;
+                }
+
+                createPackageMethod = legacyCreatePackageMethod;
+                return upmPackageFactoryType;
             }
 
             private static MethodInfo FindCreatePackageMethod(

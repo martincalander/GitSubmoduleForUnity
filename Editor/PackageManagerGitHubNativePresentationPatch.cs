@@ -2915,7 +2915,11 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             AssemblyReloadEvents.beforeAssemblyReload -= OnBeforeAssemblyReload;
             try
             {
+#if ENABLE_CORECLR
+                harmony?.UnpatchSelf();
+#else
                 harmony?.UnpatchAll(HarmonyId);
+#endif
             }
             catch
             {

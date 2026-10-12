@@ -409,6 +409,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 return null;
 
             MethodInfo readOnlyCollectionTarget = null;
+            MethodInfo readOnlyListTarget = null;
             MethodInfo listTarget = null;
             foreach (MethodInfo method in actionType.GetMethods(
                          AnyInstance | BindingFlags.DeclaredOnly))
@@ -416,6 +417,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 ParameterInfo[] parameters = method.GetParameters();
                 if (method.Name == TriggerActionImplementationMethodName &&
                     !method.IsStatic &&
+                    !method.ContainsGenericParameters &&
                     method.ReturnType == typeof(bool) &&
                     parameters.Length == 1 &&
                     TryGetExactPackageCollectionShape(
@@ -425,14 +427,16 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 {
                     if (genericTypeDefinition == typeof(IReadOnlyCollection<>))
                         readOnlyCollectionTarget = method;
+                    else if (genericTypeDefinition == typeof(IReadOnlyList<>))
+                        readOnlyListTarget = method;
                     else if (genericTypeDefinition == typeof(IList<>))
                         listTarget = method;
                 }
             }
 
-            // Preserve the validated 6000.5 hook when both exact contracts are
-            // present; IList<IPackage> is the exact 6000.3 alternative only.
-            return readOnlyCollectionTarget ?? listTarget;
+            // Preserve the validated read-only collection preference. Unity 7
+            // uses IReadOnlyList<IPackage>; IList is the 6000.3 alternative.
+            return readOnlyCollectionTarget ?? readOnlyListTarget ?? listTarget;
         }
 
         internal static MethodInfo
@@ -465,7 +469,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             if (string.IsNullOrWhiteSpace(fullName))
                 return null;
 
-            foreach (Assembly assembly in AppDomain.CurrentDomain.GetAssemblies())
+            foreach (Assembly assembly in EditorAssemblyCompatibility.GetLoadedAssemblies())
             {
                 try
                 {
@@ -856,6 +860,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             Type[] arguments = parameterType.GetGenericArguments();
             genericTypeDefinition = parameterType.GetGenericTypeDefinition();
             return (genericTypeDefinition == typeof(IReadOnlyCollection<>) ||
+                    genericTypeDefinition == typeof(IReadOnlyList<>) ||
                     genericTypeDefinition == typeof(IList<>)) &&
                    arguments.Length == 1 &&
                    arguments[0] == packageInterfaceType;
@@ -869,6 +874,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             Type[] arguments = parameterType.GetGenericArguments();
             Type genericTypeDefinition = parameterType.GetGenericTypeDefinition();
             return (genericTypeDefinition == typeof(IReadOnlyCollection<>) ||
+                    genericTypeDefinition == typeof(IReadOnlyList<>) ||
                     genericTypeDefinition == typeof(IList<>)) &&
                    arguments.Length == 1 &&
                    arguments[0].FullName == PackageInterfaceTypeName;
@@ -1841,7 +1847,11 @@ namespace MartinCalander.GitSubmoduleManager.Editor
 
             try
             {
+#if ENABLE_CORECLR
+                harmony?.UnpatchSelf();
+#else
                 harmony?.UnpatchAll(HarmonyId);
+#endif
             }
             catch
             {

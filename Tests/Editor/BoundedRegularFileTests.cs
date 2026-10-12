@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Threading;
 using NUnit.Framework;
@@ -11,28 +12,58 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
     public sealed class BoundedRegularFileTests
     {
         private string directory;
-        private string mono;
+        private string runtimeExecutable;
         private string executable;
+        private string packageAssemblyPath;
+        private string engineAssemblyDirectory;
 
         [OneTimeSetUp]
         public void CreateIsolatedReader()
         {
             directory = Path.Combine(Path.GetTempPath(), "GitSubmoduleRegularFileTests-" + Guid.NewGuid().ToString("N"));
             Directory.CreateDirectory(directory);
+            packageAssemblyPath = GetAssemblyPath(typeof(GitUtility).Assembly);
+            string engineAssemblyPath = GetAssemblyPath(typeof(UnityEngine.Object).Assembly);
+            Assert.That(File.Exists(packageAssemblyPath) && File.Exists(engineAssemblyPath), Is.True,
+                "The isolated reader must load the same package and Unity assemblies as this Editor.");
+            engineAssemblyDirectory = Path.GetDirectoryName(engineAssemblyPath);
+            string source = Path.Combine(directory, "Reader.cs");
+            File.WriteAllText(source, ReaderSource);
             string contents = EditorApplication.applicationContentsPath;
+#if UNITY_7000_0_OR_NEWER && ENABLE_CORECLR
+            string sdk = Path.Combine(contents, "Resources", "Scripting", "DotNetSdk");
+            if (!Directory.Exists(sdk))
+                sdk = Path.Combine(contents, "DotNetSdk");
+            runtimeExecutable = Path.Combine(sdk,
+                RuntimeInformation.IsOSPlatform(OSPlatform.Windows) ? "dotnet.exe" : "dotnet");
+            Assert.That(File.Exists(runtimeExecutable), Is.True,
+                "The Editor's bundled .NET SDK must be discovered before running isolated filesystem regressions.");
+            string project = Path.Combine(directory, "Reader.csproj");
+            File.WriteAllText(project,
+                "<Project Sdk=\"Microsoft.NET.Sdk\"><PropertyGroup>" +
+                "<OutputType>Exe</OutputType><TargetFramework>net" + Environment.Version.Major + ".0</TargetFramework>" +
+                "<NuGetAudit>false</NuGetAudit>" +
+                "</PropertyGroup></Project>");
+            File.WriteAllText(Path.Combine(directory, "NuGet.Config"),
+                "<configuration><packageSources><clear /></packageSources></configuration>");
+            string output = Path.Combine(directory, "output");
+            executable = Path.Combine(output, "Reader.dll");
+            CommandResult compiled = CliCommandRunner.Run(runtimeExecutable,
+                new[] { "build", project, "--configuration", "Release", "--output", output,
+                    "--nologo", "--verbosity", "quiet" }, directory, 30000);
+#else
             string runtime = Path.Combine(contents, "Resources", "Scripting", "MonoBleedingEdge");
             if (!Directory.Exists(runtime))
                 runtime = Path.Combine(contents, "MonoBleedingEdge");
-            mono = Path.Combine(runtime, "bin", RuntimeInformation.IsOSPlatform(OSPlatform.Windows) ? "mono.exe" : "mono");
+            runtimeExecutable = Path.Combine(runtime, "bin", RuntimeInformation.IsOSPlatform(OSPlatform.Windows) ? "mono.exe" : "mono");
             string compiler = Path.Combine(runtime, "lib", "mono", "4.5", "mcs.exe");
-            Assert.That(File.Exists(mono) && File.Exists(compiler), Is.True,
+            Assert.That(File.Exists(runtimeExecutable) && File.Exists(compiler), Is.True,
                 "The Editor's bundled Mono/compiler must be discovered before running isolated filesystem regressions.");
-            string source = Path.Combine(directory, "Reader.cs");
             executable = Path.Combine(directory, "Reader.exe");
-            File.WriteAllText(source, ReaderSource);
-            CommandResult compiled = CliCommandRunner.Run(mono,
+            CommandResult compiled = CliCommandRunner.Run(runtimeExecutable,
                 GitUtility.Quote(compiler) + " -out:" + GitUtility.Quote(executable) + " " + GitUtility.Quote(source),
                 directory, 20000);
+#endif
             Assert.That(compiled.IsSuccess, Is.True, compiled.StdOut + compiled.StdErr);
         }
 
@@ -56,6 +87,17 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
             Assert.That(error, Does.Contain("size limit"));
             Assert.Throws<OperationCanceledException>(() => BoundedRegularFile.TryRead(
                 path, 4, out _, out _, new CancellationToken(true)));
+        }
+
+        [Test]
+        public void NativeReader_AcceptsRegularFileInBoundedSubprocess()
+        {
+            string path = Path.Combine(directory, Guid.NewGuid().ToString("N"));
+            File.WriteAllBytes(path, new byte[] { 1, 2, 3 });
+            CommandResult result = RunIsolatedReader(path, "bounded");
+            Assert.That(result.ExitCode, Is.EqualTo(1), result.StdOut + result.StdErr);
+            Assert.That(result.TerminationConfirmed, Is.True);
+            Assert.That(result.StdOut, Does.Contain("accepted"));
         }
 
         [Test]
@@ -108,10 +150,16 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                 Assert.Ignore("Windows prevents the concurrent writer through the opened handle's sharing mode.");
             string path = Path.Combine(directory, Guid.NewGuid().ToString("N"));
             File.WriteAllBytes(path, new byte[] { 1, 2, 3 });
+            // Use an exact-second timestamp so DateTime preserves all native precision.
+            DateTime originalTime = new DateTime(2020, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+            File.SetLastWriteTimeUtc(path, originalTime);
             using (BoundedRegularFile.OpenedFile file = BoundedRegularFile.Open(path, writable: true))
             {
                 CommandResult changed = RunIsolatedReader(path, "edit");
                 Assert.That(changed.IsSuccess, Is.True, changed.StdOut + changed.StdErr);
+                Assert.That(changed.TerminationConfirmed, Is.True);
+                Assert.That(new FileInfo(path).Length, Is.EqualTo(3));
+                Assert.That(File.GetLastWriteTimeUtc(path), Is.EqualTo(originalTime));
                 Assert.Throws<IOException>(() => file.Read(3, CancellationToken.None));
                 Assert.Throws<IOException>(() => file.Write(new byte[] { 7 }));
             }
@@ -163,23 +211,45 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
 
         private CommandResult RunIsolatedReader(string path, string reader)
         {
-            return CliCommandRunner.Run(mono,
-                GitUtility.Quote(executable) + " " + GitUtility.Quote(typeof(GitUtility).Assembly.Location) +
-                " " + GitUtility.Quote(path) + " " + reader +
-                " " + GitUtility.Quote(Path.GetDirectoryName(typeof(UnityEngine.Object).Assembly.Location)),
+            return CliCommandRunner.Run(runtimeExecutable,
+                new[] { executable, packageAssemblyPath, path, reader, engineAssemblyDirectory },
                 directory, 5000);
+        }
+
+        private static string GetAssemblyPath(Assembly assembly)
+        {
+#if UNITY_7000_0_OR_NEWER
+            return UnityEngine.AssemblyExtension.GetLoadedAssemblyPath(assembly);
+#else
+            return assembly.Location;
+#endif
         }
 
         private const string ReaderSource = @"
 using System;
 using System.IO;
 using System.Reflection;
+using System.Runtime.InteropServices;
 using System.Threading;
 class Reader {
+ [DllImport(""libc"", EntryPoint=""open"", SetLastError=true)]
+ static extern int OpenForWrite(string path, int flags);
+ [DllImport(""libc"", EntryPoint=""write"", SetLastError=true)]
+ static extern IntPtr WriteBytes(int descriptor, byte[] bytes, UIntPtr count);
+ [DllImport(""libc"", EntryPoint=""close"", SetLastError=true)]
+ static extern int Close(int descriptor);
  static int Main(string[] args) {
   if (args[2]==""edit"") {
    DateTime time=File.GetLastWriteTimeUtc(args[1]);
-   File.WriteAllBytes(args[1],new byte[]{4,5,6});
+   // An independent POSIX writer need not honor managed advisory sharing locks.
+   int descriptor=OpenForWrite(args[1],1);
+   if (descriptor<0) throw new IOException(""Native open failed: ""+Marshal.GetLastWin32Error());
+   try {
+    if (WriteBytes(descriptor,new byte[]{4,5,6},new UIntPtr(3)).ToInt64()!=3)
+     throw new IOException(""Native write failed: ""+Marshal.GetLastWin32Error());
+   } finally {
+    if (Close(descriptor)!=0) throw new IOException(""Native close failed: ""+Marshal.GetLastWin32Error());
+   }
    File.SetLastWriteTimeUtc(args[1],time);
    return 0;
   }

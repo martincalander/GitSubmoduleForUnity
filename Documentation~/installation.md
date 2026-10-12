@@ -5,7 +5,10 @@
 ### Unity
 
 The validated Editor targets are exact Unity `6000.3.22f1`, Unity
-`6000.5.*f1` final releases, and exact Unity `6000.6.0f1` and `6000.6.2f1`, plus the exact `6000.7.0b1` and `6000.7.0b2` betas.
+`6000.5.*f1` final releases, exact Unity `6000.6.0f1` and `6000.6.2f1`,
+the exact `6000.7.0b1` and `6000.7.0b2` betas, and the exact `7000.0.0a7` and
+`7000.0.0a8` alphas.
+Other Unity 7 builds remain unsupported until separately validated.
 Unity `6000.4` and other `6000.6` versions are not currently supported. The package manifest
 declares `6000.3.22f1` as its minimum eligibility version. All package assemblies
 are editor-only.
@@ -66,6 +69,14 @@ When sharing a project manifest, keep those files at a stable project-relative
 path or avoid committing a machine-specific dependency path.
 
 ### Unity Bootstrap Installer
+
+The bundled `.unitypackage` bootstrap retains its validated Unity 6 targets:
+exact `6000.3.22f1`, `6000.5.*f1` final releases, exact `6000.6.0f1` and
+`6000.6.2f1`, and exact `6000.7.0b1` and `6000.7.0b2` betas. It rejects Unity 7.
+For the `7000.0.0a7` and `7000.0.0a8` alphas, use a direct UPM Git URL pinned to a
+revision containing the Unity 7 compatibility changes, or a local checkout of that
+revision. The released `v0.8.1` installation examples below describe the
+Unity 6 workflow.
 
 The GitHub Release includes
 [`GitSubmoduleManagerInstaller-0.8.1.unitypackage`](https://github.com/martincalander/GitSubmoduleForUnity/releases/download/v0.8.1/GitSubmoduleManagerInstaller-0.8.1.unitypackage)

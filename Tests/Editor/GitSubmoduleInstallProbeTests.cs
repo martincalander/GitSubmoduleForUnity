@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Runtime.InteropServices;
 using System.Threading;
 using NUnit.Framework;
 
@@ -17,6 +18,9 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
 
         private ICommandRunner previousRunner;
         private GitSubmoduleInstallProbe probe;
+
+        [DllImport("libc", EntryPoint = "chmod", SetLastError = true)]
+        private static extern int Chmod(string path, uint mode);
 
         [SetUp]
         public void SetUp()
@@ -168,6 +172,46 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                 if (Directory.Exists(testProject))
                     Directory.Delete(testProject, true);
             }
+        }
+
+        [TestCase(448, true)] // 0700
+        [TestCase(488, false)] // 0750
+        [TestCase(504, false)] // 0770
+        [TestCase(455, false)] // 0707
+        public void PrivateDirectoryPermissions_RequiresOwnerOnlyAccess(int mode, bool expected)
+        {
+            if (Path.DirectorySeparatorChar == '\\')
+                Assert.Ignore("POSIX directory permissions do not apply on Windows.");
+
+            string path = Path.Combine(
+                Path.GetTempPath(),
+                "gsm-probe-permissions-" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(path);
+            try
+            {
+                Assert.That(Chmod(path, (uint)mode), Is.Zero);
+                Assert.That(
+                    GitSubmoduleInstallProbe.HasPrivateDirectoryPermissions(path),
+                    Is.EqualTo(expected));
+            }
+            finally
+            {
+                Directory.Delete(path);
+            }
+        }
+
+        [Test]
+        public void PrivateDirectoryPermissions_FailsClosedForMissingPath()
+        {
+            if (Path.DirectorySeparatorChar == '\\')
+                Assert.Ignore("POSIX directory permissions do not apply on Windows.");
+
+            string path = Path.Combine(
+                Path.GetTempPath(),
+                "gsm-probe-permissions-" + Guid.NewGuid().ToString("N"));
+            Assert.That(
+                GitSubmoduleInstallProbe.HasPrivateDirectoryPermissions(path),
+                Is.False);
         }
 
         [Test]

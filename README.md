@@ -9,7 +9,7 @@ Manage Git-hosted Unity packages from Unity's native Package Manager.
 <p align="center">
   <a href="https://github.com/martincalander/GitSubmoduleForUnity/actions/workflows/ci.yml"><img alt="Sanity Checks" src="https://github.com/martincalander/GitSubmoduleForUnity/actions/workflows/ci.yml/badge.svg"></a>
   <a href="https://github.com/martincalander/GitSubmoduleForUnity/releases"><img alt="Package version" src="https://img.shields.io/github/package-json/v/martincalander/GitSubmoduleForUnity?filename=package.json&label=package"></a>
-  <img alt="Validated Unity targets: 6000.3.22f1, 6000.5.*f1, exact 6000.6.0f1 and 6000.6.2f1, and exact 6000.7.0b1 and 6000.7.0b2 betas" src="https://img.shields.io/badge/Unity-6000.3.22f1%20%7C%206000.5.%2Af1%20%7C%206000.6.0f1%20%7C%206000.6.2f1%20%7C%206000.7.0b1%20%7C%206000.7.0b2-222C37?logo=unity&logoColor=white">
+  <img alt="Validated Unity targets: 6000.3.22f1, 6000.5.*f1, exact 6000.6.0f1 and 6000.6.2f1, exact 6000.7.0b1 and 6000.7.0b2 betas, and exact 7000.0.0a7 and 7000.0.0a8 alphas" src="https://img.shields.io/badge/Unity-6000.3.22f1%20%7C%206000.5.%2Af1%20%7C%206000.6.0f1%20%7C%206000.6.2f1%20%7C%206000.7.0b1%20%7C%206000.7.0b2%20%7C%207000.0.0a7%20%7C%207000.0.0a8-222C37?logo=unity&logoColor=white">
   <img alt="Editor only" src="https://img.shields.io/badge/scope-Editor%20only-555">
   <a href="LICENSE.md"><img alt="MIT License" src="https://img.shields.io/badge/license-MIT-blue"></a>
 </p>
@@ -36,14 +36,15 @@ eligible packages between the two modes without leaving the Editor.
 - Validate root `package.json` files and Unity `package.json.meta` markers, then
   resolve missing dependencies before making changes.
 
-The Unity 6.7 support claim is limited to the exact `6000.7.0b1` and `6000.7.0b2` betas. Other
-6.7 previews and final releases remain rejected until separately validated.
+The Unity 6.7 support claim is limited to the exact `6000.7.0b1` and `6000.7.0b2`
+betas. Unity 7 support is limited to the exact `7000.0.0a7` and `7000.0.0a8`
+alphas. Other 6.7 and Unity 7 builds remain rejected until separately validated.
 
 ## Requirements
 
 | Dependency | Requirement |
 | --- | --- |
-| Unity | Exact `6000.3.22f1`, `6000.5.*f1` final releases, exact `6000.6.0f1` and `6000.6.2f1`, and exact `6000.7.0b1` and `6000.7.0b2` betas; Unity `6000.4` is not supported |
+| Unity | Exact `6000.3.22f1`, `6000.5.*f1` final releases, exact `6000.6.0f1` and `6000.6.2f1`, exact `6000.7.0b1` and `6000.7.0b2` betas, and exact `7000.0.0a7` and `7000.0.0a8` alphas; Unity `6000.4` is not supported |
 | [Git](https://git-scm.com/downloads) | Required for package operations |
 | [GitHub CLI](https://cli.github.com/) | Optional; required only for authenticated GitHub discovery |
 
@@ -57,6 +58,12 @@ authentication, and version status. The package is Editor-only and supports
 Windows, macOS, and Linux.
 
 ## Installation
+
+For Unity `7000.0.0a7` or `7000.0.0a8`, use a Git URL pinned to a revision
+containing the Unity 7 compatibility changes, or a local checkout of that
+revision. The published
+`v0.8.1` examples below describe the Unity 6 workflow, and the bundled bootstrap
+rejects Unity 7. See the [installation compatibility notes](Documentation~/installation.md#unity-bootstrap-installer).
 
 | Method | Best for | Uses the signed release artifact |
 | --- | --- | :---: |

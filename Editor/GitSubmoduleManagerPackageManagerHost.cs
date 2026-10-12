@@ -215,7 +215,8 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 return GitHubUtility.SanitizeUiDiagnostic(
                     "Sources > GitHub is unavailable in Unity " + unityVersion +
                     ". Supported Editors are Unity 6000.3.22f1, " +
-                    "6000.5.*f1 final releases, exact 6000.6.0f1 and 6000.6.2f1, and the exact 6000.7.0b1 and 6000.7.0b2 betas.");
+                    "6000.5.*f1 final releases, exact 6000.6.0f1 and 6000.6.2f1, " +
+                    "the exact 6000.7.0b1 and 6000.7.0b2 betas, and the exact 7000.0.0a7 and 7000.0.0a8 alphas.");
             }
 
             return shuttingDown
@@ -300,7 +301,9 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             {
                 error = "The native Package Manager integration supports only " +
                         "Unity 6000.3.22f1, Unity 6000.5.*f1 final releases, " +
-                        "exact Unity 6000.6.0f1 and 6000.6.2f1, and the exact Unity 6000.7.0b1 and 6000.7.0b2 betas.";
+                        "exact Unity 6000.6.0f1 and 6000.6.2f1, " +
+                        "the exact Unity 6000.7.0b1 and 6000.7.0b2 betas, " +
+                        "and the exact Unity 7000.0.0a7 and 7000.0.0a8 alphas.";
                 return false;
             }
 
@@ -374,7 +377,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
 
         internal static Type GetPackageManagerWindowType()
         {
-            foreach (Assembly assembly in AppDomain.CurrentDomain.GetAssemblies())
+            foreach (Assembly assembly in EditorAssemblyCompatibility.GetLoadedAssemblies())
             {
                 Type type = assembly.GetType(PackageManagerWindowTypeName, false);
                 if (type != null && typeof(EditorWindow).IsAssignableFrom(type))
@@ -904,7 +907,11 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             DisposeAllSessions();
             try
             {
+#if ENABLE_CORECLR
+                harmony?.UnpatchSelf();
+#else
                 harmony?.UnpatchAll(HarmonyId);
+#endif
             }
             catch
             {
@@ -1335,7 +1342,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
 
         private static Type FindType(string fullName)
         {
-            foreach (Assembly assembly in AppDomain.CurrentDomain.GetAssemblies())
+            foreach (Assembly assembly in EditorAssemblyCompatibility.GetLoadedAssemblies())
             {
                 Type type = assembly.GetType(fullName, false);
                 if (type != null)

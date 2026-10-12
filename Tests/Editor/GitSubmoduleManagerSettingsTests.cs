@@ -143,6 +143,9 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
         [TestCase("6000.7.0a4")]
         [TestCase("6000.7.0b3")]
         [TestCase("6000.7.0f1")]
+        [TestCase("7000.0.0a6")]
+        [TestCase("7000.0.0a9")]
+        [TestCase("7000.0.0f1")]
         public void UnsupportedEditor_NavigationReportsCompatibilityAndPreservesWelcome(
             string unityVersion)
         {
@@ -167,6 +170,8 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
             Assert.That(navigation.Error, Does.Contain("6000.6.2f1"));
             Assert.That(navigation.Error, Does.Contain("6000.7.0b1"));
             Assert.That(navigation.Error, Does.Contain("6000.7.0b2"));
+            Assert.That(navigation.Error, Does.Contain("7000.0.0a7"));
+            Assert.That(navigation.Error, Does.Contain("7000.0.0a8"));
         }
 
         [TestCase("6000.3.22f1")]
@@ -175,6 +180,8 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
         [TestCase("6000.6.2f1")]
         [TestCase("6000.7.0b1")]
         [TestCase("6000.7.0b2")]
+        [TestCase("7000.0.0a7")]
+        [TestCase("7000.0.0a8")]
         public void SupportedEditor_NavigationRemainsAvailableUntilShutdown(
             string unityVersion)
         {

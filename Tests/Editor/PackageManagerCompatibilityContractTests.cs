@@ -52,6 +52,26 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
         [TestCase(" 6000.7.0b1", false)]
         [TestCase("6000.7.0b1 ", false)]
         [TestCase("6000.7.0f1", false)]
+        [TestCase("7000.0.0a7", true)]
+        [TestCase("7000.0.0a6", false)]
+        [TestCase("7000.0.0a8", true)]
+        [TestCase("7000.0.0a9", false)]
+        [TestCase("7000.0.0a08", false)]
+        [TestCase("7000.0.0a8c1", false)]
+        [TestCase(" 7000.0.0a8", false)]
+        [TestCase("7000.0.0a8 ", false)]
+        [TestCase("7000.0.1a7", false)]
+        [TestCase("7000.1.0a7", false)]
+        [TestCase("7000.0.0b7", false)]
+        [TestCase("7000.0.0f1", false)]
+        [TestCase("7000.0.0a07", false)]
+        [TestCase("07000.0.0a7", false)]
+        [TestCase("7000.00.0a7", false)]
+        [TestCase("7000.0.00a7", false)]
+        [TestCase("7000.0.0a7c1", false)]
+        [TestCase("7000.0.0A7", false)]
+        [TestCase(" 7000.0.0a7", false)]
+        [TestCase("7000.0.0a7 ", false)]
         [TestCase("6000.5.0f2", false)]
         [TestCase("6000.5.0f01", false)]
         [TestCase("06000.5.0f1", false)]
@@ -483,6 +503,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                 collectionTarget != null,
                 "RemoveAction exists, but the exact multi-select " +
                 "TriggerActionImplementation(IReadOnlyCollection<IPackage>) " +
+                "or TriggerActionImplementation(IReadOnlyList<IPackage>) " +
                 "or legacy TriggerActionImplementation(IList<IPackage>) " +
                 "override is unavailable.");
             RequireSelfRemovalPrefixShape(report, singlePrefix, "single");
@@ -518,6 +539,8 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                     parameterType.IsGenericType &&
                     (parameterType.GetGenericTypeDefinition() ==
                          typeof(IReadOnlyCollection<>) ||
+                     parameterType.GetGenericTypeDefinition() ==
+                         typeof(IReadOnlyList<>) ||
                      parameterType.GetGenericTypeDefinition() ==
                          typeof(IList<>)) &&
                     arguments.Length == 1 &&

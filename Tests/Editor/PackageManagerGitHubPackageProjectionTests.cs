@@ -66,6 +66,84 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
         }
 
         [Test]
+        [Category("PackageManagerCompatibility")]
+        public void FactoryContract_PrefersModernServiceWhenLegacyAlsoExists()
+        {
+            Type serviceType = FindPackageFactoryContract(
+                typeof(ModernPackageFactory),
+                typeof(FactoryPackage),
+                typeof(LegacyPackageFactory),
+                out MethodInfo createPackageMethod);
+
+            Assert.That(serviceType, Is.EqualTo(typeof(ModernPackageFactory)));
+            Assert.That(createPackageMethod.DeclaringType,
+                Is.EqualTo(typeof(ModernPackageFactory)));
+        }
+
+        [Test]
+        [Category("PackageManagerCompatibility")]
+        public void FactoryContract_UsesLegacyServiceAndBaseDeclaredConstruction()
+        {
+            Type serviceType = FindPackageFactoryContract(
+                null,
+                typeof(FactoryPackage),
+                typeof(LegacyPackageFactory),
+                out MethodInfo createPackageMethod);
+
+            Assert.That(serviceType, Is.EqualTo(typeof(LegacyPackageFactory)));
+            Assert.That(createPackageMethod.DeclaringType,
+                Is.EqualTo(typeof(FactoryPackage.Factory)));
+            object package = createPackageMethod.Invoke(
+                new LegacyPackageFactory(),
+                new object[]
+                {
+                    "projection-test", new FactoryVersionList(), null,
+                    false, false, null, null
+                });
+            Assert.That(package, Is.TypeOf<FactoryPackage>(),
+                "The verified base construction method must not dispatch to a hidden service method.");
+        }
+
+        [Test]
+        [Category("PackageManagerCompatibility")]
+        public void FactoryContract_DoesNotFallBackWhenModernContractDrifts()
+        {
+            Type serviceType = FindPackageFactoryContract(
+                typeof(MissingPackageFactory),
+                typeof(FactoryPackage),
+                typeof(LegacyPackageFactory),
+                out MethodInfo createPackageMethod);
+
+            Assert.That(serviceType, Is.Null);
+            Assert.That(createPackageMethod, Is.Null);
+        }
+
+        [TestCase(typeof(FactoryPackage), null)]
+        [TestCase(null, typeof(LegacyPackageFactory))]
+        [TestCase(typeof(MissingPackageFactory), typeof(LegacyPackageFactory))]
+        [TestCase(typeof(FactoryPackage), typeof(MissingPackageFactory))]
+        [TestCase(typeof(FactoryPackage), typeof(IndirectPackageFactory))]
+        [TestCase(typeof(FactoryPackage), typeof(AbstractPackageFactory))]
+        [TestCase(typeof(FactoryPackage), typeof(GenericPackageFactory<>))]
+        [TestCase(typeof(InheritedFactoryPackage), typeof(InheritedFactoryService))]
+        [TestCase(typeof(GenericMethodPackage), typeof(GenericMethodFactoryService))]
+        [TestCase(typeof(VirtualMethodPackage), typeof(VirtualMethodFactoryService))]
+        [Category("PackageManagerCompatibility")]
+        public void FactoryContract_RejectsUnverifiedLegacyShapes(
+            Type packageType,
+            Type legacyServiceType)
+        {
+            Type serviceType = FindPackageFactoryContract(
+                null,
+                packageType,
+                legacyServiceType,
+                out MethodInfo createPackageMethod);
+
+            Assert.That(serviceType, Is.Null);
+            Assert.That(createPackageMethod, Is.Null);
+        }
+
+        [Test]
         public void PackageId_IsStableAndScopedToTheOwnedPrefix()
         {
             PackageManagerGitHubRepository original = CreateRepository(
@@ -781,6 +859,33 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
             return host;
         }
 
+        private static Type FindPackageFactoryContract(
+            Type modernFactoryType,
+            Type packageType,
+            Type legacyServiceType,
+            out MethodInfo createPackageMethod)
+        {
+            Type contractType = ProjectionType.GetNestedType(
+                "ReflectionContract",
+                BindingFlags.NonPublic);
+            MethodInfo method = contractType?.GetMethod(
+                "FindPackageFactoryContract",
+                StaticMembers);
+            Assert.That(method, Is.Not.Null);
+            object[] arguments =
+            {
+                modernFactoryType,
+                packageType,
+                legacyServiceType,
+                typeof(IFactoryPackage),
+                typeof(FactoryVersionList),
+                null
+            };
+            Type serviceType = (Type)method.Invoke(null, arguments);
+            createPackageMethod = (MethodInfo)arguments[5];
+            return serviceType;
+        }
+
         private static bool TryResolveProjectionServices(
             out object contract,
             out object database)
@@ -1072,6 +1177,85 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                 repository.PackageManifestMetaGuid,
                 Is.EqualTo("0123456789abcdef0123456789abcdef"));
         }
+
+        private interface IFactoryPackage { }
+
+        private sealed class FactoryVersionList { }
+
+        private sealed class FactoryPackage : IFactoryPackage
+        {
+            public class Factory
+            {
+                public FactoryPackage CreatePackage(
+                    string name, FactoryVersionList versions, object product,
+                    bool discoverable, bool deprecated, string message, object compliance)
+                {
+                    return new FactoryPackage();
+                }
+            }
+        }
+
+        private sealed class ModernPackageFactory
+        {
+            public FactoryPackage CreatePackage(
+                string name, FactoryVersionList versions, object product,
+                bool discoverable, bool deprecated, string message, object compliance)
+            {
+                return new FactoryPackage();
+            }
+        }
+
+        private class LegacyPackageFactory : FactoryPackage.Factory
+        {
+            public new FactoryPackage CreatePackage(
+                string name, FactoryVersionList versions, object product,
+                bool discoverable, bool deprecated, string message, object compliance)
+            {
+                throw new InvalidOperationException("Only the base factory method is verified.");
+            }
+        }
+
+        private sealed class MissingPackageFactory { }
+        private sealed class IndirectPackageFactory : LegacyPackageFactory { }
+        private abstract class AbstractPackageFactory : FactoryPackage.Factory { }
+        private sealed class GenericPackageFactory<T> : FactoryPackage.Factory { }
+
+        private sealed class InheritedFactoryPackage : IFactoryPackage
+        {
+            public class Factory : FactoryPackage.Factory { }
+        }
+
+        private sealed class InheritedFactoryService : InheritedFactoryPackage.Factory { }
+
+        private sealed class GenericMethodPackage : IFactoryPackage
+        {
+            public class Factory
+            {
+                public GenericMethodPackage CreatePackage<T>(
+                    string name, FactoryVersionList versions, object product,
+                    bool discoverable, bool deprecated, string message, object compliance)
+                {
+                    return new GenericMethodPackage();
+                }
+            }
+        }
+
+        private sealed class GenericMethodFactoryService : GenericMethodPackage.Factory { }
+
+        private sealed class VirtualMethodPackage : IFactoryPackage
+        {
+            public class Factory
+            {
+                public virtual VirtualMethodPackage CreatePackage(
+                    string name, FactoryVersionList versions, object product,
+                    bool discoverable, bool deprecated, string message, object compliance)
+                {
+                    return new VirtualMethodPackage();
+                }
+            }
+        }
+
+        private sealed class VirtualMethodFactoryService : VirtualMethodPackage.Factory { }
 
         private sealed class MutablePackageLink
         {

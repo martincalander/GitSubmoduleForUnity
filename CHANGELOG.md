@@ -13,6 +13,12 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   scene reload enabled, plus guidance for keeping Editor service state alive
   while game code resets its own per-play state.
 
+- Added exact Unity `7000.0.0a7` and `7000.0.0a8` alpha compatibility.
+  Other Unity 7 builds remain
+  rejected by the runtime gate. Unity 7 requires a Git dependency or local
+  checkout containing these changes; the bundled bootstrap retains its
+  validated Unity 6 targets.
+
 - Added exact Unity `6000.7.0b1` and `6000.7.0b2` beta compatibility. Other 6.7 builds remain
   rejected by the independent runtime and installer gates.
 
@@ -25,6 +31,12 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Declare the manager's Editor-session static state as persistent across Play
   mode with Unity's lifecycle attributes, preserving worker ownership,
   subscriptions, and recovery state when domain reload is disabled.
+
+- Select patching libraries by Editor runtime. Mono preserves the original
+  Harmony 2.4.1 binary; CoreCLR uses eleven original upstream HarmonyX 2.16.1,
+  MonoMod, and Mono.Cecil 0.11.6 DLLs with pinned provenance. Their .NET Standard
+  builds match Unity 7's compilation profile, and imports remain Editor-only
+  with explicit assembly references.
 
 - Verified installed submodules now use Unity Package Manager's standard
   **Remove** action instead of a separate **Uninstall Submodule** command.
@@ -41,6 +53,17 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   resolution again when needed.
 
 ### Fixed
+
+- Restore GitHub discovery projection on early Unity `6000.5` final releases
+  whose package construction factory uses the older nested contract.
+- Keep Cecil and its Mdb, Pdb, and Rocks assemblies at 0.11.6 together so
+  Unity 7 cold startup does not load incompatible symbol-reader interfaces.
+- Check owner-only temporary clone permissions through CoreCLR on Unity 7,
+  preserving exact `0700` access and rejecting unverifiable permissions.
+- Recognize Unity `7000.0.0a7`'s exact read-only-list multi-select Remove
+  signature while retaining the independently validated Unity 6 signatures.
+- Recognize Unity `7000.0.0a7`'s paired read-only-list package projection
+  signature while preserving transient ownership and exact source checks.
 
 - Fixed branch inspection staying pending in the URL installer when repeated
   presentation updates postponed the same probe.

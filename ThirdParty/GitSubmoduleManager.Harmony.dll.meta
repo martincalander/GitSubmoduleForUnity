@@ -5,7 +5,8 @@ PluginImporter:
   serializedVersion: 3
   iconMap: {}
   executionOrder: {}
-  defineConstraints: []
+  defineConstraints:
+  - '!ENABLE_CORECLR'
   isPreloaded: 0
   isOverridable: 0
   isExplicitlyReferenced: 1

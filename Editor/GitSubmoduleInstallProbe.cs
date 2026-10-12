@@ -1524,6 +1524,20 @@ namespace MartinCalander.GitSubmoduleManager.Editor
 
             try
             {
+#if UNITY_7000_0_OR_NEWER && ENABLE_CORECLR
+                // The Editor runs on .NET, while Unity's compile-time API profile
+                // does not expose GetUnixFileMode. Mono.Posix is not present here.
+                MethodInfo getMode = typeof(File).GetMethod(
+                    "GetUnixFileMode",
+                    BindingFlags.Public | BindingFlags.Static,
+                    binder: null,
+                    types: new[] { typeof(string) },
+                    modifiers: null);
+                if (getMode == null)
+                    return false;
+
+                uint mode = Convert.ToUInt32(getMode.Invoke(null, new object[] { path }));
+#else
                 Type syscallType = Type.GetType(
                     "Mono.Unix.Native.Syscall, Mono.Posix",
                     throwOnError: false);
@@ -1550,6 +1564,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                     return false;
 
                 uint mode = Convert.ToUInt32(modeField.GetValue(arguments[1]));
+#endif
                 return (mode & UnixPermissionBitsMask) == UnixOwnerDirectoryMode;
             }
             catch

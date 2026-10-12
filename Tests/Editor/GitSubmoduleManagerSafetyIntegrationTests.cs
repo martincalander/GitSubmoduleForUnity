@@ -285,9 +285,9 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                     Array.Empty<string>(),
                     Environment.CurrentDirectory);
 
-                Assert.That(startInfo.EnvironmentVariables["GIT_DIR"], Is.Null);
-                Assert.That(startInfo.EnvironmentVariables["GIT_CONFIG_COUNT"], Is.Null);
-                Assert.That(startInfo.EnvironmentVariables["UNITY_PASSWORD"], Is.Null);
+                Assert.That(startInfo.EnvironmentVariables.ContainsKey("GIT_DIR"), Is.False);
+                Assert.That(startInfo.EnvironmentVariables.ContainsKey("GIT_CONFIG_COUNT"), Is.False);
+                Assert.That(startInfo.EnvironmentVariables.ContainsKey("UNITY_PASSWORD"), Is.False);
                 Assert.That(startInfo.EnvironmentVariables["GIT_TERMINAL_PROMPT"], Is.EqualTo("0"));
                 Assert.That(startInfo.EnvironmentVariables["SSH_ASKPASS_REQUIRE"], Is.EqualTo("never"));
             }
