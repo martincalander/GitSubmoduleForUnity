@@ -25,7 +25,8 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             if (string.Equals(unityVersion, "6000.7.0b1", StringComparison.Ordinal) ||
                 string.Equals(unityVersion, "6000.7.0b2", StringComparison.Ordinal) ||
                 string.Equals(unityVersion, "7000.0.0a7", StringComparison.Ordinal) ||
-                string.Equals(unityVersion, "7000.0.0a8", StringComparison.Ordinal))
+                string.Equals(unityVersion, "7000.0.0a8", StringComparison.Ordinal) ||
+                string.Equals(unityVersion, "7000.0.0a9", StringComparison.Ordinal))
                 return true;
 
             if (string.IsNullOrEmpty(unityVersion))
@@ -107,7 +108,8 @@ namespace MartinCalander.GitSubmoduleManager.Editor
     /// Unity's internal extension-page contract. The package deliberately
     /// targets the validated Unity 6000.3.22f1, Unity 6000.5, and exact
     /// Unity 6000.6.0f1 and 6000.6.2f1, the exact 6000.7.0b1 and 6000.7.0b2
-    /// beta contracts, and the exact Unity 7000.0.0a7 and 7000.0.0a8 alpha contracts.
+    /// beta contracts, and the exact Unity 7000.0.0a7, 7000.0.0a8,
+    /// and 7000.0.0a9 alpha contracts.
     /// </summary>
 #if UNITY_6000_5_OR_NEWER
     // Applied filter markers follow native Editor pages across Play mode transitions.

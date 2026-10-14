@@ -7,7 +7,7 @@ compatibility, and a native Unity Editor experience over feature count.
 
 - maintain the current editor workflow on exact Unity `6000.3.22f1`, across
   Unity `6000.5.*f1` final patch releases, exact Unity `6000.6.0f1` and `6000.6.2f1`,
-  the exact `6000.7.0b1` and `6000.7.0b2` betas, and the exact `7000.0.0a7` and `7000.0.0a8` alphas;
+  the exact `6000.7.0b1` and `6000.7.0b2` betas, and the exact `7000.0.0a7`, `7000.0.0a8`, and `7000.0.0a9` alphas;
 - expand Windows, macOS, and Linux CI coverage where Unity licensing permits;
 - improve update-state visibility without performing implicit network work;
 - continue expanding integration coverage with temporary Git repositories;

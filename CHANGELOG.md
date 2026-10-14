@@ -9,6 +9,9 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Added exact Unity `7000.0.0a9` alpha compatibility while preserving the
+  independently guarded Package Manager contracts and existing Unity targets.
+
 - Added repeated Play mode transition coverage with domain reload disabled and
   scene reload enabled, plus guidance for keeping Editor service state alive
   while game code resets its own per-play state.

@@ -61,7 +61,7 @@ small independent setup/status surface and does not manage packages itself.
 
 On exact Unity `6000.3.22f1`, a Unity `6000.5.*f1` final release, exact Unity
 `6000.6.0f1` or `6000.6.2f1`, the exact `6000.7.0b1` and `6000.7.0b2` betas,
-or the exact `7000.0.0a7` and `7000.0.0a8` alphas, the host registers a native
+or the exact `7000.0.0a7`, `7000.0.0a8`, and `7000.0.0a9` alphas, the host registers a native
 **GitHub** page through Unity's internal `ExtensionPage` contract and places its row under
 **Sources**. Users reach it through **Window > Package Management > Package
 Manager > Sources > GitHub**, or through the explicit buttons in Welcome and
@@ -213,8 +213,8 @@ in [Third Party Notices](../Third%20Party%20Notices.md).
 
 The validated Package Manager contract targets are exact Unity `6000.3.22f1`,
 Unity `6000.5.*f1` final releases, exact Unity `6000.6.0f1` and `6000.6.2f1`,
-the exact `6000.7.0b1` and `6000.7.0b2` betas, and the exact `7000.0.0a7` and
-`7000.0.0a8` alphas.
+the exact `6000.7.0b1` and `6000.7.0b2` betas, and the exact `7000.0.0a7`, `7000.0.0a8`, and
+`7000.0.0a9` alphas.
 Other Unity 7 builds remain unsupported until separately validated.
 Unity `6000.4` and other `6000.6` versions are not supported contract targets. `package.json`
 declares `6000.3.22f1` only as UPM's minimum
@@ -658,8 +658,8 @@ outcomes.
 The `PackageManagerCompatibility` category inventories the reflected Package
 Manager types and exact signatures used by the validated Unity `6000.3.22f1`,
 Unity `6000.5.*f1`, exact Unity `6000.6.0f1` and `6000.6.2f1`, the exact
-`6000.7.0b1` and `6000.7.0b2` beta contracts, and the exact `7000.0.0a7` and
-`7000.0.0a8` alpha contracts, then verifies Harmony ownership for resolved hooks. It reports contract drift with the Unity version
+`6000.7.0b1` and `6000.7.0b2` beta contracts, and the exact `7000.0.0a7`, `7000.0.0a8`, and
+`7000.0.0a9` alpha contracts, then verifies Harmony ownership for resolved hooks. It reports contract drift with the Unity version
 and platform. Runs on
 any other Editor version, including Unity `6000.4`, are migration diagnostics
 and do not constitute a support claim.

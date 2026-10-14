@@ -216,7 +216,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                     "Sources > GitHub is unavailable in Unity " + unityVersion +
                     ". Supported Editors are Unity 6000.3.22f1, " +
                     "6000.5.*f1 final releases, exact 6000.6.0f1 and 6000.6.2f1, " +
-                    "the exact 6000.7.0b1 and 6000.7.0b2 betas, and the exact 7000.0.0a7 and 7000.0.0a8 alphas.");
+                    "the exact 6000.7.0b1 and 6000.7.0b2 betas, and the exact 7000.0.0a7, 7000.0.0a8, and 7000.0.0a9 alphas.");
             }
 
             return shuttingDown
@@ -303,7 +303,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                         "Unity 6000.3.22f1, Unity 6000.5.*f1 final releases, " +
                         "exact Unity 6000.6.0f1 and 6000.6.2f1, " +
                         "the exact Unity 6000.7.0b1 and 6000.7.0b2 betas, " +
-                        "and the exact Unity 7000.0.0a7 and 7000.0.0a8 alphas.";
+                        "and the exact Unity 7000.0.0a7, 7000.0.0a8, and 7000.0.0a9 alphas.";
                 return false;
             }
 

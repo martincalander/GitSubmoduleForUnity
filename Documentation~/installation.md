@@ -6,8 +6,8 @@
 
 The validated Editor targets are exact Unity `6000.3.22f1`, Unity
 `6000.5.*f1` final releases, exact Unity `6000.6.0f1` and `6000.6.2f1`,
-the exact `6000.7.0b1` and `6000.7.0b2` betas, and the exact `7000.0.0a7` and
-`7000.0.0a8` alphas.
+the exact `6000.7.0b1` and `6000.7.0b2` betas, and the exact `7000.0.0a7`, `7000.0.0a8`, and
+`7000.0.0a9` alphas.
 Other Unity 7 builds remain unsupported until separately validated.
 Unity `6000.4` and other `6000.6` versions are not currently supported. The package manifest
 declares `6000.3.22f1` as its minimum eligibility version. All package assemblies
@@ -73,7 +73,7 @@ path or avoid committing a machine-specific dependency path.
 The bundled `.unitypackage` bootstrap retains its validated Unity 6 targets:
 exact `6000.3.22f1`, `6000.5.*f1` final releases, exact `6000.6.0f1` and
 `6000.6.2f1`, and exact `6000.7.0b1` and `6000.7.0b2` betas. It rejects Unity 7.
-For the `7000.0.0a7` and `7000.0.0a8` alphas, use a direct UPM Git URL pinned to a
+For the `7000.0.0a7`, `7000.0.0a8`, and `7000.0.0a9` alphas, use a direct UPM Git URL pinned to a
 revision containing the Unity 7 compatibility changes, or a local checkout of that
 revision. The released `v0.8.1` installation examples below describe the
 Unity 6 workflow.

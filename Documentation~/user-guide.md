@@ -3,7 +3,7 @@
 Git Submodule Manager extends Unity's existing Package Manager. On exact Unity
 `6000.3.22f1`, a Unity `6000.5.*f1` final release, exact Unity `6000.6.0f1` or
 `6000.6.2f1`, the exact `6000.7.0b1` and `6000.7.0b2` betas, or the exact
-`7000.0.0a7` and `7000.0.0a8` alphas,
+`7000.0.0a7`, `7000.0.0a8`, and `7000.0.0a9` alphas,
 open **Window > Package Management > Package Manager**, then select **GitHub**
 under **Sources**. There is no separate package management window.
 
