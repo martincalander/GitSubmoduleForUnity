@@ -125,9 +125,7 @@ def check_package_json() -> None:
 
     dependencies = package.get("dependencies") or {}
     expected_dependencies = {
-        "com.unity.modules.imgui": "1.0.0",
-        "com.unity.modules.jsonserialize": "1.0.0",
-        "com.unity.nuget.newtonsoft-json": "3.2.2",
+        "com.unity.modules.uielements": "1.0.0",
     }
     if dependencies != expected_dependencies:
         fail("package.json contains unexpected dependencies")

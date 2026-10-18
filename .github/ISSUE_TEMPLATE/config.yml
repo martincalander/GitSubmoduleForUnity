@@ -2,7 +2,7 @@ blank_issues_enabled: false
 contact_links:
   - name: Usage questions and support
     url: https://github.com/martincalander/GitSubmoduleForUnity/issues/new?template=support_request.yml
-    about: Ask for help with setup, authentication, or package workflows.
+    about: Ask for help with installed package status, sources, or legacy workflows.
   - name: Security vulnerability
     url: https://github.com/martincalander/GitSubmoduleForUnity/security/policy
     about: Read the private reporting policy. Do not open a public vulnerability issue.

@@ -2,7 +2,7 @@
 
 ## Creator and Maintainer
 
-- **Martin Calander** — creator and maintainer
+- **Martin Calander**: creator and maintainer
   - [GitHub](https://github.com/martincalander)
   - [Website](https://martincalander.com)
 

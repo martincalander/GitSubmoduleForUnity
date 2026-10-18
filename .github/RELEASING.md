@@ -4,6 +4,12 @@ This guide is for maintainers publishing a GitHub release for the UPM package.
 Releases follow [Semantic Versioning](https://semver.org/) and are produced by
 the [Publish Release workflow](workflows/release.yml).
 
+`main` contains the simplified status-and-sources implementation; `legacy`
+preserves the former management workflow. Promoting the branch does not publish
+a release. Existing `v0.8.1` tags, OpenUPM packages, and installer artifacts stay
+unchanged. Choose a new version for the first simplified release and verify
+its exact payload and bootstrap before tagging.
+
 ## Release Authority
 
 Only maintainers identified in [MAINTAINERS.md](MAINTAINERS.md) with repository
@@ -67,9 +73,9 @@ The version in [`package.json`](../package.json) and the tag without its leading
    the builder. Repository validation and the release workflow require the
    published bootstrap to match those locally tested bytes.
 7. In a clean Unity project, install the package from the exact release commit,
-   run `MartinCalander.GitSubmoduleManager.Editor.Tests` in EditMode, then test
-   submodule and read-only installation, both eligible conversions, and
-   submodule removal.
+   run `MartinCalander.GitSubmoduleManager.Editor.Tests` in EditMode, then verify
+   submodule classification, the installed GitHub source, ordinary package
+   actions, and protection against raw embedded deletion of submodules.
 8. Record any platform or Unity version that could not be tested in the release
    pull request.
 9. Merge the release pull request only after required checks pass and the
@@ -110,8 +116,15 @@ Create an annotated tag on the reviewed release commit:
 ```bash
 git switch main
 git pull --ff-only
-git tag -a v0.8.1 -m "Git Submodule Manager 0.8.1"
-git push origin v0.8.1
+release_version="$(python3 -c 'import json; print(json.load(open("package.json"))["version"])')"
+release_tag="v$release_version"
+# Stop if this version has already been tagged.
+if git rev-parse --verify "refs/tags/$release_tag" >/dev/null 2>&1; then
+  echo "Choose a new, unreleased package version before tagging." >&2
+  exit 1
+fi
+git tag -a "$release_tag" -m "Git Submodule Manager $release_version"
+git push origin "$release_tag"
 ```
 
 Pushing the tag starts the Publish Release workflow. The workflow:
@@ -150,7 +163,7 @@ immutable release.
 - Install the tag from a clean Unity project:
 
   ```text
-  https://github.com/martincalander/GitSubmoduleForUnity.git#v0.8.1
+  https://github.com/martincalander/GitSubmoduleForUnity.git#v<new-package-version>
   ```
 
 - Confirm the package imports, **Package Manager > Sources > GitHub** opens, and

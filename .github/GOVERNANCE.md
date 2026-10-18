@@ -8,13 +8,20 @@ shared. Participation is governed by the [Code of Conduct](CODE_OF_CONDUCT.md).
 
 Decisions are evaluated in this order:
 
-1. protect users and their repositories from data loss or unsafe mutations;
-2. preserve compatibility across supported Unity versions, Windows, macOS,
-   and Linux;
-3. keep the package editor-only and focused on Git-backed UPM packages, with
-   editable submodules limited to direct children of `Packages/`;
-4. maintain clear, testable, and reviewable code;
-5. improve performance where it does not compromise correctness or clarity.
+1. protect users and their repositories from accidental deletion and incorrect
+   package classification;
+2. preserve compatibility across the exact documented Unity versions and verify
+   behavior on Windows, macOS, and Linux;
+3. keep the package Editor-only and focused on installed-package status and
+   **Sources > GitHub** inside Unity's native Package Manager;
+4. keep background work and memory use small without compromising correctness;
+5. maintain clear, testable, and reviewable code.
+
+The `main` branch develops this focused design. Installation, conversion,
+updates, dependency resolution, and removal belong to Unity and Git. The former
+management workflows are preserved on
+[`legacy`](https://github.com/martincalander/GitSubmoduleForUnity/tree/legacy);
+published `0.8.1` artifacts still contain that earlier implementation.
 
 ## Roles
 

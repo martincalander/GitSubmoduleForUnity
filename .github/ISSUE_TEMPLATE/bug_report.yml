@@ -24,16 +24,17 @@ body:
   - type: input
     id: package
     attributes:
-      label: Package version or commit
-      placeholder: v0.8.0 or commit SHA
+      label: Package branch, version, and commit
+      description: Identify main for status and sources, or legacy for the former manager. Include the commit SHA or release tag.
+      placeholder: main at commit SHA, or legacy release v0.8.1
     validations:
       required: true
   - type: input
     id: cli
     attributes:
-      label: Git and GitHub CLI versions
-      description: Include Git; include gh when discovery is involved.
-      placeholder: git 2.50.1; gh 2.96.0
+      label: Git version
+      description: GitHub CLI is not used on main. Include its version only for a legacy discovery issue.
+      placeholder: git 2.50.1
     validations:
       required: true
   - type: textarea

@@ -1,33 +1,38 @@
 # Roadmap
 
-Git Submodule Manager prioritizes predictable Git behavior, cross-platform
-compatibility, and a native Unity Editor experience over feature count.
+Git Submodule Manager has a focused role: show how packages are installed and
+make installed GitHub packages easy to find in Unity's native Package Manager.
+The `main` branch develops this status and sources view. The former management
+workflows are preserved on
+[`legacy`](https://github.com/martincalander/GitSubmoduleForUnity/tree/legacy).
 
 ## Current Priorities
 
-- maintain the current editor workflow on exact Unity `6000.3.22f1`, across
-  Unity `6000.5.*f1` final patch releases, exact Unity `6000.6.0f1` and `6000.6.2f1`,
-  the exact `6000.7.0b1` and `6000.7.0b2` betas, and the exact `7000.0.0a7`, `7000.0.0a8`, and `7000.0.0a9` alphas;
-- expand Windows, macOS, and Linux CI coverage where Unity licensing permits;
-- improve update-state visibility without performing implicit network work;
-- continue expanding integration coverage with temporary Git repositories;
-- improve accessibility, keyboard navigation, and narrow-window behavior.
+- Keep submodules clearly distinguishable from ordinary Unity packages.
+- Keep **Sources > GitHub** limited to installed GitHub packages.
+- Preserve a small Editor footprint, with no continuous window scanning or
+  background network discovery.
+- Keep classification and embedded-folder deletion protection reliable across
+  refreshes, script reloads, and unusual Git layouts.
+- Verify compatibility on the exact Unity targets before releasing this design.
 
-## Candidate Work
+The compatibility gate retains exact Unity `6000.3.22f1`, `6000.5.*f1` final
+releases, exact `6000.6.0f1` and `6000.6.2f1`, exact `6000.7.0b1` and
+`6000.7.0b2` betas, and exact `7000.0.0a7`, `7000.0.0a8`, `7000.0.0a9`, and
+`7000.0.0a10` alphas. Local validation passed all 192 Editor tests on Unity
+`7000.0.0a10` on macOS. Other retained targets and platforms still need
+verification against this implementation before a release claim. See the
+[verification record](../.github/CONTRIBUTING.md#edge-case-verification-on-2026-10-19).
 
-- package version and commit comparison;
-- explicit batch update with per-package confirmation and failure isolation;
-- dependency visualization for submodule packages;
-- additional Git hosting providers in discovery views.
+## Product Boundary
 
-## Non-Goals
+Installation, updates, conversion, dependency resolution, and removal stay
+with Unity and Git. Remote GitHub discovery, account setup, Welcome and
+Preferences surfaces, and automatic repository operations are outside the
+current product scope. Published `0.8.1` artifacts retain those legacy workflows.
 
-- replacing Git or credential managers;
-- silently initializing, updating, or mutating repositories on editor startup;
-- installing system tools from inside Unity;
-- managing subtrees, registries, or arbitrary project folders;
-- storing GitHub tokens or Git credentials.
-
-The roadmap is directional rather than a delivery schedule. Before starting a
-large change, follow the [contribution guide](../.github/CONTRIBUTING.md) so its
-design and compatibility impact can be discussed first.
+Further work should make the status view more reliable, easier to understand,
+or less expensive to run. Performance claims need measurements; the existing
+startup comparison did not establish a meaningful Editor startup speedup.
+Discuss additions through the [contribution guide](../.github/CONTRIBUTING.md)
+before expanding its responsibilities.

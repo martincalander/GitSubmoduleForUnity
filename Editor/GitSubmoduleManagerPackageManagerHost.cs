@@ -1,1355 +1,257 @@
 using System;
 using System.Collections.Generic;
-using System.Reflection;
-using HarmonyLib;
 using UnityEditor;
 using UnityEditor.Callbacks;
+using PackageInfo = UnityEditor.PackageManager.PackageInfo;
+using UnityEditor.PackageManager.UI;
 using UnityEngine;
 using UnityEngine.UIElements;
 
 namespace MartinCalander.GitSubmoduleManager.Editor
 {
-    internal sealed class GitSubmoduleManagerNavigationRequest : IDisposable
-    {
-        private readonly Action<Action<bool, string>> requestOpen;
-        private readonly Action activated;
-        private bool disposed;
-        private int generation;
-
-        internal GitSubmoduleManagerNavigationRequest(
-            Action<Action<bool, string>> requestOpen,
-            Action activated = null)
-        {
-            this.requestOpen = requestOpen ??
-                throw new ArgumentNullException(nameof(requestOpen));
-            this.activated = activated;
-        }
-
-        internal event Action Changed;
-        internal bool IsPending { get; private set; }
-        internal string Error { get; private set; } = string.Empty;
-
-        internal void Open()
-        {
-            if (disposed || IsPending)
-                return;
-
-            int requestGeneration = ++generation;
-            IsPending = true;
-            Error = string.Empty;
-            NotifyChanged();
-            try
-            {
-                requestOpen((success, error) =>
-                    Complete(requestGeneration, success, error));
-            }
-            catch (Exception exception)
-            {
-                Complete(requestGeneration, false, exception.Message);
-            }
-        }
-
-        private void Complete(int requestGeneration, bool success, string error)
-        {
-            if (disposed || !IsPending || requestGeneration != generation)
-                return;
-
-            IsPending = false;
-            Error = success
-                ? string.Empty
-                : GitHubUtility.SanitizeUiDiagnostic(
-                    string.IsNullOrWhiteSpace(error)
-                        ? "Sources > GitHub could not be opened. Try again."
-                        : error);
-            NotifyChanged();
-            if (success)
-                activated?.Invoke();
-        }
-
-        private void NotifyChanged()
-        {
-            Delegate[] callbacks = Changed?.GetInvocationList();
-            if (callbacks == null)
-                return;
-
-            foreach (Delegate callback in callbacks)
-            {
-                try
-                {
-                    ((Action)callback).Invoke();
-                }
-                catch
-                {
-                    // Presentation callbacks cannot own request completion.
-                }
-            }
-        }
-
-        public void Dispose()
-        {
-            disposed = true;
-            IsPending = false;
-            Changed = null;
-        }
-    }
-
-    /// <summary>
-    /// Installs the native Sources &gt; GitHub extension into Unity's Package
-    /// Manager. This host never replaces or hides Unity's Package Manager UI.
-    /// </summary>
     [InitializeOnLoad]
 #if UNITY_6000_5_OR_NEWER
-    // Host sessions and patch ownership follow Editor windows, not Play mode sessions.
     [Unity.Scripting.LifecycleManagement.NoAutoStaticsCleanup]
 #endif
     internal static class GitSubmoduleManagerPackageManagerHost
     {
-        internal enum DetachedWindowAction
+        internal const string WindowTypeName = "UnityEditor.PackageManager.UI.PackageManagerWindow";
+        private const string RootTypeName = "UnityEditor.PackageManager.UI.Internal.PackageManagerWindowRoot";
+        private static readonly Dictionary<VisualElement, Session> Sessions = new();
+        private static readonly StatusDetails Details = new();
+        private static bool registered;
+        internal static string LastError { get; private set; } = string.Empty;
+        internal static int SessionCount => Sessions.Count;
+        internal static int PendingAttachmentCount
         {
-            Repair,
-            Release
-        }
-
-        internal const string HarmonyId =
-            "com.martincalander.gitsubmodulemanager.package-manager-host";
-        internal const string PackageManagerWindowTypeName =
-            "UnityEditor.PackageManager.UI.PackageManagerWindow";
-        private const string SidebarElementName = "sidebar";
-        private const double WindowScanIntervalSeconds = 0.5;
-        private const double OpenRequestTimeoutSeconds = 10.0;
-        private const double PatchRetryIntervalSeconds = 0.5;
-        private const double PatchRetryWindowSeconds = 10.0;
-        private const double SessionRepairTimeoutSeconds = 10.0;
-
-        private static readonly string[] LifecycleMethodNames =
-        {
-            "BuildGUI",
-            "CreateGUI",
-            "OnEnable"
-        };
-
-        private static readonly Dictionary<EditorWindow, HostSession> Sessions = new();
-        private static readonly List<EditorWindow> DeadSessionWindows = new();
-
-        private static Harmony harmony;
-        private static bool isPatched;
-        private static bool updateSubscribed;
-        private static bool patchRetryActive;
-        private static bool isShuttingDown;
-        private static bool openRequested;
-        private static Action<bool, string> openRequestCompleted;
-        private static double openRequestDeadline;
-        private static double nextWindowScanTime;
-        private static double patchRetryDeadline;
-        private static double nextPatchRetryTime;
-
-        static GitSubmoduleManagerPackageManagerHost()
-        {
-            if (!PackageManagerUnityVersionSupport.IsCurrentVersionSupported)
-                return;
-
-            RegisterEditorLifecycleCallbacks();
-
-            if (!TryPatch(out _))
+            get
             {
-                BeginPatchRetryWindow();
-                EditorApplication.delayCall += RetryPatch;
-            }
-
-            EditorApplication.delayCall += AttachExistingWindows;
-        }
-
-        [DidReloadScripts]
-        private static void AfterScriptsReloaded()
-        {
-            if (!PackageManagerUnityVersionSupport.IsCurrentVersionSupported)
-                return;
-
-            // A normal domain reload resets this static state before this
-            // callback runs. Unity's in-place script reload path can preserve
-            // the old domain after BeforeAssemblyReload retired the sessions,
-            // however, so explicitly re-arm the host and rescan already-open
-            // Package Manager windows. Every installation path is idempotent.
-            isShuttingDown = false;
-            RegisterEditorLifecycleCallbacks();
-
-            if (!TryPatch(out _))
-                BeginPatchRetryWindow();
-
-            nextWindowScanTime = 0d;
-            SubscribeUpdate();
-            EditorApplication.delayCall -= AttachExistingWindows;
-            EditorApplication.delayCall += AttachExistingWindows;
-        }
-
-        internal static void Open()
-        {
-            OpenGitHubSource();
-        }
-
-        internal static void Open(bool openWelcome)
-        {
-            if (openWelcome)
-            {
-                GitSubmoduleManagerWelcomeWindow.OpenWindow();
-                return;
-            }
-
-            OpenGitHubSource();
-        }
-
-        internal static void OpenGitHubSource()
-        {
-            OpenGitHubSource(null);
-        }
-
-        internal static string OpenGitHubSourceError =>
-            GetOpenGitHubSourceError(Application.unityVersion, isShuttingDown);
-
-        internal static string GetOpenGitHubSourceError(
-            string unityVersion,
-            bool shuttingDown)
-        {
-            if (!PackageManagerUnityVersionSupport.IsSupported(unityVersion))
-            {
-                return GitHubUtility.SanitizeUiDiagnostic(
-                    "Sources > GitHub is unavailable in Unity " + unityVersion +
-                    ". Supported Editors are Unity 6000.3.22f1, " +
-                    "6000.5.*f1 final releases, exact 6000.6.0f1 and 6000.6.2f1, " +
-                    "the exact 6000.7.0b1 and 6000.7.0b2 betas, and the exact 7000.0.0a7, 7000.0.0a8, and 7000.0.0a9 alphas.");
-            }
-
-            return shuttingDown
-                ? "Unity is reloading scripts or closing. Try opening Sources > GitHub again after the reload."
-                : string.Empty;
-        }
-
-        internal static void OpenGitHubSource(Action<bool, string> completed)
-        {
-            string error = OpenGitHubSourceError;
-            if (!string.IsNullOrWhiteSpace(error))
-            {
-                NotifyOpenRequestCompleted(completed, false, error);
-                return;
-            }
-
-            openRequestCompleted += completed;
-            if (openRequested)
-                return;
-
-            if (!isPatched && !TryPatch(out _))
-                BeginPatchRetryWindow();
-            openRequested = true;
-            nextWindowScanTime = 0d;
-            openRequestDeadline =
-                EditorApplication.timeSinceStartup + OpenRequestTimeoutSeconds;
-            SubscribeUpdate();
-            if (!TryOpenPackageManagerThroughReflection(out error))
-            {
-                CompleteOpenRequest(false, error);
-                return;
-            }
-            EditorApplication.delayCall += AttachExistingWindows;
-        }
-
-        private static void CompleteOpenRequest(bool success, string error)
-        {
-            Action<bool, string> completed = openRequestCompleted;
-            openRequestCompleted = null;
-            openRequested = false;
-            UpdateSubscription();
-            NotifyOpenRequestCompleted(completed, success, error);
-        }
-
-        private static void NotifyOpenRequestCompleted(
-            Action<bool, string> completed,
-            bool success,
-            string error)
-        {
-            string safeError = success
-                ? string.Empty
-                : GitHubUtility.SanitizeUiDiagnostic(error);
-            if (!success)
-                Debug.LogWarning("[Git Submodule Manager] " + safeError);
-
-            Delegate[] callbacks = completed?.GetInvocationList();
-            if (callbacks == null)
-                return;
-
-            foreach (Delegate callback in callbacks)
-            {
-                try
-                {
-                    ((Action<bool, string>)callback).Invoke(success, safeError);
-                }
-                catch
-                {
-                    // A closed presentation surface must not stop other callers.
-                }
+                int count = 0;
+                foreach (Session session in Sessions.Values)
+                    if (session.HasPendingAttachment)
+                        count++;
+                return count;
             }
         }
 
-        internal static bool TryPatch()
+        private sealed class Session : IDisposable
         {
-            return TryPatch(out _);
-        }
+            internal readonly VisualElement Root;
+            internal readonly PackageManagerSubmoduleNativePage Page;
+            private IVisualElementScheduledItem retry;
+            private int attempts;
+            private bool attached;
+            private bool disposed;
+            internal bool HasPendingAttachment => retry != null;
 
-        internal static bool TryPatch(out string error)
-        {
-            error = string.Empty;
-            if (!PackageManagerUnityVersionSupport.IsCurrentVersionSupported)
+            internal Session(VisualElement root)
             {
-                error = "The native Package Manager integration supports only " +
-                        "Unity 6000.3.22f1, Unity 6000.5.*f1 final releases, " +
-                        "exact Unity 6000.6.0f1 and 6000.6.2f1, " +
-                        "the exact Unity 6000.7.0b1 and 6000.7.0b2 betas, " +
-                        "and the exact Unity 7000.0.0a7, 7000.0.0a8, and 7000.0.0a9 alphas.";
-                return false;
+                Root = root;
+                Page = new PackageManagerSubmoduleNativePage(root);
+                Root.RegisterCallback<DetachFromPanelEvent>(OnDetached);
+                Page.AttachmentInvalidated += OnAttachmentInvalidated;
             }
 
-            if (isPatched)
-                return true;
-
-            try
+            internal void Start()
             {
-                Type windowType = GetPackageManagerWindowType();
-                if (windowType == null)
-                {
-                    error = $"Could not find {PackageManagerWindowTypeName}.";
-                    return false;
-                }
-
-                List<MethodInfo> lifecycleMethods =
-                    GetSupportedLifecycleMethods(windowType);
-                if (lifecycleMethods.Count == 0)
-                {
-                    error = $"Could not find BuildGUI or CreateGUI on {PackageManagerWindowTypeName}.";
-                    return false;
-                }
-
-                MethodInfo postfix = typeof(GitSubmoduleManagerPackageManagerHost)
-                    .GetMethod(
-                        nameof(AfterPackageManagerGuiBuilt),
-                        BindingFlags.Static | BindingFlags.NonPublic);
-                MethodInfo prefix = typeof(GitSubmoduleManagerPackageManagerHost)
-                    .GetMethod(
-                        nameof(BeforePackageManagerGuiBuilt),
-                        BindingFlags.Static | BindingFlags.NonPublic);
-                if (postfix == null || prefix == null)
-                {
-                    error = "The Package Manager host patches could not be resolved.";
-                    return false;
-                }
-
-                harmony ??= new Harmony(HarmonyId);
-                foreach (MethodInfo lifecycleMethod in lifecycleMethods)
-                {
-                    if (!HasPrefix(lifecycleMethod, prefix))
-                        harmony.Patch(lifecycleMethod, prefix: new HarmonyMethod(prefix));
-                    if (!HasPostfix(lifecycleMethod, postfix))
-                        harmony.Patch(lifecycleMethod, postfix: new HarmonyMethod(postfix));
-                }
-
-                isPatched = true;
-                foreach (MethodInfo lifecycleMethod in lifecycleMethods)
-                {
-                    isPatched &= HasPrefix(lifecycleMethod, prefix) &&
-                                 HasPostfix(lifecycleMethod, postfix);
-                }
-
-                if (PackageManagerSubmoduleNativePage.IsSupportedContract())
-                    isPatched &= TryPatchSidebarExtensionRefresh();
-
-                if (!isPatched)
-                {
-                    error = "Harmony did not register every supported Package Manager host hook.";
-                }
-
-                return isPatched;
-            }
-            catch (Exception exception)
-            {
-                isPatched = false;
-                error = GitHubUtility.SanitizeUiDiagnostic(exception.Message);
-                return false;
-            }
-        }
-
-        internal static Type GetPackageManagerWindowType()
-        {
-            foreach (Assembly assembly in EditorAssemblyCompatibility.GetLoadedAssemblies())
-            {
-                Type type = assembly.GetType(PackageManagerWindowTypeName, false);
-                if (type != null && typeof(EditorWindow).IsAssignableFrom(type))
-                    return type;
+                PackageManagerPackageStatus.Retain();
+                ScheduleAttachment();
             }
 
-            return null;
-        }
-
-        internal static List<MethodInfo> GetSupportedLifecycleMethods(Type windowType)
-        {
-            var result = new List<MethodInfo>();
-            if (windowType == null)
-                return result;
-
-            const BindingFlags flags =
-                BindingFlags.Instance |
-                BindingFlags.Public |
-                BindingFlags.NonPublic |
-                BindingFlags.DeclaredOnly;
-            foreach (string methodName in LifecycleMethodNames)
+            private void OnDetached(DetachFromPanelEvent evt)
             {
-                MethodInfo method = windowType.GetMethod(
-                    methodName,
-                    flags,
-                    null,
-                    Type.EmptyTypes,
-                    null);
-                if (method != null && method.ReturnType == typeof(void))
-                {
-                    result.Add(method);
-                    break;
-                }
-            }
-
-            return result;
-        }
-
-        internal static Foldout FindSourcesFoldout(VisualElement root)
-        {
-            if (root == null)
-                return null;
-
-            VisualElement sidebar = FindSidebar(root);
-            if (sidebar == null)
-                return null;
-
-            MethodInfo getRow = sidebar.GetType().GetMethod(
-                "GetRow",
-                BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic,
-                null,
-                new[] { typeof(string) },
-                null);
-            try
-            {
-                if (getRow?.Invoke(sidebar, new object[] { "MyAssets" }) is
-                        VisualElement row &&
-                    row.parent is Foldout sources)
-                {
-                    return sources;
-                }
-            }
-            catch
-            {
-                // Fall through to the visual-tree lookup.
-            }
-
-            var foldouts = new List<Foldout>();
-            CollectDescendants(sidebar, foldouts);
-            string localizedSources = L10n.Tr("Sources");
-            foreach (Foldout foldout in foldouts)
-            {
-                if (string.Equals(
-                        foldout.text,
-                        localizedSources,
-                        StringComparison.Ordinal) ||
-                    string.Equals(
-                        foldout.text,
-                        "Sources",
-                        StringComparison.OrdinalIgnoreCase))
-                {
-                    return foldout;
-                }
-            }
-
-            return foldouts.Count > 1 ? foldouts[1] : null;
-        }
-
-        internal static bool IsDescendantOrSelf(
-            VisualElement ancestor,
-            VisualElement candidate)
-        {
-            if (ancestor == null || candidate == null)
-                return false;
-
-            for (VisualElement current = candidate;
-                 current != null;
-                 current = current.parent)
-            {
-                if (ReferenceEquals(current, ancestor))
-                    return true;
-            }
-
-            return false;
-        }
-
-        internal static DetachedWindowAction GetDetachedWindowAction(
-            bool windowAlive)
-        {
-            if (!windowAlive)
-                return DetachedWindowAction.Release;
-
-            // Root-owned menus/actions also observe DetachFromPanel and retire
-            // themselves. Even if Unity has already reattached the panel by our
-            // delayed callback, run one repair pass to remount those controls.
-            return DetachedWindowAction.Repair;
-        }
-
-        internal static bool ShouldPollHostSession(
-            bool isDisposed,
-            bool windowAlive,
-            bool panelAttached,
-            bool isAttached,
-            bool withinRepairWindow)
-        {
-            if (isDisposed)
-                return false;
-
-            // Poll a destroyed reference once more so CleanupDeadSessions can
-            // remove its dictionary entry. A live detached tab must continue
-            // being observed even after the bounded visual-repair window.
-            if (!windowAlive || !panelAttached)
-                return true;
-
-            return !isAttached && withinRepairWindow;
-        }
-
-        internal static bool IsHostAttachmentComplete(
-            bool isDisposed,
-            bool windowAlive,
-            bool windowPanelAttached,
-            bool retainedRootAlive,
-            bool retainedRootPanelAttached,
-            bool projectionRetained,
-            bool installMenuMounted,
-            bool nativeActionsMounted,
-            bool installMenuOwned,
-            bool nativeActionsOwned)
-        {
-            return !isDisposed &&
-                   windowAlive &&
-                   windowPanelAttached &&
-                   retainedRootAlive &&
-                   retainedRootPanelAttached &&
-                   projectionRetained &&
-                   installMenuMounted &&
-                   nativeActionsMounted &&
-                   installMenuOwned &&
-                   nativeActionsOwned;
-        }
-
-        internal static void RequestVisualTreeRepair(object packageManagerRoot)
-        {
-            if (packageManagerRoot == null || isShuttingDown)
-                return;
-
-            foreach (HostSession session in Sessions.Values)
-            {
-                if (!session.OwnsRoot(packageManagerRoot))
-                    continue;
-
-                session.RestartVisualTreeRepair();
-                return;
-            }
-        }
-
-        internal static void ReleaseVisualTreeAndRequestRepair(
-            object packageManagerRoot,
-            Action<object> release,
-            Action<object> requestRepair)
-        {
-            try
-            {
-                release?.Invoke(packageManagerRoot);
-            }
-            finally
-            {
-                requestRepair?.Invoke(packageManagerRoot);
-            }
-        }
-
-        internal static bool RemountVisualTreeOrRequestRepair(
-            object packageManagerRoot,
-            Action<object> release,
-            Func<object, bool> remount,
-            Action<object> requestRepair)
-        {
-            bool remounted = false;
-            try
-            {
-                release?.Invoke(packageManagerRoot);
-                remounted = remount?.Invoke(packageManagerRoot) == true;
-                return remounted;
-            }
-            finally
-            {
-                if (!remounted)
-                    requestRepair?.Invoke(packageManagerRoot);
-            }
-        }
-
-        internal static bool IsSidebarExtensionRefreshPatchApplied()
-        {
-            Type sidebarType = FindType(PackageManagerSubmoduleNativePage.SidebarTypeName);
-            MethodInfo target = PackageManagerSubmoduleNativePage
-                .FindSidebarExtensionRowsUpdateMethod(sidebarType);
-            MethodInfo postfix = typeof(GitSubmoduleManagerPackageManagerHost)
-                .GetMethod(
-                    nameof(AfterSidebarExtensionRowsUpdated),
-                    BindingFlags.Static | BindingFlags.NonPublic);
-            return target != null && postfix != null && HasPostfix(target, postfix);
-        }
-
-        internal static bool AreLifecyclePatchesApplied()
-        {
-            Type windowType = GetPackageManagerWindowType();
-            List<MethodInfo> lifecycleMethods = GetSupportedLifecycleMethods(windowType);
-            MethodInfo postfix = typeof(GitSubmoduleManagerPackageManagerHost)
-                .GetMethod(
-                    nameof(AfterPackageManagerGuiBuilt),
-                    BindingFlags.Static | BindingFlags.NonPublic);
-            MethodInfo prefix = typeof(GitSubmoduleManagerPackageManagerHost)
-                .GetMethod(
-                    nameof(BeforePackageManagerGuiBuilt),
-                    BindingFlags.Static | BindingFlags.NonPublic);
-            if (lifecycleMethods.Count == 0 || postfix == null || prefix == null)
-                return false;
-
-            foreach (MethodInfo lifecycleMethod in lifecycleMethods)
-            {
-                if (!HasPrefix(lifecycleMethod, prefix) ||
-                    !HasPostfix(lifecycleMethod, postfix))
-                {
-                    return false;
-                }
-            }
-
-            return true;
-        }
-
-        private static void RetryPatch()
-        {
-            if (!TryPatch(out string error))
-            {
-                Debug.LogWarning(
-                    "[Git Submodule Manager] The native Package Manager integration " +
-                    "could not install its compatibility hook. " + error);
-            }
-            else
-            {
-                patchRetryActive = false;
-            }
-
-            AttachExistingWindows();
-            UpdateSubscription();
-        }
-
-        private static bool HasPostfix(MethodInfo original, MethodInfo postfix)
-        {
-            Patches patches = Harmony.GetPatchInfo(original);
-            if (patches == null)
-                return false;
-
-            foreach (Patch patch in patches.Postfixes)
-            {
-                if (patch.owner == HarmonyId && patch.PatchMethod == postfix)
-                    return true;
-            }
-
-            return false;
-        }
-
-        private static bool HasPrefix(MethodInfo original, MethodInfo prefix)
-        {
-            Patches patches = Harmony.GetPatchInfo(original);
-            if (patches == null)
-                return false;
-
-            foreach (Patch patch in patches.Prefixes)
-            {
-                if (patch.owner == HarmonyId && patch.PatchMethod == prefix)
-                    return true;
-            }
-
-            return false;
-        }
-
-        private static bool TryPatchSidebarExtensionRefresh()
-        {
-            Type sidebarType = FindType(PackageManagerSubmoduleNativePage.SidebarTypeName);
-            MethodInfo target = PackageManagerSubmoduleNativePage
-                .FindSidebarExtensionRowsUpdateMethod(sidebarType);
-            MethodInfo postfix = typeof(GitSubmoduleManagerPackageManagerHost)
-                .GetMethod(
-                    nameof(AfterSidebarExtensionRowsUpdated),
-                    BindingFlags.Static | BindingFlags.NonPublic);
-            if (target == null || postfix == null)
-                return false;
-
-            if (!HasPostfix(target, postfix))
-                harmony.Patch(target, postfix: new HarmonyMethod(postfix));
-            return HasPostfix(target, postfix);
-        }
-
-        private static void BeforePackageManagerGuiBuilt()
-        {
-            PackageManagerSubmoduleHarmonyPatch.TryPatch();
-            PackageManagerGitHubNativePresentationPatch.TryPatch();
-            PackageManagerSubmoduleNativePage.TryRegisterFromServices(out _, out _);
-        }
-
-        private static void AfterPackageManagerGuiBuilt(object __instance)
-        {
-            if (__instance is EditorWindow window)
-            {
-                EditorApplication.delayCall += () =>
-                    TryAttachWindow(window, restartRepairWindow: true);
-            }
-        }
-
-        private static void AfterSidebarExtensionRowsUpdated(object __instance)
-        {
-            if (__instance is VisualElement sidebar)
-                PackageManagerSubmoduleNativePage.TryRelocateSidebarRow(sidebar, out _);
-        }
-
-        private static void Update()
-        {
-            if (isShuttingDown)
-                return;
-
-            double now = EditorApplication.timeSinceStartup;
-            if (patchRetryActive)
-            {
-                if (isPatched || now >= patchRetryDeadline)
-                {
-                    patchRetryActive = false;
-                }
-                else if (now >= nextPatchRetryTime)
-                {
-                    nextPatchRetryTime = now + PatchRetryIntervalSeconds;
-                    if (TryPatch(out _))
-                        patchRetryActive = false;
-                }
-            }
-
-            if (now >= nextWindowScanTime)
-            {
-                nextWindowScanTime = now + WindowScanIntervalSeconds;
-                CleanupDeadSessions();
-                foreach (HostSession session in Sessions.Values)
-                    session.Tick();
-                AttachExistingWindows();
-            }
-
-            if (openRequested && now > openRequestDeadline)
-            {
-                CompleteOpenRequest(
-                    false,
-                    "Sources > GitHub could not be opened before Unity's " +
-                    "Package Manager activation timed out. Try opening it again.");
-            }
-
-            UpdateSubscription();
-        }
-
-        private static void AttachExistingWindows()
-        {
-            if (isShuttingDown)
-                return;
-
-            Type windowType = GetPackageManagerWindowType();
-            if (windowType == null)
-                return;
-
-            UnityEngine.Object[] windows = Resources.FindObjectsOfTypeAll(windowType);
-            HostSession preferred = null;
-            foreach (UnityEngine.Object candidate in windows)
-            {
-                if (!(candidate is EditorWindow window))
-                    continue;
-
-                HostSession session = TryAttachWindow(window);
-                if (session == null)
-                    continue;
-
-                if (ReferenceEquals(EditorWindow.focusedWindow, window))
-                    preferred = session;
-                else
-                    preferred ??= session;
-            }
-
-            if (!openRequested || preferred == null || !preferred.Activate())
-            {
-                UpdateSubscription();
-                return;
-            }
-
-            CompleteOpenRequest(true, string.Empty);
-        }
-
-        private static HostSession TryAttachWindow(
-            EditorWindow window,
-            bool restartRepairWindow = false)
-        {
-            if (window == null || isShuttingDown)
-                return null;
-
-            if (!Sessions.TryGetValue(window, out HostSession session) ||
-                !ReferenceEquals(session.Window, window))
-            {
-                session?.Dispose();
-                session = new HostSession(window);
-                Sessions[window] = session;
-                SubscribeUpdate();
-            }
-            else if (restartRepairWindow)
-            {
-                session.RestartRepairWindow();
-            }
-
-            bool attached = session.TryAttachVisualTree();
-            UpdateSubscription();
-            return attached ? session : null;
-        }
-
-        private static void CleanupDeadSessions()
-        {
-            DeadSessionWindows.Clear();
-            foreach (KeyValuePair<EditorWindow, HostSession> pair in Sessions)
-            {
-                if (pair.Value.Window == null)
-                    DeadSessionWindows.Add(pair.Key);
-            }
-
-            foreach (EditorWindow window in DeadSessionWindows)
-            {
-                HostSession session = Sessions[window];
-                Sessions.Remove(window);
-                session.Dispose();
-            }
-        }
-
-        private static bool TryOpenPackageManagerThroughReflection(out string error)
-        {
-            error = string.Empty;
-            Type windowType = GetPackageManagerWindowType();
-            if (windowType == null)
-            {
-                error = "Unity's Package Manager window type could not be found.";
-                return false;
-            }
-
-            try
-            {
-                Type publicWindowApi = FindType("UnityEditor.PackageManager.UI.Window");
-                MethodInfo open = publicWindowApi?.GetMethod(
-                    "Open",
-                    BindingFlags.Static | BindingFlags.Public,
-                    null,
-                    new[] { typeof(string) },
-                    null);
-                if (open != null)
-                {
-                    open.Invoke(null, new object[] { null });
-                    return true;
-                }
-
-                const BindingFlags flags = BindingFlags.Static | BindingFlags.Public;
-                MethodInfo getWindow = typeof(EditorWindow).GetMethod(
-                    nameof(EditorWindow.GetWindow),
-                    flags,
-                    null,
-                    new[] { typeof(Type), typeof(bool), typeof(string), typeof(bool) },
-                    null);
-                if (getWindow?.Invoke(
-                        null,
-                        new object[] { windowType, false, "Package Manager", true }) is
-                        EditorWindow window)
-                {
-                    window.Show();
-                    window.Focus();
-                    return true;
-                }
-
-                error = "Unity's Package Manager window could not be created.";
-                return false;
-            }
-            catch (Exception exception)
-            {
-                error = "Unity's Package Manager window could not be opened: " +
-                        GitHubUtility.SanitizeUiDiagnostic(
-                            exception.GetBaseException().Message);
-                return false;
-            }
-        }
-
-        private static void BeforeEditorQuits()
-        {
-            isShuttingDown = true;
-            if (openRequested)
-                CompleteOpenRequest(false, "Unity closed before Sources > GitHub could open.");
-            UnsubscribeUpdate();
-            DisposeAllSessions();
-        }
-
-        private static void BeforeAssemblyReload()
-        {
-            isShuttingDown = true;
-            if (openRequested)
-            {
-                CompleteOpenRequest(
-                    false,
-                    "Unity reloaded scripts before Sources > GitHub could open. Try again after the reload.");
-            }
-            UnsubscribeUpdate();
-            DisposeAllSessions();
-            try
-            {
-#if ENABLE_CORECLR
-                harmony?.UnpatchSelf();
-#else
-                harmony?.UnpatchAll(HarmonyId);
-#endif
-            }
-            catch
-            {
-                // Unity is tearing down the AppDomain; fail open.
-            }
-            finally
-            {
-                isPatched = false;
-            }
-        }
-
-        private static void RegisterEditorLifecycleCallbacks()
-        {
-            // The remove/add sequence keeps this safe when DidReloadScripts is
-            // delivered without a fresh AppDomain.
-            AssemblyReloadEvents.beforeAssemblyReload -= BeforeAssemblyReload;
-            AssemblyReloadEvents.beforeAssemblyReload += BeforeAssemblyReload;
-            EditorApplication.quitting -= BeforeEditorQuits;
-            EditorApplication.quitting += BeforeEditorQuits;
-        }
-
-        private static void DisposeAllSessions()
-        {
-            foreach (HostSession session in Sessions.Values)
-                session.Dispose();
-            Sessions.Clear();
-        }
-
-        private static void UpdateSubscription()
-        {
-            if (!isShuttingDown &&
-                (patchRetryActive ||
-                 openRequested ||
-                 HasSessionRequiringPolling()))
-            {
-                SubscribeUpdate();
-            }
-            else
-            {
-                UnsubscribeUpdate();
-            }
-        }
-
-        private static bool HasSessionRequiringPolling()
-        {
-            foreach (HostSession session in Sessions.Values)
-            {
-                if (session.RequiresPolling)
-                    return true;
-            }
-
-            return false;
-        }
-
-        private static void BeginPatchRetryWindow()
-        {
-            if (isShuttingDown)
-                return;
-
-            double now = EditorApplication.timeSinceStartup;
-            patchRetryActive = true;
-            patchRetryDeadline = now + PatchRetryWindowSeconds;
-            nextPatchRetryTime = now;
-            SubscribeUpdate();
-        }
-
-        private static void SubscribeUpdate()
-        {
-            if (updateSubscribed || isShuttingDown)
-                return;
-
-            updateSubscribed = true;
-            EditorApplication.update += Update;
-        }
-
-        private static void UnsubscribeUpdate()
-        {
-            if (!updateSubscribed)
-                return;
-
-            updateSubscribed = false;
-            EditorApplication.update -= Update;
-        }
-
-        private static void CollectDescendants<T>(VisualElement root, List<T> result)
-            where T : VisualElement
-        {
-            if (root == null)
-                return;
-
-            foreach (VisualElement child in root.Children())
-            {
-                if (child is T match)
-                    result.Add(match);
-                CollectDescendants(child, result);
-            }
-        }
-
-        private static VisualElement FindElementByNameRecursive(
-            VisualElement root,
-            string elementName)
-        {
-            if (root == null || string.IsNullOrEmpty(elementName))
-                return null;
-            if (string.Equals(root.name, elementName, StringComparison.Ordinal))
-                return root;
-
-            foreach (VisualElement child in root.Children())
-            {
-                VisualElement match =
-                    FindElementByNameRecursive(child, elementName);
-                if (match != null)
-                    return match;
-            }
-
-            return null;
-        }
-
-        private static VisualElement FindSidebar(VisualElement root)
-        {
-            VisualElement named =
-                FindElementByNameRecursive(root, SidebarElementName);
-            if (string.Equals(
-                    named?.GetType().FullName,
-                    PackageManagerSubmoduleNativePage.SidebarTypeName,
-                    StringComparison.Ordinal))
-            {
-                return named;
-            }
-
-            return FindElementByTypeNameRecursive(
-                root,
-                PackageManagerSubmoduleNativePage.SidebarTypeName);
-        }
-
-        private static VisualElement FindElementByTypeNameRecursive(
-            VisualElement root,
-            string fullTypeName)
-        {
-            if (root == null || string.IsNullOrEmpty(fullTypeName))
-                return null;
-            if (string.Equals(
-                    root.GetType().FullName,
-                    fullTypeName,
-                    StringComparison.Ordinal))
-            {
-                return root;
-            }
-
-            foreach (VisualElement child in root.Children())
-            {
-                VisualElement match =
-                    FindElementByTypeNameRecursive(child, fullTypeName);
-                if (match != null)
-                    return match;
-            }
-
-            return null;
-        }
-
-        private static VisualElement FindPackageManagerRoot(VisualElement root)
-        {
-            return FindElementByTypeNameRecursive(
-                root,
-                PackageManagerGitHubNativeActions.PackageManagerWindowRootTypeName);
-        }
-
-        private sealed class HostSession : IDisposable
-        {
-            private readonly EventCallback<DetachFromPanelEvent> windowDetached;
-            private VisualElement retainedRoot;
-            private bool projectionRetained;
-            private bool installMenuMounted;
-            private bool nativeActionsMounted;
-            private bool isDisposed;
-            private double repairDeadline;
-
-            internal HostSession(EditorWindow window)
-            {
-                Window = window;
-                repairDeadline = EditorApplication.timeSinceStartup +
-                                 SessionRepairTimeoutSeconds;
-                windowDetached = OnWindowDetached;
-                Window.rootVisualElement.RegisterCallback(windowDetached);
-            }
-
-            internal EditorWindow Window { get; }
-            internal bool IsAttached
-            {
-                get
-                {
-                    bool windowAlive = Window != null;
-                    bool retainedRootAlive = retainedRoot != null;
-                    return IsHostAttachmentComplete(
-                        isDisposed,
-                        windowAlive,
-                        windowAlive && Window.rootVisualElement.panel != null,
-                        retainedRootAlive,
-                        retainedRootAlive && retainedRoot.panel != null,
-                        projectionRetained,
-                        installMenuMounted,
-                        nativeActionsMounted,
-                        retainedRootAlive &&
-                        PackageManagerGitSubmoduleInstallMenu.IsInstalledForRoot(
-                            retainedRoot),
-                        retainedRootAlive &&
-                        PackageManagerGitHubNativeActions.IsInstalledForRoot(
-                            retainedRoot));
-                }
-            }
-            internal bool RequiresPolling
-            {
-                get
-                {
-                    bool windowAlive = Window != null;
-                    return ShouldPollHostSession(
-                        isDisposed,
-                        windowAlive,
-                        windowAlive && Window.rootVisualElement.panel != null,
-                        IsAttached,
-                        EditorApplication.timeSinceStartup < repairDeadline);
-                }
-            }
-
-            internal void RestartRepairWindow()
-            {
-                repairDeadline = EditorApplication.timeSinceStartup +
-                                 SessionRepairTimeoutSeconds;
-                SubscribeUpdate();
-            }
-
-            internal bool OwnsRoot(object packageManagerRoot)
-            {
-                return !isDisposed &&
-                       ReferenceEquals(retainedRoot, packageManagerRoot);
-            }
-
-            internal void RestartVisualTreeRepair()
-            {
-                if (isDisposed)
+                if (!ReferenceEquals(evt.target, Root))
                     return;
-
-                installMenuMounted = false;
-                nativeActionsMounted = false;
-                RestartRepairWindow();
+                Sessions.Remove(Root);
+                Dispose();
             }
 
-            internal bool TryAttachVisualTree()
+            private void OnAttachmentInvalidated()
             {
-                if (isDisposed || Window == null)
-                    return false;
-
-                // An inactive dock tab can temporarily have no panel while its
-                // existing visual tree is still the correct host. Do not probe
-                // or release that tree until Unity attaches it again.
-                if (Window.rootVisualElement.panel == null)
-                    return false;
-
-                VisualElement packageManagerRoot =
-                    FindPackageManagerRoot(Window.rootVisualElement);
-                if (packageManagerRoot == null)
-                    return false;
-
-                if (!ReferenceEquals(retainedRoot, packageManagerRoot))
-                {
-                    // Retain the replacement first. Releasing the previous root
-                    // then cannot look like a final-host teardown or briefly
-                    // withdraw the projected GitHub rows.
-                    bool projectionTransferred = projectionRetained &&
-                        PackageManagerGitHubPackageProjection.RetainHost(
-                            packageManagerRoot);
-                    ReleaseRoot();
-                    retainedRoot = packageManagerRoot;
-                    projectionRetained = projectionTransferred;
-                }
-
-                if (!PackageManagerSubmoduleNativePage.TryRegisterForRoot(
-                        retainedRoot,
-                        out _,
-                        out _))
-                {
-                    return false;
-                }
-
-                VisualElement sidebar = FindSidebar(Window.rootVisualElement);
-                if (sidebar == null ||
-                    !PackageManagerSubmoduleNativePage.TryRelocateSidebarRow(
-                        sidebar,
-                        out _))
-                {
-                    return false;
-                }
-
-                installMenuMounted =
-                    PackageManagerGitSubmoduleInstallMenu.InstallForRoot(
-                        retainedRoot);
-                if (!projectionRetained)
-                {
-                    projectionRetained =
-                        PackageManagerGitHubPackageProjection.RetainHost(retainedRoot);
-                }
-
-                nativeActionsMounted = projectionRetained &&
-                    PackageManagerGitHubNativeActions.InstallForRoot(retainedRoot);
-
-                return IsAttached;
+                attached = false;
+                ScheduleAttachment();
             }
 
-            internal bool Activate()
+            internal void ScheduleAttachment()
             {
-                if (!TryAttachVisualTree() ||
-                    !PackageManagerSubmoduleNativePage.TryRegisterForRoot(
-                        retainedRoot,
-                        out object pageManager,
-                        out object page) ||
-                    !PackageManagerSubmoduleNativePage.TryActivate(pageManager, page))
+                if (disposed || attached || retry != null || Root.panel == null)
+                    return;
+                if (!PackageManagerSubmoduleNativePage.IsSupportedContract(out string error))
                 {
-                    return false;
+                    LastError = error;
+                    return;
                 }
-
-                Foldout sources = FindSourcesFoldout(Window.rootVisualElement);
-                if (sources != null)
-                    sources.value = true;
-                Window.Show();
-                Window.Focus();
-                GitSubmoduleManagerWelcomeWindow.OpenIfNeeded();
-                return true;
+                attempts = 0;
+                // Retry native UI construction briefly, then sleep until a new lifecycle event.
+                retry = Root.schedule.Execute(Attach).Every(100);
             }
 
-            internal void Tick()
+            private void Attach()
             {
-                if (!isDisposed)
-                    TryAttachVisualTree();
+                if (disposed)
+                    return;
+                attached = Page.TryAttach(out string error);
+                LastError = error;
+                if (attached || ++attempts >= 50)
+                {
+                    retry?.Pause();
+                    retry = null;
+                }
             }
 
             public void Dispose()
             {
-                if (isDisposed)
+                if (disposed)
                     return;
-
-                isDisposed = true;
-                if (Window != null)
-                {
-                    try
-                    {
-                        Window.rootVisualElement.UnregisterCallback(windowDetached);
-                    }
-                    catch
-                    {
-                        // The visual tree may already be tearing down.
-                    }
-                }
-
-                ReleaseRoot();
-            }
-
-            private void ReleaseRoot()
-            {
-                VisualElement root = retainedRoot;
-                retainedRoot = null;
-                if (root == null)
-                {
-                    projectionRetained = false;
-                    installMenuMounted = false;
-                    nativeActionsMounted = false;
-                    return;
-                }
-
-                try
-                {
-                    PackageManagerGitSubmoduleInstallMenu.ReleaseForRoot(root);
-                }
-                catch
-                {
-                    // A stale root must not interrupt projection-host transfer.
-                }
-
-                try
-                {
-                    PackageManagerGitHubNativeActions.ReleaseForRoot(root);
-                }
-                catch
-                {
-                    // Native controls may already be tearing down with the panel.
-                }
-
-                if (projectionRetained)
-                {
-                    try
-                    {
-                        PackageManagerGitHubPackageProjection.ReleaseHost(root);
-                    }
-                    catch
-                    {
-                        // Package Manager may already be tearing down.
-                    }
-                }
-
-                projectionRetained = false;
-                installMenuMounted = false;
-                nativeActionsMounted = false;
-            }
-
-            private void OnWindowDetached(DetachFromPanelEvent evt)
-            {
-                EditorApplication.delayCall += () =>
-                {
-                    if (isDisposed)
-                        return;
-
-                    bool windowAlive = Window != null;
-                    DetachedWindowAction action = GetDetachedWindowAction(
-                        windowAlive);
-                    if (action == DetachedWindowAction.Release)
-                    {
-                        CleanupDeadSessions();
-                        return;
-                    }
-
-                    // Dock/tab switches temporarily detach a live EditorWindow's
-                    // panel. Keep its projection host; the low-frequency session
-                    // scan observes either reattachment or genuine destruction.
-                    if (action == DetachedWindowAction.Repair)
-                        RestartRepairWindow();
-                };
+                disposed = true;
+                retry?.Pause();
+                retry = null;
+                Root.UnregisterCallback<DetachFromPanelEvent>(OnDetached);
+                Page.AttachmentInvalidated -= OnAttachmentInvalidated;
+                Page.Dispose();
+                PackageManagerPackageStatus.Release();
             }
         }
 
-        private static Type FindType(string fullName)
+        static GitSubmoduleManagerPackageManagerHost() => Start();
+
+        [DidReloadScripts]
+        private static void Start()
         {
-            foreach (Assembly assembly in EditorAssemblyCompatibility.GetLoadedAssemblies())
+            PackageManagerPackageStatus.Resume();
+            if (!registered)
             {
-                Type type = assembly.GetType(fullName, false);
-                if (type != null)
-                    return type;
+                PackageManagerExtensions.RegisterExtension(Details);
+                registered = true;
+            }
+            AssemblyReloadEvents.beforeAssemblyReload -= BeforeReload;
+            AssemblyReloadEvents.beforeAssemblyReload += BeforeReload;
+            EditorApplication.quitting -= Stop;
+            EditorApplication.quitting += Stop;
+            PackageManagerPackageStatus.Changed -= RefreshViews;
+            PackageManagerPackageStatus.Changed += RefreshViews;
+            PackageManagerPackageStatus.ReadinessChanged -= Details.Refresh;
+            PackageManagerPackageStatus.ReadinessChanged += Details.Refresh;
+            PackageManagerSubmoduleHarmonyPatch.Install();
+            // A window can already exist when scripts reload. This is a single catch-up pass.
+            EditorApplication.delayCall -= AttachExistingWindows;
+            EditorApplication.delayCall += AttachExistingWindows;
+        }
+
+        private static void AttachExistingWindows()
+        {
+            foreach (EditorWindow window in Resources.FindObjectsOfTypeAll<EditorWindow>())
+            {
+                if (window != null && window.GetType().FullName == WindowTypeName)
+                    ObserveRoot(PackageManagerSubmoduleHarmonyPatch.Read(window, "m_Root") as VisualElement);
+            }
+        }
+
+        internal static void ObserveRoot(VisualElement root)
+        {
+            if (root == null || root.panel == null)
+                return;
+            if (Sessions.TryGetValue(root, out Session existing))
+            {
+                existing.ScheduleAttachment();
+                return;
+            }
+            var session = new Session(root);
+            Sessions.Add(root, session);
+            session.Start();
+        }
+
+        internal static void ObserveAncestors(VisualElement element)
+        {
+            for (VisualElement parent = element.parent; parent != null; parent = parent.parent)
+            {
+                if (parent.GetType().FullName != RootTypeName)
+                    continue;
+                ObserveRoot(parent);
+                return;
+            }
+        }
+
+        private static void RefreshViews()
+        {
+            Details.Refresh();
+            foreach (Session session in Sessions.Values)
+            {
+                session.ScheduleAttachment();
+                session.Page.Refresh();
+                PackageManagerSubmoduleHarmonyPatch.RefreshActivePage(session.Root);
+            }
+        }
+
+        private static void BeforeReload()
+        {
+            Stop();
+            // Unity clears the legacy extension registry on code reload, even on CoreCLR.
+            registered = false;
+        }
+
+        private static void Stop()
+        {
+            EditorApplication.delayCall -= AttachExistingWindows;
+            PackageManagerPackageStatus.Changed -= RefreshViews;
+            PackageManagerPackageStatus.ReadinessChanged -= Details.Refresh;
+            foreach (Session session in Sessions.Values)
+                session.Dispose();
+            Sessions.Clear();
+            Details.Clear();
+            PackageManagerSubmoduleHarmonyPatch.Uninstall();
+        }
+
+        private sealed class StatusDetails : IPackageManagerExtension
+        {
+            private readonly HashSet<Label> labels = new();
+            private PackageInfo selected;
+
+            public VisualElement CreateExtensionUI()
+            {
+                var label = new Label { name = "git-submodule-package-status" };
+                label.style.whiteSpace = WhiteSpace.Normal;
+                label.style.marginTop = 8;
+                label.style.marginBottom = 8;
+                label.RegisterCallback<AttachToPanelEvent>(_ =>
+                {
+                    labels.Add(label);
+                    ObserveAncestors(label);
+                    Refresh(label);
+                });
+                label.RegisterCallback<DetachFromPanelEvent>(_ => labels.Remove(label));
+                Refresh(label);
+                return label;
             }
 
-            return null;
+            public void OnPackageSelectionChange(PackageInfo packageInfo)
+            {
+                selected = packageInfo;
+                Refresh();
+            }
+
+            // Registered-package events already provide one coalesced status refresh.
+            public void OnPackageAddedOrUpdated(PackageInfo packageInfo) { }
+            public void OnPackageRemoved(PackageInfo packageInfo) { }
+
+            internal void Refresh()
+            {
+                foreach (Label label in labels)
+                    Refresh(label);
+            }
+
+            private void Refresh(Label label)
+            {
+                label.style.display = selected == null ? DisplayStyle.None : DisplayStyle.Flex;
+                label.text = selected == null ? string.Empty : PackageManagerPackageStatus.Describe(selected);
+                label.tooltip = selected?.resolvedPath ?? string.Empty;
+            }
+
+            internal void Clear()
+            {
+                labels.Clear();
+                selected = null;
+            }
         }
     }
 }

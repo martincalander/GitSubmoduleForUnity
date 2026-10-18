@@ -7,96 +7,71 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+`main` now focuses on installed package status and sources. The former `main`
+with discovery and package-management workflows is preserved on
+[`legacy`](https://github.com/martincalander/GitSubmoduleForUnity/tree/legacy).
+Local validation is recorded in the contribution guide. These changes have not
+been published as a new release; existing `0.8.1` artifacts remain unchanged.
+
 ### Added
+
+- Added exact Unity `7000.0.0a10` alpha compatibility while preserving the
+  independently guarded Package Manager contracts and existing Unity targets.
 
 - Added exact Unity `7000.0.0a9` alpha compatibility while preserving the
   independently guarded Package Manager contracts and existing Unity targets.
 
-- Added repeated Play mode transition coverage with domain reload disabled and
-  scene reload enabled, plus guidance for keeping Editor service state alive
-  while game code resets its own per-play state.
-
-- Added exact Unity `7000.0.0a7` and `7000.0.0a8` alpha compatibility.
-  Other Unity 7 builds remain
-  rejected by the runtime gate. Unity 7 requires a Git dependency or local
-  checkout containing these changes; the bundled bootstrap retains its
+- Added exact Unity `7000.0.0a7` and `7000.0.0a8` alpha compatibility. Other Unity 7
+  builds remain rejected by the runtime gate. Unity 7 requires a Git dependency
+  or local checkout containing these changes; the bundled bootstrap retains its
   validated Unity 6 targets.
 
-- Added exact Unity `6000.7.0b1` and `6000.7.0b2` beta compatibility. Other 6.7 builds remain
-  rejected by the independent runtime and installer gates.
+- Added exact Unity `6000.7.0b1` and `6000.7.0b2` beta compatibility. Other 6.7
+  builds remain rejected by the independent runtime and installer gates.
 
 - Added exact Unity `6000.6.0f1` and `6000.6.2f1` as supported Editor targets
-  alongside Unity `6000.3.22f1` and `6000.5.*f1` final releases. Other `6000.6` versions remain
-  unvalidated.
+  alongside Unity `6000.3.22f1` and `6000.5.*f1` final releases. Other `6000.6`
+  versions remain unvalidated.
 
 ### Changed
 
-- Declare the manager's Editor-session static state as persistent across Play
-  mode with Unity's lifecycle attributes, preserving worker ownership,
-  subscriptions, and recovery state when domain reload is disabled.
-
+- Attach through Package Manager UI lifecycle events instead of continuously
+  scanning Editor windows. Cache validated native contracts and stop attachment
+  retries after success or a bounded construction timeout.
+- Refresh installed status for package registration and local Git metadata
+  changes. Ordinary asset edits no longer trigger Git reads, and unchanged
+  status no longer rebuilds package views.
+- Limit sidebar icon imports to 64 pixels and remove the unused Newtonsoft
+  dependency. Declare the UIElements module used by the native integration.
+- Reduce the manager to installed package status. Label submodules in Package
+  Manager and show the selected package's installation source.
+- Limit **Sources > GitHub** to installed GitHub submodules and UPM Git
+  dependencies using Unity's existing package records.
+- Leave installation, updates, conversion, and removal to Unity and Git. Retain
+  a guard against Unity deleting submodule folders as ordinary embedded packages.
 - Select patching libraries by Editor runtime. Mono preserves the original
   Harmony 2.4.1 binary; CoreCLR uses eleven original upstream HarmonyX 2.16.1,
-  MonoMod, and Mono.Cecil 0.11.6 DLLs with pinned provenance. Their .NET Standard
-  builds match Unity 7's compilation profile, and imports remain Editor-only
-  with explicit assembly references.
+  MonoMod, and Mono.Cecil 0.11.6 DLLs with pinned provenance. Imports remain
+  Editor-only with explicit assembly references.
 
-- Verified installed submodules now use Unity Package Manager's standard
-  **Remove** action instead of a separate **Uninstall Submodule** command.
-- The manager overrides **Remove** only when the selected installed packages
-  include a verified managed submodule. Ordinary-only selections, including
-  read-only Git packages, continue through Unity Package Manager unchanged.
-- Multi-select **Remove** now inspects every selected submodule before changing
-  the repository, uses one aggregate confirmation, and removes all selected
-  packages through a guarded mixed workflow. Submodules are removed in one Git
-  operation; Unity removes the ordinary packages after package resolution.
-- Mixed-removal handoff now survives assembly reload, automatically retries a
-  failed or lost Package Manager request only while every direct manifest
-  dependency still has its captured exact value, and requests Package Manager
-  resolution again when needed.
+### Removed
+
+- Remote GitHub catalogue discovery, account checks, and GitHub CLI requirement.
+- Submodule install, conversion, and removal workflows, dependency planning, and
+  their persisted operation handoffs.
+- Welcome and Preferences surfaces, repository branch selection, and remote
+  catalogue filters and caches.
 
 ### Fixed
 
-- Restore GitHub discovery projection on early Unity `6000.5` final releases
-  whose package construction factory uses the older nested contract.
-- Keep Cecil and its Mdb, Pdb, and Rocks assemblies at 0.11.6 together so
-  Unity 7 cold startup does not load incompatible symbol-reader interfaces.
-- Check owner-only temporary clone permissions through CoreCLR on Unity 7,
-  preserving exact `0700` access and rejecting unverifiable permissions.
-- Recognize Unity `7000.0.0a7`'s exact read-only-list multi-select Remove
-  signature while retaining the independently validated Unity 6 signatures.
-- Recognize Unity `7000.0.0a7`'s paired read-only-list package projection
-  signature while preserving transient ownership and exact source checks.
-
-- Fixed branch inspection staying pending in the URL installer when repeated
-  presentation updates postponed the same probe.
-- Fixed **Open GitHub Package Manager** silently doing nothing on unsupported
-  Editors. Setup now explains compatibility and activation failures, and the
-  Welcome window closes only after successful activation.
-- Fixed new `./` and `../` repository inputs resolving differently during
-  inspection and installation. They now resolve against the Unity project root
-  before probing, confirmation, and installation.
-- Fixed a matching installed dependency clearing an earlier incompatible
-  version requirement. Conflicting requirements remain blocking.
-- Fixed unsafe filesystem entries reaching metadata reads. Existing files are
-  checked through their opened handles before bounded reads; links, pipes,
-  devices, and identity changes are rejected.
-- Fixed discard consent remaining valid after dirty file contents changed.
-  Removal and conversion now bind consent to staged, modified, untracked, and
-  ignored file contents, with limits of 4096 paths, 16 MiB per file, and 64 MiB
-  total. Linked or special files, nested repositories, and work beyond those
-  limits require manual review before retrying.
-- Fixed Install actions disappearing when Unity recycled Package Manager's
-  nested visual root or action containers. Failed remounts now restart the
-  bounded repair pass, and optional Remove, conversion, or Manage-menu failures
-  cannot suppress a valid Install surface.
-- Fixed confirmed submodule removals and submodule-to-read-only conversions
-  being blocked when Package Manager started a snapshot between the read-only
-  safety inspection and the confirmed mutation.
-- Fixed confirmed removal requiring another click, Package Manager refresh, or
-  manual resolve while a package scan or transient Package Manager request was
-  still completing. Bounded automatic recovery now reports a terminal
-  diagnostic only after retries fail or changed input makes a retry unsafe.
+- Attach the GitHub source when Package Manager opens with no package selected
+  or with several packages selected.
+- Protect Git checkouts in embedded folders whose names differ from their
+  package IDs, and recheck local metadata before allowing embedded deletion.
+- Show pending or unavailable package status instead of reporting a package as
+  uninstalled before its registered state has been read successfully.
+- Keep Cecil and its Mdb, Pdb, and Rocks assemblies at 0.11.6 together so Unity 7
+  cold startup does not load incompatible symbol-reader interfaces.
 
 ## [0.8.1] - 2026-08-29
 

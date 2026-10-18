@@ -4,167 +4,102 @@
 
 # Git Submodule Manager
 
-Manage Git-hosted Unity packages from Unity's native Package Manager.
+See which installed Unity packages are Git submodules and where your packages
+come from, directly in Unity's Package Manager.
 
 <p align="center">
   <a href="https://github.com/martincalander/GitSubmoduleForUnity/actions/workflows/ci.yml"><img alt="Sanity Checks" src="https://github.com/martincalander/GitSubmoduleForUnity/actions/workflows/ci.yml/badge.svg"></a>
-  <a href="https://github.com/martincalander/GitSubmoduleForUnity/releases"><img alt="Package version" src="https://img.shields.io/github/package-json/v/martincalander/GitSubmoduleForUnity?filename=package.json&label=package"></a>
-  <img alt="Validated Unity targets: 6000.3.22f1, 6000.5.*f1, exact 6000.6.0f1 and 6000.6.2f1, exact 6000.7.0b1 and 6000.7.0b2 betas, and exact 7000.0.0a7, 7000.0.0a8, and 7000.0.0a9 alphas" src="https://img.shields.io/badge/Unity-6000.3.22f1%20%7C%206000.5.%2Af1%20%7C%206000.6.0f1%20%7C%206000.6.2f1%20%7C%206000.7.0b1%20%7C%206000.7.0b2%20%7C%207000.0.0a7%20%7C%207000.0.0a8%20%7C%207000.0.0a9-222C37?logo=unity&logoColor=white">
+  <a href="https://github.com/martincalander/GitSubmoduleForUnity/releases"><img alt="Published release" src="https://img.shields.io/github/v/release/martincalander/GitSubmoduleForUnity"></a>
   <img alt="Editor only" src="https://img.shields.io/badge/scope-Editor%20only-555">
   <a href="LICENSE.md"><img alt="MIT License" src="https://img.shields.io/badge/license-MIT-blue"></a>
 </p>
 
-If NuGetForUnity makes NuGet packages feel at home in Unity, Git Submodule
-Manager does the same for Git submodules. It brings Git-hosted UPM packages into
-Unity's own Package Manager, where you can browse GitHub repositories, install a
-package as an editable submodule or read-only Git dependency, and switch
-eligible packages between the two modes without leaving the Editor.
+The focus is small: **installed package status and sources**. `main` contains
+this simplified version. The previous manager, including remote discovery,
+installation, conversion, and removal workflows, is preserved on
+[`legacy`](https://github.com/martincalander/GitSubmoduleForUnity/tree/legacy).
 
-## Highlights
+## What You Get
 
-- Browse authenticated GitHub repositories under **Sources > GitHub**, with
-  native search, sorting, refresh, loading state, and filters for downloaded
-  packages, visibility, and organization.
-- Install a discovered package from one **Install** menu as either a Git
-  submodule or a read-only package. Branch selection prefers `main` when present.
-- See organization groups and **Public** or **Private** repository badges in the
-  native package list.
-- Add a repository directly with **+ > Install package as Git Submodule...**.
-- Remove one or more submodules with Package Manager's standard action, including
-  mixed selections with ordinary packages, and convert eligible packages from
-  its native **Manage** menu. Ordinary-only selections remain Unity-native.
-- Validate root `package.json` files and Unity `package.json.meta` markers, then
-  resolve missing dependencies before making changes.
+- **Submodule** labels for installed package submodules.
+- Installation source and submodule status in the selected package's details.
+- **Sources > GitHub** for the project's installed GitHub submodules and UPM Git
+  dependencies, using Unity's native package list, search, and selection.
+- Protection against Unity deleting a Git checkout as an ordinary embedded
+  package folder.
 
-The Unity 6.7 support claim is limited to the exact `6000.7.0b1` and `6000.7.0b2`
-betas. Unity 7 support is limited to the exact `7000.0.0a7`, `7000.0.0a8`, and `7000.0.0a9`
-alphas. Other 6.7 and Unity 7 builds remain rejected until separately validated.
+Use Unity to manage ordinary packages and Git to manage submodules. Status
+shows how a package is installed; it does not indicate whether local changes
+are committed, pushed, or up to date.
 
-## Requirements
+## Install the Current Version
 
-| Dependency | Requirement |
-| --- | --- |
-| Unity | Exact `6000.3.22f1`, `6000.5.*f1` final releases, exact `6000.6.0f1` and `6000.6.2f1`, exact `6000.7.0b1` and `6000.7.0b2` betas, and exact `7000.0.0a7`, `7000.0.0a8`, and `7000.0.0a9` alphas; Unity `6000.4` is not supported |
-| [Git](https://git-scm.com/downloads) | Required for package operations |
-| [GitHub CLI](https://cli.github.com/) | Optional; required only for authenticated GitHub discovery |
-
-The UPM manifest declares `6000.3.22f1` as its minimum eligibility version.
-Unity manifests cannot encode the non-contiguous support matrix above, so that
-minimum does not make Unity `6000.4` or other `6000.6` versions supported targets.
-
-Git and GitHub CLI must be available to the Unity Editor process. The Welcome
-window and **Preferences > Git Submodule Manager** show installation,
-authentication, and version status. The package is Editor-only and supports
-Windows, macOS, and Linux.
-
-## Installation
-
-For Unity `7000.0.0a7`, `7000.0.0a8`, or `7000.0.0a9`, use a Git URL pinned to a revision
-containing the Unity 7 compatibility changes, or a local checkout of that
-revision. The published
-`v0.8.1` examples below describe the Unity 6 workflow, and the bundled bootstrap
-rejects Unity 7. See the [installation compatibility notes](Documentation~/installation.md#unity-bootstrap-installer).
-
-| Method | Best for | Uses the signed release artifact |
-| --- | --- | :---: |
-| [Unity bootstrap `.unitypackage`](#unity-bootstrap-installer) | Familiar Unity asset import | Yes, through OpenUPM |
-| [OpenUPM](https://openupm.com/packages/com.martincalander.gitsubmodulemanager/) | Normal installation and updates | Yes |
-| [GitHub Release `.tgz`](#signed-github-release-tarball) | Manual or offline installation | Yes |
-| [Git URL](#git-url) | Installing source directly from a tag | No |
-| [Local folder](Documentation~/installation.md#local-folder-for-development) | Package development | No |
-
-### Unity Bootstrap Installer
-
-Download
-[`GitSubmoduleManagerInstaller-0.8.1.unitypackage`](https://github.com/martincalander/GitSubmoduleForUnity/releases/download/v0.8.1/GitSubmoduleManagerInstaller-0.8.1.unitypackage)
-from the [`v0.8.1` release](https://github.com/martincalander/GitSubmoduleForUnity/releases/tag/v0.8.1),
-then import it with **Assets > Import Package > Custom Package**.
-
-Importing the bootstrap does not change the project or contact the network.
-Review its exact plan, then choose **Install 0.8.1**. It configures only the
-exact OpenUPM package scope, installs the signed registry package, verifies its
-version and source, and moves its own unchanged bootstrap files to Trash.
-
-### OpenUPM (Recommended)
-
-View releases and package details on the
-[Git Submodule Manager OpenUPM page](https://openupm.com/packages/com.martincalander.gitsubmodulemanager/).
-
-From the Unity project root, use the OpenUPM CLI:
-
-```bash
-openupm add com.martincalander.gitsubmodulemanager
-```
-
-Without the CLI, add `https://package.openupm.com` as a scoped registry for
-`com.martincalander.gitsubmodulemanager`. Then open **Window > Package
-Management > Package Manager**, choose **+ > Install package by name...**, and
-enter the package name and version `0.8.1`.
-
-### Signed GitHub Release Tarball
-
-Download the
-[signed `0.8.1` `.tgz`](https://github.com/martincalander/GitSubmoduleForUnity/releases/download/v0.8.1/com.martincalander.gitsubmodulemanager-0.8.1.tgz),
-open Unity's Package Manager, and choose **+ > Install package from tarball**.
-Select the downloaded file. Install newer releases manually in the same way.
-
-### Git URL
-
-In Unity's Package Manager, choose **+ > Install package from git URL...** and
-enter:
+In **Window > Package Management > Package Manager**, choose **+ > Install
+package from git URL...** and enter:
 
 ```text
-https://github.com/martincalander/GitSubmoduleForUnity.git#v0.8.1
+https://github.com/martincalander/GitSubmoduleForUnity.git#main
 ```
 
-This URL pins the published `0.8.1` release. Omitting `#v0.8.1` follows the
-mutable `main` branch and is intended only for development. A Git URL installs
-the repository source, not the signed release tarball.
+For a reproducible project, replace `main` with the commit you have tested.
+Local checkouts and submodule installations are covered in the
+[installation guide](Documentation~/installation.md).
 
-See the [installation and compatibility guide](Documentation~/installation.md)
-for scoped-registry settings, manifest JSON, checksum verification, and local
-development setup.
+The simplified version on `main` has not been published as a new release yet.
+Existing `0.8.1` downloads, OpenUPM packages, and the bundled bootstrap contain
+the earlier workflow. Use the Git URL above or a current local checkout for the
+simplified version, including Unity 7.
 
-## Quick Start
+## Use It
 
-1. Open Package Manager and select **GitHub** under **Sources**.
-2. Filter or search the catalogue, then select a package and branch.
-3. Open **Install** and choose **Install as Git Submodule** or **Install as
-   Read-Only Package**.
-4. Use Unity's standard **Remove** action for one or more selected submodules,
-   **Manage** for supported conversions, or the **+** menu to install a
-   submodule directly from a secure Git URL or local repository.
+1. Open **Window > Package Management > Package Manager**.
+2. Select an installed package to inspect its status and source.
+3. Choose **Sources > GitHub** to view installed packages hosted on GitHub.
+4. After changing submodules with Git, let Unity finish importing and refresh
+   Package Manager.
 
-The manager overrides **Remove** only when the action includes a managed
-submodule. It waits for package scans, presents confirmation when required,
-removes the submodules and every ordinary package in the action, and asks Unity
-to resolve as needed. Do not click **Remove** again or manually refresh or resolve.
-Ordinary-only selections, including read-only Git packages, keep Unity Package
-Manager's normal removal behavior.
+The GitHub source reads local installed state. It does not browse your GitHub
+account, contact GitHub, or require GitHub CLI or account setup. An empty list
+is expected when no installed package uses GitHub.
 
-GitHub catalogue discovery uses `gh`; direct URL probing and package operations
-use Git. Catalogue entries need a valid root UPM `package.json` and Unity
-`package.json.meta`, which helps keep ordinary npm repositories out of automatic
-discovery. Direct URL installs may proceed without a valid meta file, but only
-after a mandatory warning. Read-only dependencies that point to a repository
-subdirectory cannot be converted to submodules.
+## Editor Overhead
 
-## Safety
+The extension has no continuous window scan or remote discovery. Closing
+Package Manager releases its status observers and scheduled attachment work
+after any pending local read finishes. While open, it checks Git metadata every
+two seconds; ordinary asset edits do not trigger Git reads, and unchanged status
+does not rebuild package views.
 
-- Managed submodules are restricted to validated direct children of `Packages/`.
-- Remote repositories require secure HTTPS or SSH; explicit local repositories
-  are also supported.
-- Commands run without a shell, hidden credential prompts are disabled, and the
-  package never installs CLI tools or stores credentials.
-- The manager never silently deletes local, staged, untracked, unpushed, or
-  unverified work. Changes require confirmation when their state can be checked;
-  ambiguous states are blocked.
-- Rollback removes only state that can be tied to the current operation. Anything
-  uncertain is left in place with recovery instructions.
+Native integration checks are cached, sidebar icons use 64-pixel imports, and
+the unused Newtonsoft dependency has been removed. Measurements show lower
+allocation and icon-memory costs; isolated startup measurements did not establish
+a meaningful Editor launch speedup. See the
+[performance measurements](.github/CONTRIBUTING.md#performance-verification-on-2026-10-19).
 
-See the [architecture and safety model](Documentation~/architecture.md) and
-[security policy](https://github.com/martincalander/GitSubmoduleForUnity/blob/main/.github/SECURITY.md)
-for implementation details and recovery behavior.
+## Unity Compatibility
+
+The simplified implementation passed **192 Editor tests on Unity
+`7000.0.0a10`, macOS**, including native Package Manager integration, Git
+worktrees, and Play Mode lifecycle checks. See the
+[verification record](.github/CONTRIBUTING.md#edge-case-verification-on-2026-10-19)
+for scope and untested targets.
+
+The compatibility gate retains exact Unity `6000.3.22f1`, `6000.5.*f1` final
+releases, exact `6000.6.0f1` and `6000.6.2f1`, exact `6000.7.0b1` and
+`6000.7.0b2` betas, and exact `7000.0.0a7`, `7000.0.0a8`, `7000.0.0a9`, and
+`7000.0.0a10` alphas. Other versions remain unsupported. The remaining targets
+have not been retested with this implementation. The package is Editor-only.
+
+## Moving from the Earlier Manager
+
+The [`legacy` branch](https://github.com/martincalander/GitSubmoduleForUnity/tree/legacy)
+preserves the former `main` and its fuller management workflow. Existing
+`v0.8.1` releases remain available. Switching to the simplified version leaves
+your installed packages in place, but removes the previous management actions.
+
+Finish pending operations before switching and retain any recovery files until
+you have inspected them. See the [migration guidance](Documentation~/user-guide.md#moving-from-legacy-to-main)
+and [legacy documentation](https://github.com/martincalander/GitSubmoduleForUnity/blob/legacy/Documentation~/index.md).
 
 ## Documentation
 
@@ -172,9 +107,10 @@ for implementation details and recovery behavior.
 - [User guide](Documentation~/user-guide.md)
 - [Troubleshooting](Documentation~/troubleshooting.md)
 - [Architecture and safety model](Documentation~/architecture.md)
+- [Roadmap](Documentation~/roadmap.md)
 - [Changelog](CHANGELOG.md)
-- [Contributing](https://github.com/martincalander/GitSubmoduleForUnity/blob/main/.github/CONTRIBUTING.md)
-- [Support](https://github.com/martincalander/GitSubmoduleForUnity/blob/main/.github/SUPPORT.md)
+- [Contributing](.github/CONTRIBUTING.md)
+- [Support](.github/SUPPORT.md)
 
 ## License
 

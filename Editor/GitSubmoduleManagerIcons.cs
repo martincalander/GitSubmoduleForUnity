@@ -48,7 +48,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                     UnityEditor.PackageManager.PackageInfo.FindForAssembly(
                         typeof(GitSubmoduleManagerIcons).Assembly);
                 if (!string.IsNullOrWhiteSpace(package?.assetPath))
-                    return GitUtility.NormalizePath(package.assetPath).TrimEnd('/');
+                    return package.assetPath.Replace('\\', '/').TrimEnd('/');
             }
             catch
             {
