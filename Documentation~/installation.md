@@ -1,50 +1,48 @@
 # Installation and Compatibility
 
+## Test the Simplified Branch
+
+This guide covers the experimental `simplify-package-status` branch and the
+existing release distribution methods. Published `0.8.1` artifacts contain the
+earlier management workflow, so use a local checkout to test this branch.
+
+In a test project, choose **+ > Install package from disk...** in Package Manager
+and select the checkout's root `package.json`. An existing checkout at
+`Packages/com.martincalander.gitsubmodulemanager` also works as an embedded
+package. Finish any operation in the earlier implementation before switching
+branches, and retain any existing recovery files until inspected.
+
+Local validation of the simplified branch passed on Unity `7000.0.0a10` on
+macOS, including all 133 EditMode tests. This experiment is not a new published release.
+
 ## Prerequisites
 
 ### Unity
 
-The validated Editor targets are exact Unity `6000.3.22f1`, Unity
-`6000.5.*f1` final releases, exact Unity `6000.6.0f1` and `6000.6.2f1`,
-the exact `6000.7.0b1` and `6000.7.0b2` betas, and the exact `7000.0.0a7`, `7000.0.0a8`, and
-`7000.0.0a9` alphas.
-Other Unity 7 builds remain unsupported until separately validated.
-Unity `6000.4` and other `6000.6` versions are not currently supported. The package manifest
-declares `6000.3.22f1` as its minimum eligibility version. All package assemblies
-are editor-only.
+The existing compatibility gate retains exact Unity `6000.3.22f1`, Unity
+`6000.5.*f1` final releases, exact `6000.6.0f1` and `6000.6.2f1`, exact
+`6000.7.0b1` and `6000.7.0b2` betas, and exact `7000.0.0a7`, `7000.0.0a8`,
+`7000.0.0a9`, and `7000.0.0a10` alphas. Other Unity 7 builds, Unity `6000.4`,
+and other `6000.6` releases remain unsupported. Retaining this gate does not
+claim that every target has been retested with the simplified implementation.
 
-### Git CLI
+The manifest uses `unity: 6000.3` with `unityRelease: 22f1` because it can express
+only a minimum eligibility version. All package assemblies are Editor-only.
 
-Git is required. Confirm it is visible to your user account:
+### Git
+
+Use Git to install and manage project submodules. Unity also requires Git for
+UPM Git dependencies. Confirm that your Git installation is available with:
 
 ```bash
 git --version
 ```
 
 Official downloads are available at [git-scm.com](https://git-scm.com/downloads).
-If Git is missing, the standalone Welcome window links to the official download
-page. Install it outside Unity, then choose **Check Again**.
+The simplified status view has no GitHub CLI or authentication setup requirement
+and does not contact GitHub.
 
-### GitHub CLI
-
-GitHub CLI is optional but recommended. It enables authenticated GitHub
-catalogue discovery, including inspection of repository manifests and Unity
-meta files.
-
-```bash
-gh --version
-gh auth login --hostname github.com --web
-gh api user --hostname github.com --jq .login
-```
-
-Install it from [cli.github.com](https://cli.github.com/).
-When GitHub CLI is missing, the Welcome window opens its official install guide.
-When it is installed but unauthenticated, the window provides a copyable
-`gh auth login` command and the authentication guide. Complete authentication
-in a visible terminal, then choose **Check Again**. Git Submodule Manager never
-accepts or stores a GitHub token.
-
-## Installation Options
+## Published Release Installation Options
 
 | Method | Best for | Uses the signed release artifact | Updates |
 | --- | --- | :---: | --- |
@@ -60,7 +58,7 @@ installs use repository source and do not contain the release-only attestation.
 Unity verifies the signature on supported tarball packages, although users
 outside the signing Unity organization might see a limited-trust status.
 
-OpenUPM currently serves signed version `0.8.1`. If a future release is still
+These examples pin the signed `0.8.1` release. If a future release is still
 being imported, use its signed GitHub Release tarball for the same packaged
 payload, or use its pinned Git URL when a source installation is acceptable.
 
@@ -73,7 +71,7 @@ path or avoid committing a machine-specific dependency path.
 The bundled `.unitypackage` bootstrap retains its validated Unity 6 targets:
 exact `6000.3.22f1`, `6000.5.*f1` final releases, exact `6000.6.0f1` and
 `6000.6.2f1`, and exact `6000.7.0b1` and `6000.7.0b2` betas. It rejects Unity 7.
-For the `7000.0.0a7`, `7000.0.0a8`, and `7000.0.0a9` alphas, use a direct UPM Git URL pinned to a
+For the `7000.0.0a7`, `7000.0.0a8`, `7000.0.0a9`, and `7000.0.0a10` alphas, use a direct UPM Git URL pinned to a
 revision containing the Unity 7 compatibility changes, or a local checkout of that
 revision. The released `v0.8.1` installation examples below describe the
 Unity 6 workflow.
@@ -214,48 +212,17 @@ also mutable.
 
 ## First Open
 
-On a supported Unity version, open **Window > Package Management > Package
-Manager** and select **GitHub** under **Sources**. Repositories appear
-incrementally alongside installed GitHub packages. Select a package, review its
-**Repository** link and branch, then choose **Install as Git Submodule** or
-**Install as Read-Only Package** from **Install**. Choose **Refresh** to rescan.
+Open **Window > Package Management > Package Manager** and select an installed
+package to inspect its source and submodule status. Select **Sources > GitHub**
+to view installed GitHub submodules and UPM Git dependencies. The page reads
+installed project state and does not scan remote repositories.
 
-If GitHub CLI is missing or authentication fails, installed GitHub packages
-remain visible, and direct URL installation remains available from Package
-Manager's **+ > Install package as Git Submodule...** command.
-
-Direct URL installation may continue when the root `package.json` is valid but
-`package.json.meta` is missing or invalid. The final confirmation then warns
-that the repository could not be identified automatically as a Unity package.
-If the meta file is valid, its GUID is tied to the inspected revision and
-checked again after checkout.
-
-The first time you open **Sources > GitHub**, a small standalone Welcome window
-checks Git, GitHub CLI, and GitHub authentication for the current user. Unity
-records that the window has been shown in the ignored, per-user `UserSettings/`
-directory. Reopen it with **Show Welcome** under Unity's **Preferences > Git
-Submodule Manager** page.
-
-That Preferences page repeats the Welcome setup checks with installed versions,
-authentication status, official install/help actions, and **Check Again**. It
-also provides **Open GitHub Package Manager** and stores the following per-user
-defaults and safety choices:
-
-- initial repository visibility (**All Repositories** by default) and
-  organization filters (blank for all owners by default);
-- initial discovered-package install mode (**Git Submodule** by default);
-- whether to install missing dependencies automatically when each one has a
-  single unambiguous source;
-- whether to skip the manager's confirmation for a clean, routine submodule
-  removal or conversion. Mixed selections that include ordinary packages still
-  require one aggregate confirmation.
-
-Both options are off by default. Warnings about dirty, unpushed, changed, or
-unverified work always appear.
+There is no Welcome window or Preferences setup. Package changes belong to
+Unity and Git. See the [user guide](user-guide.md) for the reduced workflow.
 
 ## Team Clone Setup
 
-Clone a project and initialize all registered submodules with:
+Clone a project and initialize its registered submodules with:
 
 ```bash
 git clone --recurse-submodules <project-url>
@@ -267,94 +234,32 @@ For an existing clone:
 git submodule update --init --recursive
 ```
 
-Git Submodule Manager never initializes all project submodules automatically.
-Use the explicit Git command above after cloning a team project.
-
-## Compatibility
-
-The supported Editor targets are listed under [Prerequisites](#unity). Unity
-package manifests can express a minimum version, but not a disjoint support
-set. For that reason, `package.json` uses `unity: 6000.3` with
-`unityRelease: 22f1` to admit the supported 6000.3 target. Those fields do not
-declare support for Unity 6000.4 or other unvalidated Editor versions.
-
-| Platform | CLI discovery locations |
-| --- | --- |
-| Windows | `PATH`, Git for Windows, GitHub CLI program directories |
-| macOS | `PATH`, Homebrew on Apple Silicon and Intel, system paths |
-| Linux | `PATH`, common system paths, `/snap/bin` |
-
-Commands are started directly rather than through a shell. Local paths are
-normalized for Git on each platform, including Windows repository locations.
-
-Network packages must use HTTPS or SSH. Plaintext `http://` and `git://`
-transports and URLs containing passwords or access tokens are rejected.
-Explicit local paths and `file://` repositories remain available for local
-development.
+The extension does not initialize submodules automatically. Each teammate and
+CI identity needs Git access to the relevant repositories. After initialization,
+let Unity finish import and refresh Package Manager.
 
 ## Upgrade or Remove
 
-Manage Git Submodule Manager itself from Unity's Package Manager. When an
-installed package is a verified submodule, Unity's standard **Remove** action
-uses the guarded Git workflow and its native **Manage** menu provides **Convert
-to Read-Only Package**. The same Remove action safely handles all-submodule and
-mixed multi-selections, including every ordinary package in the action. The
-manager intercepts Remove only when the selection includes a managed submodule;
-ordinary-only selections, including read-only Git dependencies, retain Unity
-Package Manager's normal removal behavior. Eligible direct read-only Git
-dependencies provide **Convert to Submodule**.
+Use Package Manager to update or remove an ordinary UPM installation of this
+package. If it is installed as a submodule, use Git to change its revision or
+remove it. The extension blocks Unity's raw embedded-folder deletion for
+submodules and supplies no replacement mutation workflow.
 
-After you choose **Remove**, the manager waits for any active package scan and
-then presents confirmation when required. It removes the submodules, completes
-any ordinary package removal, and requests package resolution as needed. This
-handoff survives assembly reload and retries only
-while the exact captured manifest dependencies remain unchanged. Do not click
-**Remove** again or manually refresh or resolve. A terminal diagnostic appears
-only if bounded automatic recovery fails or changed project input makes another
-attempt unsafe. Review
-[CHANGELOG.md](../CHANGELOG.md) before changing versions.
+Review [CHANGELOG.md](../CHANGELOG.md) before changing versions. The simplified
+branch does not resume earlier installation, conversion, or removal operations.
+Inspect retained recovery evidence before continuing an interrupted operation.
 
 ### Migrating from Git Package Manager
 
-During pre-release development, the UPM package, assembly, namespace, and old
-public window types were renamed. Earlier revisions used
-`com.essentials.gitpackagemanager`, followed by
-`com.martincalander.gitpackagemanager`. Existing Git URL installations must
-replace whichever legacy dependency key appears in `Packages/manifest.json`;
-changing only the revision is not sufficient:
+Earlier development revisions used `com.essentials.gitpackagemanager`, then
+`com.martincalander.gitpackagemanager`. The current package name is
+`com.martincalander.gitsubmodulemanager`. For a UPM dependency, replace the legacy
+manifest key and let Unity resolve the updated package. For a submodule,
+coordinate its `.gitmodules` entry and parent gitlink with the package path.
 
-```json
-{
-  "dependencies": {
-    "com.martincalander.gitsubmodulemanager": "https://github.com/martincalander/GitSubmoduleForUnity.git#v0.8.1"
-  }
-}
-```
-
-Remove the old `com.essentials.gitpackagemanager` or
-`com.martincalander.gitpackagemanager` key and let Unity regenerate
-`Packages/packages-lock.json`. No earlier version tag was published from this
-repository.
-
-For a submodule installation, also coordinate the parent repository's gitlink
-and `.gitmodules` path from either
-`Packages/com.essentials.gitpackagemanager` or
-`Packages/com.martincalander.gitpackagemanager` to
-`Packages/com.martincalander.gitsubmodulemanager`, then run
-`git submodule sync --recursive`. Update downstream assembly definition
-references from `MartinCalander.GitPackageManager.Editor` to
-`MartinCalander.GitSubmoduleManager.Editor`, and source namespaces from
-`MartinCalander.GitPackageManager.Editor` to
-`MartinCalander.GitSubmoduleManager.Editor`.
-
-The former management-window redirect and package menu were removed. Current
-workflows use Unity's native Package Manager, so code that referenced the old
-window type must be updated.
-
-Serialized editor data carries Unity's migration metadata. Per-user preferences
-are copied without deleting the original to
-`UserSettings/GitSubmoduleManagerSettings.asset`, and interrupted-operation
-state under the old Library and SessionState paths remains recoverable.
-
-After this one-time identity migration, a dependency pinned to a Git tag can be
-upgraded by changing its tag normally.
+Downstream assembly definitions should reference
+`MartinCalander.GitSubmoduleManager.Editor`; the matching source namespace is
+`MartinCalander.GitSubmoduleManager.Editor`. The old management window and its
+redirect are unavailable. This branch also removes the earlier per-user
+Preferences and mutation recovery services, so inspect and preserve any old
+recovery files manually before changing installations.

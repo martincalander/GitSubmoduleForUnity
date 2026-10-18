@@ -9,16 +9,8 @@ confirm that Git works in the same user account that launches Unity:
 git --version
 ```
 
-If the problem involves **Sources > GitHub**, also check the optional GitHub
-CLI and its authentication:
-
-```bash
-gh --version
-gh auth status -h github.com
-```
-
-GitHub CLI (`gh`) is not required for direct URL installation or other Git-only
-package operations.
+The simplified **Sources > GitHub** page uses installed project metadata.
+GitHub CLI and authentication are not required.
 
 ## Where to Ask
 
@@ -40,8 +32,7 @@ Include the following when reporting a problem:
 
 - Unity version and operating system;
 - package version or commit;
-- output from `git --version` and, when relevant, `gh --version`;
-- whether `gh auth status -h github.com` succeeds;
+- output from `git --version`;
 - the exact operation, expected result, actual result, and complete error text;
 - a minimal `.gitmodules` excerpt with private URLs redacted;
 - screenshots when the problem is visual.

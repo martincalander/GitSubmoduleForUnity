@@ -1,338 +1,60 @@
 # User Guide
 
-Git Submodule Manager extends Unity's existing Package Manager. On exact Unity
-`6000.3.22f1`, a Unity `6000.5.*f1` final release, exact Unity `6000.6.0f1` or
-`6000.6.2f1`, the exact `6000.7.0b1` and `6000.7.0b2` betas, or the exact
-`7000.0.0a7`, `7000.0.0a8`, and `7000.0.0a9` alphas,
-open **Window > Package Management > Package Manager**, then select **GitHub**
-under **Sources**. There is no separate package management window.
+Open **Window > Package Management > Package Manager**. The simplified manager
+adds installed-package status to that window and a **GitHub** page under
+**Sources**. See [compatibility](installation.md#unity) for the exact Editor
+targets retained by this experimental branch.
 
-The GitHub source uses Unity's native package list, search, sorting, filters,
-selection, details tabs, action toolbar, and loading state. It combines
-installed GitHub packages with valid root UPM packages discovered from the
-authenticated user's repositories and visible organizations.
+## Package Status
 
-Installed package submodules are labelled **Submodule** instead of **Custom** on
-normal Package Manager pages. Inside **Sources > GitHub**, repositories carry
-their **Public** or **Private** visibility badge. A GitHub-hosted installed
-package reports **GitHub** with the Git icon in its Source card; other supported
-Git hosts report **Git**.
+An installed package recognised as a submodule is labelled **Submodule** in the
+package list. Select a package to see its installation source and submodule
+status in the details area. Other packages retain their Unity installation
+source, such as a registry, Git dependency, or local package.
 
-## Welcome and Setup
+Submodule status describes how the package is installed. It does not report
+whether the checkout is clean, up to date, or pushed. Use your Git client for
+those details.
 
-The first activation of **Sources > GitHub** shows a small standalone Welcome
-window once per user and project. It checks:
+## GitHub Source
 
-- Git, which is required for installation, conversion, and removal;
-- GitHub CLI, which is optional for direct URL installation but required for
-  authenticated discovery;
-- GitHub CLI authentication for `github.com`.
+Choose **Sources > GitHub** to see installed packages hosted on GitHub:
 
-The checks run in the background. If a tool is missing, follow the link to its
-official installation guide, install it outside Unity, and choose **Check
-Again**. If GitHub CLI is unauthenticated, copy the displayed command and run it
-in a visible terminal. Git Submodule Manager never accepts or stores tokens,
-passwords, SSH keys, or credential-helper output.
+- package submodules registered by the project;
+- UPM Git dependencies resolved by Unity.
 
-The same setup cards appear under **Preferences > Git Submodule Manager**.
-Installed tools show a checkmark and their detected version. Results refresh
-automatically after a short interval; use **Check Again** for an immediate
-refresh after changing a tool or its authentication. A healthy result can
-survive a script reload for the time left in that same short interval; a manual
-check always discards it first.
+The page uses Unity's native package list, search, sorting, and selection. It
+contains installed packages only, so an empty page is expected in a project
+without GitHub packages. Repositories that you own or can access do not appear
+unless a package from them is already installed.
 
-Choose **Open GitHub Package Manager** to continue into Package Manager. Reopen
-the window at any time from **Preferences > Git Submodule Manager > Show
-Welcome**. Setup explains unsupported Editor versions and disables navigation
-on those versions. If Package Manager activation fails, the Welcome window
-stays open and displays the reason so you can retry.
+Opening this page does not query GitHub, read account credentials, or require
+GitHub CLI. Private installed packages appear from their local source metadata.
+Their visibility does not grant access to teammates or build machines.
 
-## Preferences
+## Changing Packages
 
-Open **Edit > Preferences > Git Submodule Manager** on Windows and Linux, or
-Unity's **Settings > Git Submodule Manager** page on macOS. Settings are stored
-per user and project in
-`UserSettings/GitSubmoduleManagerSettings.asset`; they do not modify the package
-or create team-shared project settings.
+Use Unity's Package Manager to add, update, or remove ordinary UPM packages.
+Use Git to add, update, convert, or remove submodules and review the parent
+repository's `.gitmodules` and gitlink changes.
 
-Package Manager defaults include:
+The extension blocks Unity's raw embedded-package deletion for submodules.
+That action would delete the package folder without completing Git's submodule
+workflow. Remove a submodule with your Git tools after reviewing its local work.
+The extension does not run removal or conversion on your behalf.
 
-- **Visibility**: all repositories (default), public only, or private only;
-- **Organization**: a GitHub organization login, or blank by default for all
-  owners;
-- **Install Mode**: **Git Submodule** (default) or **Read-Only Package**.
+After an external Git change, wait for Unity's import to finish and refresh
+Package Manager. A submodule must be initialized and available as an installed
+Unity package before the page can display it. See
+[team clone setup](installation.md#team-clone-setup) for initialization commands.
 
-Visibility and organization defaults are applied only when **Sources > GitHub**
-has no existing filter selection. The install-mode default is applied when a
-discovered repository is selected; the two **Install** menu entries remain
-unchecked actions. The page also provides **Open GitHub Package Manager**, setup
-status, version details, installation guidance, and a manual **Check Again**
-action.
+## Switching from the Earlier Workflow
 
-Two opt-in workflow settings are available:
+This branch removes the manager's remote catalogue, install and conversion
+actions, dependency planning, Welcome window, and Preferences page. Existing
+package installations remain in the project. The simplified view reads their
+current state and leaves package changes to Unity and Git.
 
-- **Skip Routine Confirmation** skips the second prompt only after Git verifies
-  that a submodule removal or conversion is clean and routine. Warnings about
-  uncommitted, unpushed, changed, or unverified work are never suppressible.
-- **Install Dependencies Automatically** skips the missing-dependency prompt
-  only when every missing dependency has exactly one unambiguous source.
-  Ambiguous or unresolved dependencies still stop installation.
-
-Both are off by default, so routine removals, conversions, and dependency plans
-continue to ask for confirmation until you change these settings.
-
-On first use after the package rename, an existing
-`UserSettings/GitPackageManagerSettings.asset` file is copied to the new path
-without deleting the original.
-
-## Faster Play Mode Entry
-
-Git Submodule Manager can stay loaded when entering and leaving Play mode with
-domain reload disabled. In **Project Settings > Editor > Enter Play Mode
-Settings**, choose **Reload Scene only**. This keeps scene reload enabled while
-skipping code reload. The package does not change this project setting.
-
-The manager's Editor services, event registrations, and active operation
-ownership persist across these transitions. Entering Play mode does not reset
-discovery, repeat an installation, or extend the catalogue retention window.
-Script recompilation still uses the normal cleanup and recovery paths.
-
-Game scripts must separately reset their own per-play static state and event
-subscriptions. Follow Unity's [code lifecycle guide][code-lifecycle] when adding
-those callbacks. Faster entry depends on the scene and other installed packages;
-disabling domain reload alone does not guarantee an instant transition.
-
-[code-lifecycle]: https://docs.unity.com/en-us/engine/7000.0/manual/programming-environment/code-reload-serialization/code-reload/code-lifecycle
-
-## GitHub Discovery and Filters
-
-Entering **Sources > GitHub** starts the authenticated catalogue scan and shows
-Package Manager's native **Refreshing list...** state and spinner. Discovery
-checks repositories owned by the current GitHub user and their visible
-organizations. To appear in the catalogue, a repository needs a root
-`package.json` with a valid reverse-domain name and SemVer 2.0 version, plus a
-regular root `package.json.meta` from the same default-branch commit. The meta
-file must contain `fileFormatVersion: 2` and one nonzero 32-character hexadecimal
-GUID. This helps distinguish Unity packages from ordinary npm repositories, but
-it does not make a repository trustworthy or official.
-
-Results appear incrementally and are grouped under **Organization - _owner_**.
-Installed GitHub packages remain in the list throughout the scan. Choose Package
-Manager's **Refresh** action to rescan the project and GitHub. If a scan is
-already active, one replacement scan runs afterward.
-
-After a script reload, a recently completed catalogue may reappear once GitHub
-CLI confirms that the same account is still active. Package Manager continues
-to show **Refreshing list...** while it replaces those entries with a live scan.
-The original 15-minute limit is not restarted by reloading scripts or reopening
-Package Manager, and cached entries are never used to prove that a dependency is
-missing from GitHub. Cached rows remain visible and searchable, but their
-**Install** actions stay disabled until that exact repository has been verified
-by the live scan. Discovery verifies the account before starting its
-account-scoped repository reads and checks it again before finishing. If you
-switch GitHub CLI accounts during a scan, the result is discarded and you can
-refresh again to scan the current account cleanly.
-
-Use Unity's native **Filters** control in the Package Manager toolbar to narrow
-the page by:
-
-- status: any package or **Downloaded** packages installed in this project;
-- repository visibility: all, public, or private;
-- organization: all owners or one **Organization - _owner_** value.
-
-**Downloaded** includes both Git submodules and read-only UPM Git dependencies.
-Search, sorting, and all filters remain Package Manager-native. Results from an
-older scan cannot overwrite a newer refresh.
-
-If GitHub CLI is missing or unauthenticated, remote discovery cannot start.
-Installed GitHub packages remain available in the native page, and direct URL
-installation continues to require only Git.
-
-## Install a Discovered Package
-
-Select an uninstalled result in **Sources > GitHub**:
-
-1. Review its name, owner, version, description, Source card, and **Repository**
-   link.
-2. Choose a branch. `main` is selected when it exists; otherwise the remote
-   default branch is selected. Git loads other remote branches on demand.
-3. Open **Install** and choose **Install as Git Submodule** for an editable
-   checkout under `Packages/`, or **Install as Read-Only Package** for a normal
-   UPM Git dependency.
-4. Review the repository, revision, install mode, and any dependency plan before
-   confirming.
-
-Before changing the project, Git resolves the selected branch to a commit and
-reads `package.json` and `package.json.meta` from that commit. After installation,
-the manager rechecks the package name, version, dependencies, origin, revision,
-and Git registration. Catalogue installs also retain the verified meta GUID.
-Read-only installs are pinned to the inspected commit; submodule installs are
-registered at `Packages/<package-name>`.
-
-If project or repository state changes during installation, the operation stops.
-The manager removes only state it can prove it created; otherwise it leaves the
-state in place and tells you what to inspect. In-progress installs survive
-assembly reload without repeating a completed mutation. See the
-[architecture and safety model](architecture.md) for the underlying Git
-postconditions and reload handoff.
-
-## Missing Dependencies
-
-Before installing the root package, the manager checks which declared
-dependencies are still missing at the required version. Unity and configured
-registry packages remain normal transitive Package Manager dependencies. A
-dependency with one matching GitHub source is installed explicitly, leaf-first,
-in the same mode as the root package.
-
-`com.unity.*` requirements are searched in configured registries. Other package
-names are checked on GitHub first, across the user's repositories and every
-visible organization. Registry fallback is available only after a complete scan
-finds no GitHub match. An incomplete scan, inaccessible manifest, duplicate
-match, or version or metadata mismatch stops installation instead of guessing.
-
-When dependencies are missing, the confirmation lists each requirement and its
-resolved source. Choose **Install Dependencies & Continue** only after reviewing
-that plan. If any requirement has no source or multiple possible sources, the
-install stops with **Missing Dependencies Need Attention** rather than choosing
-one automatically. Version-mismatched sources are also blocking. If packages
-require incompatible versions of the same dependency, an installed version
-that satisfies one requirement does not clear the conflict.
-
-The Preferences option to install dependencies automatically applies only when
-every missing dependency has one resolved source. It never bypasses an
-unresolved or ambiguous result.
-
-## Install a Submodule from a URL
-
-From any Package Manager page, choose **+ > Install package as Git
-Submodule...**. This workflow needs Git but not GitHub CLI.
-
-Enter a secure HTTPS or SSH repository URL, or an explicit local path. **Package
-Name** and **Branch** remain disabled while Git inspects the remote. A successful
-probe reads the exact name from the root `package.json`, checks the sibling
-`package.json.meta`, selects `main` when available or otherwise the remote
-default, and adds available branches to the branch menu. After selecting another
-branch, wait for its metadata probe to finish before confirming.
-
-New local paths beginning with `./` or `../` are relative to the Unity project
-root. The manager resolves them to an absolute path before probing, trust
-confirmation, or installation, so each step uses the same repository.
-
-Before cloning, review the inline trust confirmation with the redacted
-repository URL, selected revision, and exact `Packages/<package-name>`
-destination. Unity packages can execute Editor code, so install only a
-repository you trust.
-
-If the selected branch has a valid UPM manifest but its root
-`package.json.meta` is missing or invalid, the direct installer remains
-available because you supplied the repository explicitly. Its confirmation
-includes a mandatory warning that the repository could not be identified
-automatically as a Unity package. This exception does not add the repository to
-the GitHub catalogue.
-
-Plaintext `http://` and `git://` transports are rejected. HTTPS, `ssh://`,
-SCP-style SSH addresses, `file://`, and explicit local paths are supported.
-Embedded passwords and access tokens are rejected; use Git's credential manager
-or an SSH agent.
-
-Before installation completes, the checked-out manifest must match the name,
-version, and dependencies found by the branch probe. If the probe verified a
-Unity meta GUID, the checked-out meta file must match it too. A mismatch stops
-the operation; the manager rolls back only state it can tie to that operation.
-
-Filesystem metadata reads check the opened file handle before reading bounded
-contents. Links, pipes, devices, and files that change identity during inspection
-are rejected.
-
-## Convert Package Source
-
-Select an installed package and open Unity's native **Manage** menu:
-
-- A verified editable package submodule provides **Convert to Read-Only
-  Package**. The normal UPM Git dependency is recorded before the verified
-  submodule worktree is removed.
-- An eligible direct read-only Git dependency provides **Convert to
-  Submodule**. Its `package.json` must be at the repository root; Git URLs that
-  select a package in a repository subdirectory cannot be converted.
-
-Conversion is target-first: the replacement is created and verified before the
-original source is removed. Read-only-to-submodule conversion checks the root
-manifest at the commit Unity resolved. Submodule-to-read-only conversion pins
-the current committed revision after validating its root manifest and Unity meta
-file. Missing, linked, malformed, oversized, or mismatched committed files stop
-conversion before the original package changes.
-
-The manager also checks the package and parent repository for local work.
-Routine confirmation can be disabled in Preferences, but dirty or unverified
-state always requires attention. See the
-[architecture and safety model](architecture.md) for the immutable Git checks.
-
-## Remove Submodules
-
-For a verified installed submodule, use Unity Package Manager's standard
-**Remove** action. The manager safely overrides that action for submodules, so
-there is no separate **Uninstall Submodule** command. Before making changes, it
-verifies the package path, gitlink, `.gitmodules` registration, origin, and local
-state. It then stages the precise parent-repository change instead of asking
-Unity to delete the package directory directly.
-
-The standard action also works with multiple selected packages:
-
-- An ordinary-only selection, including read-only Git packages, keeps Unity
-  Package Manager's normal removal behavior.
-- If the Remove action contains a managed submodule, the manager claims that
-  whole action. Every targeted submodule is inspected before anything is
-  removed. When confirmation is required, one aggregate prompt lists the exact
-  submodules and ordinary packages targeted by that action.
-- Cancelling that prompt or failing any preflight check leaves every selected
-  target unchanged.
-- All targeted submodules are removed in one guarded Git operation. If a later
-  submodule fails, the operation reports the completed prefix, preserves the
-  untouched suffix, and does not remove any selected ordinary packages.
-- In a successful mixed selection, Unity removes every selected ordinary
-  package only after it has resolved and verified that the exact embedded
-  checkouts are gone. A manifest dependency with the same package name may
-  remain.
-- Select Git Submodule Manager separately when it is itself installed as a
-  submodule and the same selection also contains ordinary packages.
-
-No second action is required. The manager waits for any active package scan,
-presents confirmation when required, performs the submodule changes, and asks
-Unity to resolve the resulting package graph. Its confirmed handoff survives
-script reload. If an ordinary
-package request fails or its live request handle is lost during reload, the
-manager retries automatically only when that package still has the exact direct
-manifest dependency captured before the Git change. It also repeats Package
-Manager resolution when the registered-package view has not caught up. Do not
-click **Remove** again or manually use **Refresh** or **Resolve**.
-
-Automatic recovery is bounded. A terminal diagnostic is shown only when those
-attempts fail, or when a dependency changed and repeating the original removal
-would no longer be safe. In that case, inspect the reported package and current
-manifest rather than starting a second overlapping removal.
-
-The removed worktree and original `.gitmodules` file are moved to
-`Library/GitSubmoduleManager/Recovery`. The completion message lists their
-locations so you can inspect and delete them later. If repository state changes
-during removal, the manager stops and preserves the unexpected state for
-recovery.
-
-Modified, untracked, ignored, conflicted, staged, unpushed, local-only, or
-otherwise ambiguous work is never silently discarded. Review every warning and
-the parent repository's staged result before committing. Removal and conversion
-consent binds the inspected staged, modified, untracked, and ignored file
-contents; changed contents require a new review. Inspection is limited to 4096
-paths, 16 MiB per file, and 64 MiB total. Linked or special files, nested
-repositories, and work beyond those limits block automatic removal or
-conversion. Inspect the reported paths and move the affected work to safety
-before retrying, or manage it manually with Git.
-
-Git metadata is kept when possible so the submodule can be inspected or safely
-added again. The [architecture and safety model](architecture.md) describes the
-index and recovery checks in detail.
-
-## Private Repositories
-
-Private repository cloning relies on the user's existing Git credential manager
-or SSH agent. Authenticated discovery relies on GitHub CLI. Every teammate and
-build machine must independently have access to each private repository.
+Finish any operation in the earlier implementation before switching branches.
+If an earlier operation left recovery files, retain them until you have inspected
+the project with Git. This branch does not resume the earlier mutation workflow.

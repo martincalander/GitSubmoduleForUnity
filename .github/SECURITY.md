@@ -34,7 +34,7 @@ release.
 
 ### Command execution
 
-The package launches `git` and optional `gh` processes with
+The package launches local read-only `git` commands with
 `UseShellExecute = false`. It does not execute user input through a shell.
 
 - repository URLs, branch names, package names, and managed paths are validated;
@@ -46,39 +46,34 @@ The package launches `git` and optional `gh` processes with
   as unusable for structural parsing when incomplete;
 - commands have bounded timeouts;
 - interactive credential prompts are disabled;
-- missing CLI tools are never installed by the package; setup surfaces link only
-  to the official Git and GitHub CLI installation guidance, and the package
-  never runs a downloaded install script or user-provided command.
+- missing CLI tools are never installed by the package; it never runs a
+  downloaded install script or user-provided command.
 
-### Credentials
+### Credentials and Network Access
 
-The package does not collect, persist, log, or forward tokens, passwords, SSH
-keys, or credential-helper output. Authentication belongs to Git, the platform's
-credential manager, SSH agent, and GitHub CLI.
+The simplified branch does not collect credentials, contact GitHub, run GitHub
+CLI, or perform remote Git operations. It reads installed package information
+and local Git metadata. Unity and Git retain ownership of package installation
+and authentication outside this extension.
 
-### Network access
+### Filesystem Access
 
-- Git performs clone, fetch, remote branch, and submodule operations.
-- GitHub CLI performs authenticated repository discovery and retrieves root
-  package metadata. Catalogue entries require a valid root `package.json` and
-  matching `package.json.meta` from the same commit.
-- The package does not contain its own HTTP client or telemetry.
+The package reads the project index and `.gitmodules` through bounded local Git
+commands and compares those records with Unity's registered package paths.
+Classification requires a matching direct `Packages/<package-name>` path,
+a stage-zero gitlink, and an unambiguous submodule registration. It is not a
+claim that the checkout is clean or safe to delete.
 
-### Filesystem access
-
-The package reads project `.gitmodules` and package metadata. Submodule
-filesystem changes are constrained to validated direct children of `Packages/`.
-Persisted submodule URLs, local Git configuration, worktree origins, and
-postconditions are revalidated around mutations. Catalogue entries and
-read-only installs require bounded, strict-UTF-8 root `package.json` and
-`package.json.meta` blobs from the same commit. Local package metadata must be
-regular files rather than symbolic links or reparse points.
+The extension performs no repository or manifest writes. It blocks Unity's raw
+embedded-folder deletion for known submodules, local Git checkouts, and direct
+package paths whose status is pending or unverified. Existing recovery files
+from earlier versions remain outside this extension's ownership.
 
 ## User Responsibilities
 
-- Install Git and GitHub CLI from trusted official sources.
+- Install Git from a trusted official source.
 - Review repository URLs before adding packages.
 - Apply least-privilege access to private repositories.
 - Protect developer and CI credentials outside Unity.
 - Review Git changes before committing submodule updates or removals.
-- Keep Unity, Git, GitHub CLI, and this package updated.
+- Keep Unity, Git, and this package updated.

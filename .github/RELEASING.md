@@ -67,9 +67,9 @@ The version in [`package.json`](../package.json) and the tag without its leading
    the builder. Repository validation and the release workflow require the
    published bootstrap to match those locally tested bytes.
 7. In a clean Unity project, install the package from the exact release commit,
-   run `MartinCalander.GitSubmoduleManager.Editor.Tests` in EditMode, then test
-   submodule and read-only installation, both eligible conversions, and
-   submodule removal.
+   run `MartinCalander.GitSubmoduleManager.Editor.Tests` in EditMode, then verify
+   submodule classification, the installed GitHub source, ordinary package
+   actions, and protection against raw embedded deletion of submodules.
 8. Record any platform or Unity version that could not be tested in the release
    pull request.
 9. Merge the release pull request only after required checks pass and the
