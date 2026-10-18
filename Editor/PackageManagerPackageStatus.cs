@@ -327,17 +327,55 @@ namespace MartinCalander.GitSubmoduleManager.Editor
 
         internal static bool ShouldBlockEmbeddedRemoval(string name, string resolvedPath)
         {
-            return ShouldBlockEmbeddedRemoval(ProjectRoot, name, resolvedPath, IsReady, snapshot);
+            bool blocked = ShouldBlockEmbeddedRemoval(ProjectRoot, name, resolvedPath, IsReady, snapshot, out bool refreshRequired);
+            if (refreshRequired)
+                Refresh();
+            return blocked;
         }
 
         internal static bool ShouldBlockEmbeddedRemoval(string projectRoot, string name, string resolvedPath,
             bool ready, StatusSnapshot data)
         {
-            if (!IsDirectPackage(projectRoot, name, resolvedPath))
+            return ShouldBlockEmbeddedRemoval(projectRoot, name, resolvedPath, ready, data, out _);
+        }
+
+        private static bool ShouldBlockEmbeddedRemoval(string projectRoot, string name, string resolvedPath,
+            bool ready, StatusSnapshot data, out bool refreshRequired)
+        {
+            refreshRequired = false;
+            if (!TryGetDirectPackagePath(projectRoot, resolvedPath, out string relativePath))
                 return false;
-            return !ready || !string.IsNullOrEmpty(data.Error) ||
-                   data.Gitlinks.Contains("Packages/" + name) ||
-                   data.Repositories.ContainsKey("Packages/" + name) || HasLocalGit(resolvedPath);
+            if (!ready || !string.IsNullOrEmpty(data.Error))
+                return true;
+            refreshRequired = data.FilesStamp == null || data.FilesStamp != FileStamp(projectRoot, data.IndexPath);
+            return refreshRequired || ContainsPath(projectRoot, data.Gitlinks, relativePath) ||
+                   ContainsPath(projectRoot, data.Repositories.Keys, relativePath) || HasLocalGit(resolvedPath);
+        }
+
+        private static bool TryGetDirectPackagePath(string projectRoot, string resolvedPath, out string relativePath)
+        {
+            relativePath = null;
+            if (string.IsNullOrEmpty(resolvedPath))
+                return false;
+            try
+            {
+                string fullPath = Path.GetFullPath(resolvedPath).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+                if (!SamePath(Path.Combine(projectRoot, "Packages"), Path.GetDirectoryName(fullPath)))
+                    return false;
+                relativePath = "Packages/" + Path.GetFileName(fullPath);
+                return true;
+            }
+            catch (Exception) { return false; }
+        }
+
+        private static bool ContainsPath(string projectRoot, IEnumerable<string> paths, string relativePath)
+        {
+            foreach (string path in paths)
+                if (string.Equals(path, relativePath, PathComparison) ||
+                    TryGetDirectPackagePath(projectRoot, Path.Combine(projectRoot, path), out string normalized) &&
+                    string.Equals(normalized, relativePath, PathComparison))
+                    return true;
+            return false;
         }
 
         private static bool HasLocalGit(string path)
@@ -358,22 +396,33 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             return info.Source == PackageSource.Git && IsGitHubUrl(PackageUrl(name, info.PackageId));
         }
 
-        internal static string Describe(PackageInfo info)
+        internal static string Describe(PackageInfo info) => Describe(info, IsReady, snapshot);
+
+        internal static string Describe(PackageInfo info, bool ready, StatusSnapshot data)
         {
             if (info == null)
                 return "Select an installed package to see its source.";
-            if (!snapshot.Packages.TryGetValue(info.name ?? string.Empty, out InstalledPackage installed) ||
+            if (!data.Packages.TryGetValue(info.name ?? string.Empty, out InstalledPackage installed) ||
                 !SamePath(installed.ResolvedPath, info.resolvedPath))
+            {
+                if (!ready)
+                    return "Checking package status...";
+                if (!string.IsNullOrEmpty(data.Error))
+                    return "Package status unavailable. " + data.Error;
                 return "Not installed in this project.";
-            if (TryGetSubmodule(info.name, info.resolvedPath, out PackageSubmoduleStatus status))
+            }
+            if (TryClassify(ProjectRoot, info.name, info.resolvedPath, data, out _))
                 return "Git submodule (editable checkout)";
             if (IsDirectPackage(ProjectRoot, info.name, info.resolvedPath))
             {
-                if (!IsReady)
+                if (!ready)
                     return "Checking submodule status...";
-                if (!string.IsNullOrEmpty(Error))
-                    return "Submodule status unavailable. " + Error;
-                if (ShouldBlockEmbeddedRemoval(info.name, info.resolvedPath))
+                if (!string.IsNullOrEmpty(data.Error))
+                    return "Submodule status unavailable. " + data.Error;
+                bool blocked = ShouldBlockEmbeddedRemoval(ProjectRoot, info.name, info.resolvedPath, ready, data, out bool refreshRequired);
+                if (refreshRequired)
+                    return "Checking submodule status...";
+                if (blocked)
                     return "Git checkout. Its submodule registration could not be verified.";
             }
             return info.source == PackageSource.Git

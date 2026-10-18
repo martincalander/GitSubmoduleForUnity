@@ -344,6 +344,130 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
             }
         }
 
+        [UnityTest]
+        public IEnumerator NativeSidebarAttach_ObservesWindowWithoutSinglePackageSelection()
+        {
+            const BindingFlags instance = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
+            Type windowType = typeof(UnityEditor.PackageManager.UI.IPackageManagerExtension).Assembly
+                .GetType(GitSubmoduleManagerPackageManagerHost.WindowTypeName);
+            EditorWindow window = null;
+            foreach (EditorWindow candidate in Resources.FindObjectsOfTypeAll<EditorWindow>())
+                if (candidate.GetType() == windowType)
+                    window = candidate;
+            bool ownsWindow = window == null;
+            window = window != null ? window : EditorWindow.GetWindow(windowType);
+            VisualElement root = null;
+            VisualElement parent = null;
+            object manager = null;
+            object originalPage = null;
+            object inProject = null;
+            string originalSearch = null;
+            string[] originalSelection = null;
+            try
+            {
+                for (int attempt = 0; attempt < 20 && root == null; attempt++)
+                {
+                    yield return null;
+                    root = PackageManagerSubmoduleHarmonyPatch.Read(window, "m_Root") as VisualElement;
+                }
+                Assert.That(root, Is.Not.Null);
+                manager = PackageManagerSubmoduleHarmonyPatch.Read(root, "m_PageManager");
+                Assert.That(manager, Is.Not.Null);
+                originalPage = PackageManagerSubmoduleHarmonyPatch.Read(manager, "activePage");
+                foreach (MethodInfo method in manager.GetType().GetMethods(instance))
+                {
+                    ParameterInfo[] parameters = method.GetParameters();
+                    if (method.Name == "GetPage" && !method.IsGenericMethod &&
+                        parameters.Length == 1 && parameters[0].ParameterType == typeof(string))
+                    {
+                        inProject = method.Invoke(manager, new object[] { "InProject" });
+                        break;
+                    }
+                }
+                Assert.That(inProject, Is.Not.Null);
+                originalSearch = (string)PackageManagerSubmoduleHarmonyPatch.Read(inProject, "searchText");
+                originalSelection = ReadSelection(inProject);
+                PropertyInfo activePage = manager.GetType().GetProperty("activePage", instance);
+                PropertyInfo searchText = inProject.GetType().GetProperty("searchText", instance);
+                activePage.SetValue(manager, inProject);
+                GitSubmoduleManagerPackageManagerHost.ObserveRoot(root);
+
+                for (int selectionCount = 0; selectionCount <= 2; selectionCount += 2)
+                {
+                    searchText.SetValue(inProject, selectionCount == 0 ?
+                        "no-package-matches-" + Guid.NewGuid().ToString("N") : string.Empty);
+                    var selection = new List<string>();
+                    if (selectionCount == 2)
+                    {
+                        foreach (object state in (IEnumerable)PackageManagerSubmoduleHarmonyPatch.Read(inProject, "visualStates"))
+                        {
+                            string id = PackageManagerSubmoduleHarmonyPatch.Read(state, "itemUniqueId") as string ??
+                                        PackageManagerSubmoduleHarmonyPatch.Read(state, "packageUniqueId") as string;
+                            if (!string.IsNullOrEmpty(id))
+                                selection.Add(id);
+                            if (selection.Count == 2)
+                                break;
+                        }
+                        Assert.That(selection, Has.Count.EqualTo(2), "The project needs two installed packages for multi-selection coverage.");
+                    }
+                    SetSelection(inProject, selection.ToArray());
+                    Assert.That(ReadSelection(inProject), Has.Length.EqualTo(selectionCount));
+                    Assert.That(root.Q<Label>("git-submodule-package-status"), Is.Null,
+                        "The legacy details label must be detached for this regression.");
+                    int sessions = GitSubmoduleManagerPackageManagerHost.SessionCount;
+                    parent = root.parent;
+                    int position = parent.IndexOf(root);
+                    root.RemoveFromHierarchy();
+                    Assert.That(GitSubmoduleManagerPackageManagerHost.SessionCount, Is.EqualTo(sessions - 1));
+                    parent.Insert(position, root);
+                    Assert.That(GitSubmoduleManagerPackageManagerHost.SessionCount, Is.EqualTo(sessions),
+                        "Native sidebar attachment must observe a window even without a single selected package.");
+                    VisualElement sidebar = FindElement(root, PackageManagerSubmoduleNativePage.SidebarTypeName);
+                    PackageManagerSubmoduleNativePage.GetSidebarRefreshTarget().Invoke(sidebar, null);
+                    Assert.That(GitSubmoduleManagerPackageManagerHost.SessionCount, Is.EqualTo(sessions),
+                        "A second sidebar refresh must reuse the existing session.");
+                    typeof(PackageManagerSubmoduleHarmonyPatch).GetMethod("SidebarRefreshPostfix",
+                        BindingFlags.Static | BindingFlags.NonPublic).Invoke(null, new object[] { new VisualElement() });
+                    Assert.That(GitSubmoduleManagerPackageManagerHost.SessionCount, Is.EqualTo(sessions),
+                        "An unrelated sidebar must not create a session.");
+                }
+            }
+            finally
+            {
+                if (root != null && root.parent == null && parent != null)
+                    parent.Add(root);
+                if (inProject != null && originalSelection != null)
+                {
+                    inProject.GetType().GetProperty("searchText", instance).SetValue(inProject, originalSearch);
+                    SetSelection(inProject, originalSelection);
+                }
+                if (manager != null && originalPage != null)
+                    manager.GetType().GetProperty("activePage", instance).SetValue(manager, originalPage);
+                if (ownsWindow && window != null)
+                    window.Close();
+                else if (root != null)
+                    GitSubmoduleManagerPackageManagerHost.ObserveRoot(root);
+            }
+        }
+
+        private static string[] ReadSelection(object page)
+        {
+            object selection = page.GetType().GetMethod("GetSelection",
+                BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic).Invoke(page, null);
+            var result = new List<string>();
+            foreach (object id in (IEnumerable)selection)
+                result.Add((string)id);
+            return result.ToArray();
+        }
+
+        private static void SetSelection(object page, string[] ids)
+        {
+            page.GetType().GetMethod("SetNewSelection",
+                BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic,
+                null, new[] { typeof(IEnumerable<string>), typeof(bool) }, null)
+                .Invoke(page, new object[] { ids, true });
+        }
+
         [TestCase("Extension/git-submodule-manager", true)]
         [TestCase("Extension/another-package", false)]
         [TestCase("InProject", false)]

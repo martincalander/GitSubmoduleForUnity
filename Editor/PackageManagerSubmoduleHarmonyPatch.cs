@@ -232,8 +232,14 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             return !MustBlockRemoval(installed, PackageManagerPackageStatus.ShouldBlockEmbeddedRemoval);
         }
 
-        private static void SidebarRefreshPostfix(object __instance) =>
-            PackageManagerSubmoduleNativePage.NotifySidebarRefreshed(__instance as VisualElement);
+        private static void SidebarRefreshPostfix(object __instance)
+        {
+            if (!(__instance is VisualElement sidebar))
+                return;
+            // Details UI stays detached without a single selection, so sidebar creation also observes the window.
+            GitSubmoduleManagerPackageManagerHost.ObserveAncestors(sidebar);
+            PackageManagerSubmoduleNativePage.NotifySidebarRefreshed(sidebar);
+        }
 
         private static void RefreshPostfix(object __0)
         {

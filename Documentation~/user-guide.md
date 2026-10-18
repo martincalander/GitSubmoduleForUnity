@@ -12,6 +12,10 @@ package list. Select a package to see its installation source and submodule
 status in the details area. Other packages retain their Unity installation
 source, such as a registry, Git dependency, or local package.
 
+While installed state is loading, the details area reports that the status is
+being checked. A failed read reports unavailable status rather than claiming
+that the package is not installed.
+
 Submodule status describes how the package is installed. It does not report
 whether the checkout is clean, up to date, or pushed. Use your Git client for
 those details.
@@ -42,6 +46,11 @@ The extension blocks Unity's raw embedded-package deletion for submodules.
 That action would delete the package folder without completing Git's submodule
 workflow. Remove a submodule with your Git tools after reviewing its local work.
 The extension does not run removal or conversion on your behalf.
+
+Deletion protection also applies to Git checkouts whose embedded folder name
+differs from the package's declared name. The guard rechecks local metadata
+before allowing removal, so a recent Git change cannot rely on an older status
+result. An unverified result blocks deletion until status can be read again.
 
 After an external Git change, wait for Unity's import to finish and refresh
 Package Manager. A submodule must be initialized and available as an installed

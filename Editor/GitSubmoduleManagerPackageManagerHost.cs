@@ -161,7 +161,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             session.Start();
         }
 
-        private static void ObserveAncestors(VisualElement element)
+        internal static void ObserveAncestors(VisualElement element)
         {
             for (VisualElement parent = element.parent; parent != null; parent = parent.parent)
             {

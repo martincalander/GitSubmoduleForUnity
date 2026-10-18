@@ -62,6 +62,12 @@ published release.
 
 ### Fixed
 
+- Attach the GitHub source when Package Manager opens with no package selected
+  or with several packages selected.
+- Protect Git checkouts in embedded folders whose names differ from their
+  package IDs, and recheck local metadata before allowing embedded deletion.
+- Show pending or unavailable package status instead of reporting a package as
+  uninstalled before its registered state has been read successfully.
 - Keep Cecil and its Mdb, Pdb, and Rocks assemblies at 0.11.6 together so Unity 7
   cold startup does not load incompatible symbol-reader interfaces.
 

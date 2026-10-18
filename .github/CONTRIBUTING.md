@@ -17,7 +17,7 @@ removal workflows are outside this experiment.
 - Python 3 and Node.js for repository, Markdown, and packaging checks.
 
 The simplified implementation passed local validation on Unity `7000.0.0a10`
-on macOS. See the [verification record](#performance-verification-on-2026-10-19)
+on macOS. See the [verification record](#edge-case-verification-on-2026-10-19)
 for the final checks. Existing version gates do not imply that this branch has
 been retested across all supported targets. GitHub CLI is not required.
 
@@ -216,3 +216,42 @@ Not retested: Unity `6000.3.22f1`, `6000.5.*f1`, `6000.6.0f1`,
 for this Editor-only change. Signed release archives and protected CI were not
 run. Local results do not establish release evidence for another Unity version,
 platform, or artifact.
+
+## Edge Case Verification on 2026-10-19
+
+The follow-up edge-case review used the existing Unity `7000.0.0a10` Editor on
+macOS, Unity CLI `1.0.0-beta.13`, and Pipeline `0.8.0-exp.1`.
+
+- Fresh Unity compilation completed without errors.
+- Regression runs reproduced missing source attachment without a single selected
+  package, plus unsafe negative cached results after Git index or `.gitmodules`
+  changes. The corresponding tests pass after the fixes.
+- All 192 tests in `MartinCalander.GitSubmoduleManager.Editor.Tests` passed in
+  the final full run, with no failures, skipped tests, or inconclusive results.
+  This includes the `PackageManagerCompatibility` checks.
+- Coverage includes empty and multiple selections, duplicate sessions, unrelated
+  sidebars, delayed construction, registered path aliases, differently named
+  embedded folders, metadata changes before and after publication, failed reads,
+  and linked Git worktrees with an external index.
+- Two Play Mode cycles with domain reload disabled also verified native sidebar
+  repair, one GitHub source row, and no remaining attachment retries. Original
+  Editor settings were restored.
+- Live selection moved from a submodule to a registry package, then a UPM Git
+  package, then back to the submodule. Native source labels and tooltips changed
+  correctly at each step.
+- Six live open/rebuild/refresh/close cycles retained exactly one source row and
+  one extension registration. Each close left zero sessions, status observers,
+  attachment retries, and package-owned Editor update callbacks.
+- A verified script reload with Package Manager closed retained no background
+  callbacks. Reopening restored one session and one GitHub source row. The final
+  Editor Console contained no errors.
+- Repository validation, 13 Python repository tests, Markdown lint, package dry
+  run, and whitespace checks passed. Audited third-party files are unchanged.
+
+Not retested: Unity `6000.3.22f1`, `6000.5.*f1`, `6000.6.0f1`,
+`6000.6.2f1`, `6000.7.0b1`, `6000.7.0b2`, `7000.0.0a7`,
+`7000.0.0a8`, and `7000.0.0a9`; Windows and Linux. No player build was needed
+for this Editor-only change. Startup and allocation benchmarks were not repeated
+because these fixes do not add periodic work or change package dependencies.
+Signed release archives and protected CI were not run. Local results do not
+establish release evidence for another Unity version, platform, or artifact.

@@ -2,9 +2,11 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Diagnostics;
+using System.Linq;
 using System.Threading;
 using NUnit.Framework;
 using UnityEditor.PackageManager;
+using PackageInfo = UnityEditor.PackageManager.PackageInfo;
 
 namespace MartinCalander.GitSubmoduleManager.Editor.Tests
 {
@@ -169,7 +171,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
         [Test]
         public void SuccessfulOrdinaryEmbeddedPackageCanUseUnityRemoval()
         {
-            Assert.That(Block(new PackageManagerPackageStatus.StatusSnapshot()), Is.False);
+            Assert.That(Block(ReadOrdinaryRepository()), Is.False);
         }
 
         [TestCase(true)]
@@ -182,6 +184,72 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
             else
                 File.WriteAllText(git, "gitdir: ../../.git/modules/example");
             Assert.That(Block(new PackageManagerPackageStatus.StatusSnapshot()), Is.True);
+        }
+
+        [TestCase("git-file")]
+        [TestCase("git-directory")]
+        [TestCase("gitlink")]
+        [TestCase("registration")]
+        [TestCase("pending")]
+        [TestCase("error")]
+        public void DifferentlyNamedEmbeddedFolderRetainsRemovalProtection(string evidence)
+        {
+            const string folder = "MyPackage";
+            string path = Path.Combine(root, "Packages", folder);
+            Directory.CreateDirectory(path);
+            var data = ReadOrdinaryRepository();
+            switch (evidence)
+            {
+                case "git-file": File.WriteAllText(Path.Combine(path, ".git"), "gitdir: ../../.git/modules/example"); break;
+                case "git-directory": Directory.CreateDirectory(Path.Combine(path, ".git")); break;
+                case "gitlink": data.Gitlinks.Add("Packages/" + folder); break;
+                case "registration": data.Repositories.Add("Packages/" + folder, "https://github.com/example/package.git"); break;
+                case "error": data.Error = "Git could not read this project's status."; break;
+            }
+
+            Assert.That(PackageManagerPackageStatus.ShouldBlockEmbeddedRemoval(root, Name, path,
+                evidence != "pending", data), Is.True);
+            Assert.That(PackageManagerPackageStatus.TryClassify(root, Name, path, data, out _), Is.False,
+                "Broader removal protection does not broaden the classification contract.");
+        }
+
+        [Test]
+        public void DifferentlyNamedOrdinaryEmbeddedFolderCanUseUnityRemoval()
+        {
+            string path = Path.Combine(root, "Packages", "MyPackage");
+            Directory.CreateDirectory(path);
+            Assert.That(PackageManagerPackageStatus.ShouldBlockEmbeddedRemoval(root, Name, path,
+                true, ReadOrdinaryRepository()), Is.False);
+        }
+
+        [TestCase("./Packages/MyPackage", true)]
+        [TestCase("Packages/../Packages/MyPackage", true)]
+        [TestCase("Packages/MyPackage/", true)]
+        [TestCase("./Packages/OtherPackage", false)]
+        [TestCase("Packages/../OtherPackages/MyPackage", false)]
+        [TestCase("Packages/group/MyPackage", false)]
+        [TestCase("Packages/../../MyPackage", false)]
+        public void RegistrationPathAliasesProtectOnlyTheMatchingDirectPackage(string registeredPath, bool blocked)
+        {
+            string path = Path.Combine(root, "Packages", "MyPackage");
+            Directory.CreateDirectory(path);
+            var data = ReadOrdinaryRepository();
+            data.Repositories.Add(registeredPath, "https://github.com/example/package.git");
+
+            Assert.That(PackageManagerPackageStatus.ShouldBlockEmbeddedRemoval(root, Name, path, true, data), Is.EqualTo(blocked));
+        }
+
+        [TestCase("Library/PackageCache/MyPackage")]
+        [TestCase("OtherPackages/MyPackage")]
+        [TestCase("Packages/group/MyPackage")]
+        [TestCase("Packages/../MyPackage")]
+        [TestCase("Packages")]
+        public void RenamedFolderProtectionStaysWithinDirectPackagesChildren(string relativePath)
+        {
+            string path = Path.Combine(root, relativePath);
+            Directory.CreateDirectory(Path.Combine(path, ".git"));
+            Assert.That(PackageManagerPackageStatus.ShouldBlockEmbeddedRemoval(root, Name, path,
+                false, new PackageManagerPackageStatus.StatusSnapshot { Error = "Unavailable" }), Is.False);
         }
 
         [Test]
@@ -214,6 +282,56 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
             Assert.That(PackageManagerPackageStatus.TryClassify(root, Name, packagePath, data, out _), Is.True);
             Assert.That(File.ReadAllBytes(Path.Combine(root, ".git", "index")), Is.EqualTo(beforeIndex));
             Assert.That(File.ReadAllBytes(modules), Is.EqualTo(beforeModules));
+        }
+
+        [Test]
+        public void ReadsLinkedWorktreeMetadataFromItsExternalIndex()
+        {
+            RunGit("init --quiet");
+            RunGit("-c user.name=PackageTests -c user.email=package-tests@example.invalid -c commit.gpgsign=false " +
+                "-c core.hooksPath=\"" + Path.Combine(root, "empty-hooks") + "\" commit --allow-empty --quiet -m Initial");
+            string worktree = Path.Combine(root, "linked worktree");
+            RunGit("worktree add --quiet --detach \"" + worktree + "\" HEAD");
+            string linkedPackage = Path.Combine(worktree, "Packages", Name);
+            Directory.CreateDirectory(linkedPackage);
+            RunGit("update-index --add --cacheinfo 160000," + Commit + "," + RelativePath, worktree);
+            File.WriteAllText(Path.Combine(worktree, ".gitmodules"), "[submodule \"example\"]\npath = " + RelativePath +
+                "\nurl = https://github.com/example/package.git\n");
+
+            var data = PackageManagerPackageStatus.ReadStatus(worktree, CancellationToken.None);
+
+            Assert.That(File.Exists(Path.Combine(worktree, ".git")), Is.True);
+            Assert.That(data.Error, Is.Empty);
+            string gitDirectory = File.ReadAllText(Path.Combine(worktree, ".git")).Trim().Substring("gitdir: ".Length);
+            Assert.That(data.IndexPath, Is.EqualTo(Path.GetFullPath(Path.Combine(gitDirectory, "index"))));
+            Assert.That(File.Exists(data.IndexPath), Is.True);
+            Assert.That(PackageManagerPackageStatus.TryClassify(worktree, Name, linkedPackage, data, out _), Is.True);
+            Assert.That(new PackageManagerPackageStatus.StatusState().TryCompleteRefresh(worktree, data), Is.True);
+        }
+
+        [Test]
+        public void NewlySelectedInstalledPackageReportsPendingUntilRegistrationReadCompletes()
+        {
+            PackageInfo package = InstalledManagerPackage();
+            Assert.That(PackageManagerPackageStatus.Describe(package, false, new PackageManagerPackageStatus.StatusSnapshot()),
+                Is.EqualTo("Checking package status..."));
+        }
+
+        [Test]
+        public void FailedRegistrationReadReportsUnavailableInsteadOfNotInstalled()
+        {
+            PackageInfo package = InstalledManagerPackage();
+            var data = new PackageManagerPackageStatus.StatusSnapshot { Error = "Unity's registered packages are unavailable." };
+            Assert.That(PackageManagerPackageStatus.Describe(package, true, data),
+                Is.EqualTo("Package status unavailable. Unity's registered packages are unavailable."));
+        }
+
+        [Test]
+        public void OnlyCompletedSuccessfulRegistrationReadReportsPackageNotInstalled()
+        {
+            PackageInfo package = InstalledManagerPackage();
+            Assert.That(PackageManagerPackageStatus.Describe(package, true, new PackageManagerPackageStatus.StatusSnapshot()),
+                Is.EqualTo("Not installed in this project."));
         }
 
         [Test]
@@ -310,14 +428,15 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
         public void ReadinessNotificationsObserveCurrentOrdinaryPackageRemovalSafety()
         {
             var state = new PackageManagerPackageStatus.StatusState();
-            state.CompleteRefresh(new PackageManagerPackageStatus.StatusSnapshot());
+            var initial = ReadOrdinaryRepository();
+            state.CompleteRefresh(initial);
             var blocked = new List<bool>();
             state.ReadinessChanged += () => blocked.Add(PackageManagerPackageStatus.ShouldBlockEmbeddedRemoval(
                 root, Name, packagePath, state.IsReady, state.Snapshot));
 
             state.BeginRefresh();
             state.BeginRefresh();
-            state.CompleteRefresh(new PackageManagerPackageStatus.StatusSnapshot());
+            state.CompleteRefresh(PackageManagerPackageStatus.ReadStatus(root, CancellationToken.None));
 
             Assert.That(blocked, Is.EqualTo(new[] { true, false }));
         }
@@ -326,7 +445,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
         public void ReadFailureAndRecoveryNotifyOnceAndPreserveRemovalProtection()
         {
             var state = new PackageManagerPackageStatus.StatusState();
-            state.CompleteRefresh(new PackageManagerPackageStatus.StatusSnapshot());
+            state.CompleteRefresh(ReadOrdinaryRepository());
             int changed = 0;
             state.Changed += () => changed++;
 
@@ -343,7 +462,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                 state.IsReady, state.Snapshot), Is.True);
 
             state.BeginRefresh();
-            state.CompleteRefresh(new PackageManagerPackageStatus.StatusSnapshot());
+            state.CompleteRefresh(PackageManagerPackageStatus.ReadStatus(root, CancellationToken.None));
             Assert.That(changed, Is.EqualTo(2));
             Assert.That(PackageManagerPackageStatus.ShouldBlockEmbeddedRemoval(root, Name, packagePath,
                 state.IsReady, state.Snapshot), Is.False);
@@ -401,6 +520,36 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                 state.IsReady, state.Snapshot), Is.True);
         }
 
+        [Test]
+        public void UnstampedReadySnapshotCannotAuthorizeEmbeddedRemoval()
+        {
+            Assert.That(PackageManagerPackageStatus.ShouldBlockEmbeddedRemoval(root, Name, packagePath,
+                true, new PackageManagerPackageStatus.StatusSnapshot()), Is.True);
+        }
+
+        [TestCase("index")]
+        [TestCase("modules")]
+        public void MetadataChangeAfterPublicationBlocksRemovalWithoutAnObserverRefresh(string changedFile)
+        {
+            RunGit("init --quiet");
+            var state = new PackageManagerPackageStatus.StatusState();
+            var data = PackageManagerPackageStatus.ReadStatus(root, CancellationToken.None);
+            Assert.That(data.Error, Is.Empty);
+            Assert.That(state.TryCompleteRefresh(root, data), Is.True);
+            Assert.That(PackageManagerPackageStatus.ShouldBlockEmbeddedRemoval(root, Name, packagePath,
+                state.IsReady, state.Snapshot), Is.False);
+
+            if (changedFile == "index")
+                RunGit("update-index --add --cacheinfo 160000," + Commit + "," + RelativePath);
+            else
+                File.WriteAllText(Path.Combine(root, ".gitmodules"), "[submodule \"example\"]\npath = " + RelativePath +
+                    "\nurl = https://github.com/example/package.git\n");
+
+            Assert.That(state.IsReady, Is.True, "No observer or periodic refresh has invalidated the cached result.");
+            Assert.That(PackageManagerPackageStatus.ShouldBlockEmbeddedRemoval(root, Name, packagePath,
+                state.IsReady, state.Snapshot), Is.True, "Deletion must recheck metadata before using a negative cached result.");
+        }
+
         private PackageManagerPackageStatus.StatusSnapshot InstalledSnapshot()
         {
             var data = Snapshot();
@@ -409,11 +558,27 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
             return data;
         }
 
-        private void RunGit(string arguments)
+        private static PackageInfo InstalledManagerPackage()
+        {
+            PackageInfo package = PackageInfo.GetAllRegisteredPackages().FirstOrDefault(
+                candidate => candidate.name == "com.martincalander.gitsubmodulemanager");
+            Assert.That(package, Is.Not.Null, "The running Editor must have registered this test package.");
+            return package;
+        }
+
+        private PackageManagerPackageStatus.StatusSnapshot ReadOrdinaryRepository()
+        {
+            RunGit("init --quiet");
+            var data = PackageManagerPackageStatus.ReadStatus(root, CancellationToken.None);
+            Assert.That(data.Error, Is.Empty);
+            return data;
+        }
+
+        private void RunGit(string arguments, string workingDirectory = null)
         {
             using (var process = Process.Start(new ProcessStartInfo("git", arguments)
             {
-                WorkingDirectory = root, UseShellExecute = false, CreateNoWindow = true,
+                WorkingDirectory = workingDirectory ?? root, UseShellExecute = false, CreateNoWindow = true,
                 RedirectStandardOutput = true, RedirectStandardError = true
             }))
             {
@@ -424,6 +589,12 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
 
         private bool Block(PackageManagerPackageStatus.StatusSnapshot data)
         {
+            if (data.FilesStamp == null && string.IsNullOrEmpty(data.Error))
+            {
+                var current = ReadOrdinaryRepository();
+                data.IndexPath = current.IndexPath;
+                data.FilesStamp = current.FilesStamp;
+            }
             return PackageManagerPackageStatus.ShouldBlockEmbeddedRemoval(root, Name, packagePath, true, data);
         }
 

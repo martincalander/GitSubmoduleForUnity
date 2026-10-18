@@ -41,7 +41,9 @@ use guarded internal contracts. Each reflected seam is checked independently;
 an unavailable seam disables that feature without replacing unrelated Package
 Manager pages.
 
-The public details element's panel attachment discovers its native window root.
+The native sidebar lifecycle and public details element's panel attachment
+discover the native window root, including when the details panel is absent
+because no package or several packages are selected.
 Each root owns one session, with a detach callback that releases its observer
 and scheduled work. A single delayed scan reconnects windows already present at
 code reload; there is no permanent window polling. Native construction retries
@@ -63,6 +65,10 @@ identity are published together. A changed metadata stamp during a read causes
 a retry before publication. Readiness notifications update details while
 content notifications rebuild views only when the result actually differs.
 Pending or failed reads continue to block unverified embedded-folder deletion.
+The deletion boundary rechecks the published metadata stamp before trusting a
+negative result. Its checkout protection uses the actual direct child path
+under `Packages/`, even when the folder name differs from the package ID;
+submodule classification retains its stricter matching-identity requirement.
 
 Sidebar icons are imported at a maximum of 64 pixels. The package declares its
 UIElements dependency, which supplies the required engine module dependencies;
@@ -89,7 +95,7 @@ builds remain unsupported. The manifest's `6000.3.22f1` minimum cannot encode
 this complete matrix.
 
 Local validation of the simplified branch passed on Unity `7000.0.0a10` on
-macOS. See the [verification record](../.github/CONTRIBUTING.md#performance-verification-on-2026-10-19)
+macOS. See the [verification record](../.github/CONTRIBUTING.md#edge-case-verification-on-2026-10-19)
 for the final checks. Existing version gates and prior validation of the larger
 implementation do not establish a new release claim for this branch.
 
