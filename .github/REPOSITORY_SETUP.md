@@ -5,8 +5,9 @@ settings are not stored in Git and must be configured in GitHub.
 
 ## General
 
-- [ ] Confirm the repository owner and default branch are correct.
-- [ ] Add the description: `Manage Git-hosted UPM packages in Unity as editable submodules or read-only dependencies.`
+- [ ] Confirm the repository owner is correct and `main` is the default branch.
+- [ ] Preserve the former management implementation on `legacy`.
+- [ ] Add the description: `Show installed package sources and Git submodule status in Unity Package Manager.`
 - [ ] Add topics: `unity`, `unity-editor`, `upm`, `git`, `submodule`,
   `package-manager`, `developer-tools`.
 - [ ] Use a project-specific social preview, or leave it unset.

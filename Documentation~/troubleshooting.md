@@ -56,7 +56,8 @@ your Git client before committing.
 
 ## Recovery Files from an Earlier Version
 
-This branch does not resume earlier installs, conversions, or removals. Inspect
+The current implementation on `main` does not resume legacy installs,
+conversions, or removals. Inspect
 `git status`, `.gitmodules`, `Packages/manifest.json`, and any retained files
 under `Library/GitSubmoduleManager/Recovery` before continuing a previously
 interrupted operation. Keep recovery evidence until its contents have been
@@ -73,5 +74,6 @@ view does not manage credentials.
 
 Follow the [support guide](https://github.com/martincalander/GitSubmoduleForUnity/blob/main/.github/SUPPORT.md).
 Include the exact Unity version, operating system, package commit, expected
-package status, actual status, and sanitized Console output. State that you are
-testing the `simplify-package-status` branch.
+package status, actual status, and sanitized Console output. State whether you
+are using `main`, `legacy`, or a published release. Published `0.8.1` artifacts
+contain the legacy management workflow.

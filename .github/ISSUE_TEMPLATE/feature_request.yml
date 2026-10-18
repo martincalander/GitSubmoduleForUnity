@@ -1,5 +1,5 @@
 name: Feature request
-description: Propose a focused improvement within the submodule package workflow
+description: Propose a focused improvement to installed-package status, sources, or Editor performance
 title: "[Feature]: "
 labels: [enhancement, needs-triage]
 body:
@@ -7,7 +7,7 @@ body:
     id: problem
     attributes:
       label: Problem
-      description: What workflow is difficult today, and for whom?
+      description: What is unclear about installed-package status or sources, or what Editor overhead needs attention?
     validations:
       required: true
   - type: textarea
@@ -36,7 +36,9 @@ body:
     attributes:
       label: Scope confirmation
       options:
-        - label: This keeps packages as direct Git submodules under Packages/.
+        - label: This keeps the extension focused on installed-package status and sources, with low Editor overhead.
+          required: true
+        - label: This leaves installation, updates, conversion, and removal to Unity and Git.
           required: true
         - label: This does not require storing credentials or installing system tools from Unity.
           required: true

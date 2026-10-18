@@ -1,9 +1,10 @@
 # User Guide
 
-Open **Window > Package Management > Package Manager**. The simplified manager
+Open **Window > Package Management > Package Manager**. Git Submodule Manager
 adds installed-package status to that window and a **GitHub** page under
-**Sources**. See [compatibility](installation.md#unity) for the exact Editor
-targets retained by this experimental branch.
+**Sources**. This is the current design on `main`. See
+[compatibility](installation.md#unity) for the exact Editor targets and local
+verification limits.
 
 ## Package Status
 
@@ -68,13 +69,16 @@ the existing package view instead of rebuilding it.
 The extension performs no background network discovery. Its sidebar icons use
 small imports, and its native integration checks are cached until code reload.
 
-## Switching from the Earlier Workflow
+## Moving from Legacy to Main
 
-This branch removes the manager's remote catalogue, install and conversion
-actions, dependency planning, Welcome window, and Preferences page. Existing
-package installations remain in the project. The simplified view reads their
-current state and leaves package changes to Unity and Git.
+The former remote catalogue, install and conversion actions, dependency planning,
+Welcome window, and Preferences page are preserved on
+[`legacy`](https://github.com/martincalander/GitSubmoduleForUnity/tree/legacy).
+Published `0.8.1` artifacts also contain that earlier workflow. On `main`, the
+manager reads installed state and leaves package changes to Unity and Git.
+Existing package installations remain in the project when you switch.
 
 Finish any operation in the earlier implementation before switching branches.
 If an earlier operation left recovery files, retain them until you have inspected
-the project with Git. This branch does not resume the earlier mutation workflow.
+the project with Git. The current implementation does not resume the earlier
+mutation workflow.

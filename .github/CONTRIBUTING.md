@@ -3,10 +3,13 @@
 Contributions are welcome under the [MIT License](../LICENSE.md) and must follow
 the [Code of Conduct](CODE_OF_CONDUCT.md).
 
-The `simplify-package-status` branch focuses on installed-package status and a
-native GitHub source page. Changes should make that view clearer or more
-reliable. Installation, conversion, dependency planning, remote discovery, and
-removal workflows are outside this experiment.
+The `main` branch develops installed-package status and a native GitHub source
+page with a small Editor footprint. Changes should make that view clearer, more
+reliable, or less expensive to run. Installation, conversion, dependency
+planning, remote discovery, and removal workflows are outside the current
+product scope. The former implementation is preserved on
+[`legacy`](https://github.com/martincalander/GitSubmoduleForUnity/tree/legacy);
+published `0.8.1` artifacts still contain that implementation.
 
 ## Development Prerequisites
 
@@ -16,10 +19,10 @@ removal workflows are outside this experiment.
 - Git for preparing test repositories and managing the checkout.
 - Python 3 and Node.js for repository, Markdown, and packaging checks.
 
-The simplified implementation passed local validation on Unity `7000.0.0a10`
+The current implementation passed all 192 Editor tests on Unity `7000.0.0a10`
 on macOS. See the [verification record](#edge-case-verification-on-2026-10-19)
-for the final checks. Existing version gates do not imply that this branch has
-been retested across all supported targets. GitHub CLI is not required.
+for the final checks. Existing version gates do not imply that the current design
+has been retested across all supported targets. GitHub CLI is not required.
 
 ## Set Up a Test Project
 
@@ -37,7 +40,10 @@ assets. Do not edit generated solution or project files.
 Read [Documentation~/architecture.md](../Documentation~/architecture.md) before
 changing classification, reflection, Harmony hooks, or lifecycle behavior.
 
+- Target `main` for the current status and sources implementation.
 - Keep all product code under `Editor/` and tests under `Tests/Editor/`.
+- Avoid permanent window polling, background network discovery, and rebuilding
+  unchanged views. Measure performance claims against a stated baseline.
 - Read local installed state without modifying repositories, manifests, or
   lockfiles.
 - Preserve native Package Manager pages and ordinary package actions.

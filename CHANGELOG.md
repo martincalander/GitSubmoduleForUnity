@@ -7,9 +7,11 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-This branch experiments with a status-only Package Manager extension. Local
-validation is recorded in the contribution guide. These changes are not a
-published release.
+`main` now focuses on installed package status and sources. The former `main`
+with discovery and package-management workflows is preserved on
+[`legacy`](https://github.com/martincalander/GitSubmoduleForUnity/tree/legacy).
+Local validation is recorded in the contribution guide. These changes have not
+been published as a new release; existing `0.8.1` artifacts remain unchanged.
 
 ### Added
 

@@ -2,10 +2,12 @@
 
 ## Scope
 
-The `simplify-package-status` branch is an Editor-only installed-package view.
-It classifies packages, labels submodules, and lists installed GitHub packages
-in Unity's native Package Manager. It does not discover remote repositories,
-plan dependencies, or change installed packages.
+The `main` branch contains an Editor-only installed-package view. It classifies
+packages, labels submodules, and lists installed GitHub packages in Unity's
+native Package Manager. Its scope is status and sources, with a small Editor
+footprint. It does not discover remote repositories, plan dependencies, or
+change installed packages. The former management implementation is preserved
+on [`legacy`](https://github.com/martincalander/GitSubmoduleForUnity/tree/legacy).
 
 ```text
 Editor/
@@ -94,10 +96,10 @@ releases, exact `6000.6.0f1` and `6000.6.2f1`, exact `6000.7.0b1` and
 builds remain unsupported. The manifest's `6000.3.22f1` minimum cannot encode
 this complete matrix.
 
-Local validation of the simplified branch passed on Unity `7000.0.0a10` on
-macOS. See the [verification record](../.github/CONTRIBUTING.md#edge-case-verification-on-2026-10-19)
-for the final checks. Existing version gates and prior validation of the larger
-implementation do not establish a new release claim for this branch.
+Local validation passed all 192 Editor tests on Unity `7000.0.0a10` on macOS.
+See the [verification record](../.github/CONTRIBUTING.md#edge-case-verification-on-2026-10-19)
+for the final checks. Existing version gates and prior validation of the legacy
+implementation do not establish a new release claim for the current design.
 
 Mono retains the byte-identical Harmony 2.4.1 `net472` DLL under
 `!ENABLE_CORECLR`. CoreCLR retains eleven original upstream DLLs under
@@ -121,7 +123,7 @@ in `.github/scripts/coreclr_harmony_artifacts.json` and
 Focused EditMode tests cover installed-source classification, package paths,
 GitHub source recognition, native page membership, and removal protection. The
 `PackageManagerCompatibility` category checks the internal contracts and Harmony
-ownership needed by the simplified integration.
+ownership needed by the native integration.
 
 Changes to reflection require compatibility tests; lifecycle changes require the
 full `MartinCalander.GitSubmoduleManager.Editor.Tests` assembly after focused

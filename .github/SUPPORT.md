@@ -9,8 +9,12 @@ confirm that Git works in the same user account that launches Unity:
 git --version
 ```
 
-The simplified **Sources > GitHub** page uses installed project metadata.
-GitHub CLI and authentication are not required.
+The current `main` branch shows installed-package status and a
+**Sources > GitHub** page using local project metadata. GitHub CLI and
+authentication are not required. The former installation, conversion, and
+remote discovery workflows are preserved on
+[`legacy`](https://github.com/martincalander/GitSubmoduleForUnity/tree/legacy).
+Published `0.8.1` artifacts still contain that earlier implementation.
 
 ## Where to Ask
 
@@ -31,7 +35,7 @@ security-sensitive details in a public issue.
 Include the following when reporting a problem:
 
 - Unity version and operating system;
-- package version or commit;
+- package version or commit, and whether you use `main`, `legacy`, or a release;
 - output from `git --version`;
 - the exact operation, expected result, actual result, and complete error text;
 - a minimal `.gitmodules` excerpt with private URLs redacted;

@@ -1,29 +1,38 @@
 # Roadmap
 
-The `simplify-package-status` experiment tests a smaller role for Git Submodule
-Manager: clear installed-package status and a native GitHub source view.
+Git Submodule Manager has a focused role: show how packages are installed and
+make installed GitHub packages easy to find in Unity's native Package Manager.
+The `main` branch develops this status and sources view. The former management
+workflows are preserved on
+[`legacy`](https://github.com/martincalander/GitSubmoduleForUnity/tree/legacy).
 
 ## Current Priorities
 
-- Validate the simplified branch on Unity `7000.0.0a10` on macOS.
-- Make installed submodules easy to distinguish from ordinary Unity packages.
+- Keep submodules clearly distinguishable from ordinary Unity packages.
 - Keep **Sources > GitHub** limited to installed GitHub packages.
-- Keep submodule detection and Unity's embedded-removal guard small and tested.
-- Check native list and details behavior after refresh and script reload.
+- Preserve a small Editor footprint, with no continuous window scanning or
+  background network discovery.
+- Keep classification and embedded-folder deletion protection reliable across
+  refreshes, script reloads, and unusual Git layouts.
+- Verify compatibility on the exact Unity targets before releasing this design.
 
-The existing compatibility gate retains exact Unity `6000.3.22f1`,
-`6000.5.*f1` final releases, exact `6000.6.0f1` and `6000.6.2f1`, exact
-`6000.7.0b1` and `6000.7.0b2` betas, and exact `7000.0.0a7`, `7000.0.0a8`,
-`7000.0.0a9`, and `7000.0.0a10` alphas. Each target still needs verification
-against the simplified implementation before a release claim.
+The compatibility gate retains exact Unity `6000.3.22f1`, `6000.5.*f1` final
+releases, exact `6000.6.0f1` and `6000.6.2f1`, exact `6000.7.0b1` and
+`6000.7.0b2` betas, and exact `7000.0.0a7`, `7000.0.0a8`, `7000.0.0a9`, and
+`7000.0.0a10` alphas. Local validation passed all 192 Editor tests on Unity
+`7000.0.0a10` on macOS. Other retained targets and platforms still need
+verification against this implementation before a release claim. See the
+[verification record](../.github/CONTRIBUTING.md#edge-case-verification-on-2026-10-19).
 
 ## Product Boundary
 
-Installation, updates, conversion, dependency resolution, and removal remain
+Installation, updates, conversion, dependency resolution, and removal stay
 with Unity and Git. Remote GitHub discovery, account setup, Welcome and
-Preferences surfaces, and automatic repository operations are outside this
-experiment.
+Preferences surfaces, and automatic repository operations are outside the
+current product scope. Published `0.8.1` artifacts retain those legacy workflows.
 
-Further work should make the status view more reliable or easier to understand.
+Further work should make the status view more reliable, easier to understand,
+or less expensive to run. Performance claims need measurements; the existing
+startup comparison did not establish a meaningful Editor startup speedup.
 Discuss additions through the [contribution guide](../.github/CONTRIBUTING.md)
 before expanding its responsibilities.
