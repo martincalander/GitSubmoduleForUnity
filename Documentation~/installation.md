@@ -13,7 +13,8 @@ package. Finish any operation in the earlier implementation before switching
 branches, and retain any existing recovery files until inspected.
 
 Local validation of the simplified branch passed on Unity `7000.0.0a10` on
-macOS, including all 133 EditMode tests. This experiment is not a new published release.
+macOS. See the [verification record](../.github/CONTRIBUTING.md#performance-verification-on-2026-10-19)
+for the final checks. This experiment is not a new published release.
 
 ## Prerequisites
 

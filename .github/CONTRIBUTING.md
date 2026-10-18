@@ -17,8 +17,9 @@ removal workflows are outside this experiment.
 - Python 3 and Node.js for repository, Markdown, and packaging checks.
 
 The simplified implementation passed local validation on Unity `7000.0.0a10`
-on macOS, including all 133 EditMode tests. Existing version gates do not imply that this branch has been
-retested across all supported targets. GitHub CLI is not required.
+on macOS. See the [verification record](#performance-verification-on-2026-10-19)
+for the final checks. Existing version gates do not imply that this branch has
+been retested across all supported targets. GitHub CLI is not required.
 
 ## Set Up a Test Project
 
@@ -147,3 +148,71 @@ Not retested: Unity `6000.3.22f1`, `6000.5.*f1`, `6000.6.0f1`,
 needed for this Editor-only change. Signed release archives and protected CI
 checks were not run. Local validation is not release evidence for another
 commit, Unity version, archive, or platform.
+
+## Performance Verification on 2026-10-19
+
+The optimized `simplify-package-status` checkout was verified with Unity CLI
+`1.0.0-beta.13`, Pipeline `0.8.0-exp.1`, and Unity `7000.0.0a10` on macOS.
+
+- Fresh Unity compilation completed without errors.
+- The final focused selection passed all 151 tests in the native-source and
+  installed-status fixtures, including the changed compatibility seams.
+- The final full Editor assembly passed all 165 tests, with no failures,
+  skipped tests, or inconclusive results. It includes two Play mode cycles with
+  domain reload disabled, with the original Editor settings restored.
+- Real code reload was checked with Package Manager open and closed. Reopening
+  retained one extension registration, one session, and one GitHub source row.
+- Native sidebar recreation repaired the source without duplicate rows.
+- Closing Package Manager left zero status observers, attachment retries, and
+  package-owned Editor update callbacks after pending work finished.
+- Two unchanged refresh requests produced no content-change notification.
+- Both icons imported as 64 by 64 DXT5 textures with their original GUIDs.
+- Repository validation, all 13 Python repository tests, Markdown lint, package
+  dry run, and whitespace checks passed. Audited third-party artifacts remain
+  unchanged.
+
+A warmed main-thread microbenchmark compared `fe4c6b1` with the optimized source
+in the same Editor. It used five batches of 20 calls after warm-up; timing and
+allocation include reflection invocation by the measurement harness, but not
+CLI transport or dynamic compilation. These are isolated operation costs, not
+Editor startup measurements.
+
+| Measurement | Before | After |
+| --- | ---: | ---: |
+| Median allocation per repeated native attachment | 142,488 bytes | 376 bytes |
+| Median time per repeated native attachment | 0.325 ms | 0.00041 ms |
+| Loaded dark icon, Unity-reported runtime memory | 1,174,504 bytes | 9,184 bytes |
+
+The optimized host no longer calls attachment every second. The icon result
+includes the import format changing from RGBA32 to DXT5 when downsizing made
+compression possible; other platforms can use different texture formats.
+Removing the Newtonsoft dependency avoids requiring it for this package, but
+this workspace still retains it through Pipeline. Keeping the audited patching
+libraries sets a floor on archive size; additional regression tests slightly
+increase the package's own source payload.
+
+A separate headless startup comparison used two isolated minimal projects on
+Unity `7000.0.0a10`: one with `fe4c6b1` and one with the optimized source. Each
+project received one warm-up followed by three alternating warm launches.
+Package tests were disabled, and existing Editors were left running. All eight
+launches exited successfully without compiler errors.
+
+| Warm startup measurement | Before | After |
+| --- | ---: | ---: |
+| Median CLI launch-to-exit time | 4.461 s | 4.353 s |
+| CLI launch-to-exit range | 4.271 to 7.195 s | 4.342 to 4.399 s |
+| Median initial asset refresh | 1.696 s | 1.716 s |
+| Initial asset refresh range | 1.674 to 1.771 s | 1.674 to 1.721 s |
+
+These overlapping results do not establish a meaningful Editor startup
+speedup. Wall time includes CLI and shutdown overhead, and batch mode did not
+emit an interactive project-load measurement. Newtonsoft resolved and loaded
+only in the baseline project; all twelve bundled third-party DLLs remained
+byte-identical between variants.
+
+Not retested: Unity `6000.3.22f1`, `6000.5.*f1`, `6000.6.0f1`,
+`6000.6.2f1`, `6000.7.0b1`, `6000.7.0b2`, `7000.0.0a7`,
+`7000.0.0a8`, and `7000.0.0a9`; Windows and Linux. No player build was needed
+for this Editor-only change. Signed release archives and protected CI were not
+run. Local results do not establish release evidence for another Unity version,
+platform, or artifact.

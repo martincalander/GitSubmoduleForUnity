@@ -8,8 +8,8 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 This branch experiments with a status-only Package Manager extension. Local
-validation of the simplified implementation passed on Unity `7000.0.0a10` on
-macOS, including all 133 EditMode tests. These changes are not a published release.
+validation is recorded in the contribution guide. These changes are not a
+published release.
 
 ### Added
 
@@ -33,6 +33,14 @@ macOS, including all 133 EditMode tests. These changes are not a published relea
 
 ### Changed
 
+- Attach through Package Manager UI lifecycle events instead of continuously
+  scanning Editor windows. Cache validated native contracts and stop attachment
+  retries after success or a bounded construction timeout.
+- Refresh installed status for package registration and local Git metadata
+  changes. Ordinary asset edits no longer trigger Git reads, and unchanged
+  status no longer rebuilds package views.
+- Limit sidebar icon imports to 64 pixels and remove the unused Newtonsoft
+  dependency. Declare the UIElements module used by the native integration.
 - Reduce the manager to installed package status. Label submodules in Package
   Manager and show the selected package's installation source.
 - Limit **Sources > GitHub** to installed GitHub submodules and UPM Git

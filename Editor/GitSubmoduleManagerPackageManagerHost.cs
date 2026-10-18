@@ -2,7 +2,6 @@ using System;
 using System.Collections.Generic;
 using UnityEditor;
 using UnityEditor.Callbacks;
-using UnityEditor.PackageManager;
 using PackageInfo = UnityEditor.PackageManager.PackageInfo;
 using UnityEditor.PackageManager.UI;
 using UnityEngine;
@@ -17,26 +16,98 @@ namespace MartinCalander.GitSubmoduleManager.Editor
     internal static class GitSubmoduleManagerPackageManagerHost
     {
         internal const string WindowTypeName = "UnityEditor.PackageManager.UI.PackageManagerWindow";
-        private static readonly Dictionary<EditorWindow, Session> Sessions = new();
+        private const string RootTypeName = "UnityEditor.PackageManager.UI.Internal.PackageManagerWindowRoot";
+        private static readonly Dictionary<VisualElement, Session> Sessions = new();
         private static readonly StatusDetails Details = new();
-        private static double nextScan;
         private static bool registered;
         internal static string LastError { get; private set; } = string.Empty;
+        internal static int SessionCount => Sessions.Count;
+        internal static int PendingAttachmentCount
+        {
+            get
+            {
+                int count = 0;
+                foreach (Session session in Sessions.Values)
+                    if (session.HasPendingAttachment)
+                        count++;
+                return count;
+            }
+        }
 
         private sealed class Session : IDisposable
         {
             internal readonly VisualElement Root;
             internal readonly PackageManagerSubmoduleNativePage Page;
+            private IVisualElementScheduledItem retry;
+            private int attempts;
+            private bool attached;
+            private bool disposed;
+            internal bool HasPendingAttachment => retry != null;
 
             internal Session(VisualElement root)
             {
                 Root = root;
                 Page = new PackageManagerSubmoduleNativePage(root);
+                Root.RegisterCallback<DetachFromPanelEvent>(OnDetached);
+                Page.AttachmentInvalidated += OnAttachmentInvalidated;
+            }
+
+            internal void Start()
+            {
                 PackageManagerPackageStatus.Retain();
+                ScheduleAttachment();
+            }
+
+            private void OnDetached(DetachFromPanelEvent evt)
+            {
+                if (!ReferenceEquals(evt.target, Root))
+                    return;
+                Sessions.Remove(Root);
+                Dispose();
+            }
+
+            private void OnAttachmentInvalidated()
+            {
+                attached = false;
+                ScheduleAttachment();
+            }
+
+            internal void ScheduleAttachment()
+            {
+                if (disposed || attached || retry != null || Root.panel == null)
+                    return;
+                if (!PackageManagerSubmoduleNativePage.IsSupportedContract(out string error))
+                {
+                    LastError = error;
+                    return;
+                }
+                attempts = 0;
+                // Retry native UI construction briefly, then sleep until a new lifecycle event.
+                retry = Root.schedule.Execute(Attach).Every(100);
+            }
+
+            private void Attach()
+            {
+                if (disposed)
+                    return;
+                attached = Page.TryAttach(out string error);
+                LastError = error;
+                if (attached || ++attempts >= 50)
+                {
+                    retry?.Pause();
+                    retry = null;
+                }
             }
 
             public void Dispose()
             {
+                if (disposed)
+                    return;
+                disposed = true;
+                retry?.Pause();
+                retry = null;
+                Root.UnregisterCallback<DetachFromPanelEvent>(OnDetached);
+                Page.AttachmentInvalidated -= OnAttachmentInvalidated;
                 Page.Dispose();
                 PackageManagerPackageStatus.Release();
             }
@@ -53,88 +124,103 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 PackageManagerExtensions.RegisterExtension(Details);
                 registered = true;
             }
-            EditorApplication.update -= Update;
-            EditorApplication.update += Update;
-            AssemblyReloadEvents.beforeAssemblyReload -= Stop;
-            AssemblyReloadEvents.beforeAssemblyReload += Stop;
+            AssemblyReloadEvents.beforeAssemblyReload -= BeforeReload;
+            AssemblyReloadEvents.beforeAssemblyReload += BeforeReload;
             EditorApplication.quitting -= Stop;
             EditorApplication.quitting += Stop;
             PackageManagerPackageStatus.Changed -= RefreshViews;
             PackageManagerPackageStatus.Changed += RefreshViews;
+            PackageManagerPackageStatus.ReadinessChanged -= Details.Refresh;
+            PackageManagerPackageStatus.ReadinessChanged += Details.Refresh;
             PackageManagerSubmoduleHarmonyPatch.Install();
-            nextScan = 0;
+            // A window can already exist when scripts reload. This is a single catch-up pass.
+            EditorApplication.delayCall -= AttachExistingWindows;
+            EditorApplication.delayCall += AttachExistingWindows;
         }
 
-        private static void Update()
+        private static void AttachExistingWindows()
         {
-            if (EditorApplication.timeSinceStartup < nextScan)
-                return;
-            nextScan = EditorApplication.timeSinceStartup + 1;
-            var alive = new HashSet<EditorWindow>();
             foreach (EditorWindow window in Resources.FindObjectsOfTypeAll<EditorWindow>())
             {
-                if (window == null || window.GetType().FullName != WindowTypeName)
-                    continue;
-                var root = PackageManagerSubmoduleHarmonyPatch.Read(window, "m_Root") as VisualElement;
-                if (root == null || root.panel == null)
-                    continue;
-                alive.Add(window);
-                if (Sessions.TryGetValue(window, out Session old) && !ReferenceEquals(old.Root, root))
-                {
-                    old.Dispose();
-                    Sessions.Remove(window);
-                }
-                if (!Sessions.TryGetValue(window, out Session session))
-                {
-                    session = new Session(root);
-                    Sessions.Add(window, session);
-                }
-                session.Page.TryAttach(out string error);
-                LastError = error;
+                if (window != null && window.GetType().FullName == WindowTypeName)
+                    ObserveRoot(PackageManagerSubmoduleHarmonyPatch.Read(window, "m_Root") as VisualElement);
             }
-            foreach (EditorWindow window in new List<EditorWindow>(Sessions.Keys))
+        }
+
+        internal static void ObserveRoot(VisualElement root)
+        {
+            if (root == null || root.panel == null)
+                return;
+            if (Sessions.TryGetValue(root, out Session existing))
             {
-                if (alive.Contains(window))
+                existing.ScheduleAttachment();
+                return;
+            }
+            var session = new Session(root);
+            Sessions.Add(root, session);
+            session.Start();
+        }
+
+        private static void ObserveAncestors(VisualElement element)
+        {
+            for (VisualElement parent = element.parent; parent != null; parent = parent.parent)
+            {
+                if (parent.GetType().FullName != RootTypeName)
                     continue;
-                Sessions[window].Dispose();
-                Sessions.Remove(window);
+                ObserveRoot(parent);
+                return;
             }
         }
 
         private static void RefreshViews()
         {
             Details.Refresh();
-            foreach (KeyValuePair<EditorWindow, Session> pair in Sessions)
+            foreach (Session session in Sessions.Values)
             {
-                pair.Value.Page.Refresh();
-                PackageManagerSubmoduleHarmonyPatch.RefreshActivePage(pair.Value.Root);
-                if (pair.Key != null)
-                    pair.Key.Repaint();
+                session.ScheduleAttachment();
+                session.Page.Refresh();
+                PackageManagerSubmoduleHarmonyPatch.RefreshActivePage(session.Root);
             }
+        }
+
+        private static void BeforeReload()
+        {
+            Stop();
+            // Unity clears the legacy extension registry on code reload, even on CoreCLR.
+            registered = false;
         }
 
         private static void Stop()
         {
-            EditorApplication.update -= Update;
+            EditorApplication.delayCall -= AttachExistingWindows;
             PackageManagerPackageStatus.Changed -= RefreshViews;
+            PackageManagerPackageStatus.ReadinessChanged -= Details.Refresh;
             foreach (Session session in Sessions.Values)
                 session.Dispose();
             Sessions.Clear();
+            Details.Clear();
             PackageManagerSubmoduleHarmonyPatch.Uninstall();
         }
 
         private sealed class StatusDetails : IPackageManagerExtension
         {
-            private Label label;
+            private readonly HashSet<Label> labels = new();
             private PackageInfo selected;
 
             public VisualElement CreateExtensionUI()
             {
-                label = new Label { name = "git-submodule-package-status" };
+                var label = new Label { name = "git-submodule-package-status" };
                 label.style.whiteSpace = WhiteSpace.Normal;
                 label.style.marginTop = 8;
                 label.style.marginBottom = 8;
-                Refresh();
+                label.RegisterCallback<AttachToPanelEvent>(_ =>
+                {
+                    labels.Add(label);
+                    ObserveAncestors(label);
+                    Refresh(label);
+                });
+                label.RegisterCallback<DetachFromPanelEvent>(_ => labels.Remove(label));
+                Refresh(label);
                 return label;
             }
 
@@ -144,16 +230,27 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 Refresh();
             }
 
-            public void OnPackageAddedOrUpdated(PackageInfo packageInfo) => PackageManagerPackageStatus.Refresh();
-            public void OnPackageRemoved(PackageInfo packageInfo) => PackageManagerPackageStatus.Refresh();
+            // Registered-package events already provide one coalesced status refresh.
+            public void OnPackageAddedOrUpdated(PackageInfo packageInfo) { }
+            public void OnPackageRemoved(PackageInfo packageInfo) { }
 
             internal void Refresh()
             {
-                if (label == null)
-                    return;
+                foreach (Label label in labels)
+                    Refresh(label);
+            }
+
+            private void Refresh(Label label)
+            {
                 label.style.display = selected == null ? DisplayStyle.None : DisplayStyle.Flex;
                 label.text = selected == null ? string.Empty : PackageManagerPackageStatus.Describe(selected);
                 label.tooltip = selected?.resolvedPath ?? string.Empty;
+            }
+
+            internal void Clear()
+            {
+                labels.Clear();
+                selected = null;
             }
         }
     }

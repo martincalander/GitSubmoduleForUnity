@@ -41,6 +41,34 @@ use guarded internal contracts. Each reflected seam is checked independently;
 an unavailable seam disables that feature without replacing unrelated Package
 Manager pages.
 
+The public details element's panel attachment discovers its native window root.
+Each root owns one session, with a detach callback that releases its observer
+and scheduled work. A single delayed scan reconnects windows already present at
+code reload; there is no permanent window polling. Native construction retries
+run at 100 ms intervals for at most 50 attempts, stop after success, and can
+resume on a later attachment observation, sidebar rebuild, or installed-status
+change. A detached row or native sidebar rebuild schedules repair on the next
+UI tick. The sidebar hook notifies only the session owning that sidebar, and
+source attachment fails closed if the hook could not be installed.
+
+Native-page contracts and reflected members are cached for the current code
+load. Reusing an attachment still checks its manager, page, and hierarchy.
+The compatibility gate and deletion guards remain independent. Reload resets
+the host's registration flag because Unity clears its public extension registry.
+
+Only observed Package Manager sessions check `.gitmodules` and the Git index,
+at two-second intervals. Package registration events and explicit refresh also
+request a scan; ordinary project asset changes do not. Status and installed
+identity are published together. A changed metadata stamp during a read causes
+a retry before publication. Readiness notifications update details while
+content notifications rebuild views only when the result actually differs.
+Pending or failed reads continue to block unverified embedded-folder deletion.
+
+Sidebar icons are imported at a maximum of 64 pixels. The package declares its
+UIElements dependency, which supplies the required engine module dependencies;
+it no longer declares or references Newtonsoft. The runtime-specific patching
+libraries and their explicit Editor imports remain unchanged.
+
 Ordinary package actions remain Unity-owned. A small Harmony guard prevents
 Unity's raw embedded-package removal from deleting a submodule folder. It
 performs no Git or filesystem mutation and supplies no replacement removal
@@ -61,8 +89,9 @@ builds remain unsupported. The manifest's `6000.3.22f1` minimum cannot encode
 this complete matrix.
 
 Local validation of the simplified branch passed on Unity `7000.0.0a10` on
-macOS, including all 133 EditMode tests. Existing version gates and prior validation of the larger implementation
-do not establish a new release claim for this branch.
+macOS. See the [verification record](../.github/CONTRIBUTING.md#performance-verification-on-2026-10-19)
+for the final checks. Existing version gates and prior validation of the larger
+implementation do not establish a new release claim for this branch.
 
 Mono retains the byte-identical Harmony 2.4.1 `net472` DLL under
 `!ENABLE_CORECLR`. CoreCLR retains eleven original upstream DLLs under

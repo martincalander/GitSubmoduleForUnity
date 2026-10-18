@@ -1,8 +1,10 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Diagnostics;
 using System.Threading;
 using NUnit.Framework;
+using UnityEditor.PackageManager;
 
 namespace MartinCalander.GitSubmoduleManager.Editor.Tests
 {
@@ -212,6 +214,199 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
             Assert.That(PackageManagerPackageStatus.TryClassify(root, Name, packagePath, data, out _), Is.True);
             Assert.That(File.ReadAllBytes(Path.Combine(root, ".git", "index")), Is.EqualTo(beforeIndex));
             Assert.That(File.ReadAllBytes(modules), Is.EqualTo(beforeModules));
+        }
+
+        [Test]
+        public void UnchangedRefreshNotifiesReadinessWithoutRebuildingPackageViews()
+        {
+            var state = new PackageManagerPackageStatus.StatusState();
+            state.CompleteRefresh(InstalledSnapshot());
+            int changed = 0;
+            var readiness = new List<bool>();
+            state.Changed += () => changed++;
+            state.ReadinessChanged += () => readiness.Add(state.IsReady);
+
+            state.BeginRefresh();
+            state.BeginRefresh();
+            Assert.That(PackageManagerPackageStatus.ShouldBlockEmbeddedRemoval(root, Name, packagePath,
+                state.IsReady, state.Snapshot), Is.True);
+            var refreshed = InstalledSnapshot();
+            refreshed.IndexPath = Path.Combine(root, ".git", "different-index");
+            state.CompleteRefresh(refreshed);
+
+            Assert.That(changed, Is.Zero);
+            Assert.That(readiness, Is.EqualTo(new[] { false, true }));
+            Assert.That(state.Snapshot, Is.SameAs(refreshed), "A new metadata watch path must still be retained.");
+        }
+
+        [TestCase("url")]
+        [TestCase("gitlink")]
+        [TestCase("registration")]
+        [TestCase("error")]
+        [TestCase("package-path")]
+        [TestCase("package-source")]
+        [TestCase("package-id")]
+        [TestCase("package-added")]
+        [TestCase("package-removed")]
+        public void ChangedInstalledStatusNotifiesPackageViewsOnce(string change)
+        {
+            var state = new PackageManagerPackageStatus.StatusState();
+            state.CompleteRefresh(InstalledSnapshot());
+            int changed = 0;
+            state.Changed += () => changed++;
+            var refreshed = InstalledSnapshot();
+            switch (change)
+            {
+                case "url": refreshed.Repositories[RelativePath] = "https://gitlab.com/example/package.git"; break;
+                case "gitlink": refreshed.Gitlinks.Clear(); break;
+                case "registration": refreshed.Repositories.Clear(); break;
+                case "error": refreshed.Error = "Could not read local Git status."; break;
+                case "package-path":
+                    refreshed.Packages[Name] = new PackageManagerPackageStatus.InstalledPackage(
+                        Path.Combine(root, "Library", "PackageCache", Name), PackageSource.Embedded, Name + "@file:" + packagePath);
+                    break;
+                case "package-source":
+                    refreshed.Packages[Name] = new PackageManagerPackageStatus.InstalledPackage(
+                        packagePath, PackageSource.Local, Name + "@file:" + packagePath);
+                    break;
+                case "package-id":
+                    refreshed.Packages[Name] = new PackageManagerPackageStatus.InstalledPackage(
+                        packagePath, PackageSource.Embedded, Name + "@https://github.com/example/package.git");
+                    break;
+                case "package-added":
+                    refreshed.Packages.Add("com.example.other", new PackageManagerPackageStatus.InstalledPackage(
+                        Path.Combine(root, "Packages", "com.example.other"), PackageSource.Embedded, "com.example.other@1.0.0"));
+                    break;
+                case "package-removed": refreshed.Packages.Clear(); break;
+            }
+
+            state.BeginRefresh();
+            state.CompleteRefresh(refreshed);
+
+            Assert.That(changed, Is.EqualTo(1));
+            Assert.That(state.Snapshot, Is.SameAs(refreshed));
+            Assert.That(state.IsReady, Is.True);
+        }
+
+        [Test]
+        public void PendingRefreshKeepsThePublishedPackageAndGitSnapshotTogether()
+        {
+            var state = new PackageManagerPackageStatus.StatusState();
+            var initial = InstalledSnapshot();
+            state.CompleteRefresh(initial);
+            state.BeginRefresh();
+            var refreshed = new PackageManagerPackageStatus.StatusSnapshot();
+
+            Assert.That(state.Snapshot.Packages.ContainsKey(Name), Is.True);
+            Assert.That(PackageManagerPackageStatus.TryClassify(root, Name, packagePath, state.Snapshot, out _), Is.True);
+            Assert.That(PackageManagerPackageStatus.ShouldBlockEmbeddedRemoval(root, Name, packagePath,
+                state.IsReady, state.Snapshot), Is.True);
+            state.CompleteRefresh(refreshed);
+            Assert.That(state.Snapshot.Packages.ContainsKey(Name), Is.False);
+            Assert.That(PackageManagerPackageStatus.TryClassify(root, Name, packagePath, state.Snapshot, out _), Is.False);
+        }
+
+        [Test]
+        public void ReadinessNotificationsObserveCurrentOrdinaryPackageRemovalSafety()
+        {
+            var state = new PackageManagerPackageStatus.StatusState();
+            state.CompleteRefresh(new PackageManagerPackageStatus.StatusSnapshot());
+            var blocked = new List<bool>();
+            state.ReadinessChanged += () => blocked.Add(PackageManagerPackageStatus.ShouldBlockEmbeddedRemoval(
+                root, Name, packagePath, state.IsReady, state.Snapshot));
+
+            state.BeginRefresh();
+            state.BeginRefresh();
+            state.CompleteRefresh(new PackageManagerPackageStatus.StatusSnapshot());
+
+            Assert.That(blocked, Is.EqualTo(new[] { true, false }));
+        }
+
+        [Test]
+        public void ReadFailureAndRecoveryNotifyOnceAndPreserveRemovalProtection()
+        {
+            var state = new PackageManagerPackageStatus.StatusState();
+            state.CompleteRefresh(new PackageManagerPackageStatus.StatusSnapshot());
+            int changed = 0;
+            state.Changed += () => changed++;
+
+            state.BeginRefresh();
+            state.CompleteRefresh(new PackageManagerPackageStatus.StatusSnapshot { Error = "Git is unavailable." });
+            Assert.That(changed, Is.EqualTo(1));
+            Assert.That(PackageManagerPackageStatus.ShouldBlockEmbeddedRemoval(root, Name, packagePath,
+                state.IsReady, state.Snapshot), Is.True);
+
+            state.BeginRefresh();
+            state.CompleteRefresh(new PackageManagerPackageStatus.StatusSnapshot { Error = "Git is unavailable." });
+            Assert.That(changed, Is.EqualTo(1));
+            Assert.That(PackageManagerPackageStatus.ShouldBlockEmbeddedRemoval(root, Name, packagePath,
+                state.IsReady, state.Snapshot), Is.True);
+
+            state.BeginRefresh();
+            state.CompleteRefresh(new PackageManagerPackageStatus.StatusSnapshot());
+            Assert.That(changed, Is.EqualTo(2));
+            Assert.That(PackageManagerPackageStatus.ShouldBlockEmbeddedRemoval(root, Name, packagePath,
+                state.IsReady, state.Snapshot), Is.False);
+        }
+
+        [TestCase("index", 0)]
+        [TestCase("modules", 0)]
+        [TestCase("index", 1)]
+        [TestCase("modules", 1)]
+        public void MetadataChangeRejectsStaleNegativeStatusAndRetriesOnlyWhileObserved(string changedFile, int observers)
+        {
+            RunGit("init --quiet");
+            var state = new PackageManagerPackageStatus.StatusState();
+            var initial = PackageManagerPackageStatus.ReadStatus(root, CancellationToken.None);
+            Assert.That(state.TryCompleteRefresh(root, initial), Is.True);
+            Assert.That(PackageManagerPackageStatus.ShouldBlockEmbeddedRemoval(root, Name, packagePath,
+                state.IsReady, state.Snapshot), Is.False);
+            int changed = 0;
+            state.Changed += () => changed++;
+            state.BeginRefresh();
+            var stale = PackageManagerPackageStatus.ReadStatus(root, CancellationToken.None);
+            Assert.That(stale.Error, Is.Empty);
+
+            if (changedFile == "index")
+                RunGit("update-index --add --cacheinfo 160000," + Commit + "," + RelativePath);
+            else
+                File.WriteAllText(Path.Combine(root, ".gitmodules"), "[submodule \"example\"]\npath = " + RelativePath +
+                    "\nurl = https://github.com/example/package.git\n");
+
+            int retries = 0;
+            Assert.That(state.TryCompleteRefresh(root, stale, observers, () => retries++), Is.False);
+            Assert.That(retries, Is.EqualTo(observers));
+            Assert.That(state.IsReady, Is.False);
+            Assert.That(state.Snapshot, Is.SameAs(initial));
+            Assert.That(changed, Is.Zero);
+            Assert.That(PackageManagerPackageStatus.ShouldBlockEmbeddedRemoval(root, Name, packagePath,
+                state.IsReady, state.Snapshot), Is.True);
+
+            var fresh = PackageManagerPackageStatus.ReadStatus(root, CancellationToken.None);
+            Assert.That(fresh.Error, Is.Empty);
+            Assert.That(state.TryCompleteRefresh(root, fresh), Is.True);
+            Assert.That(state.IsReady, Is.True);
+            Assert.That(changed, Is.EqualTo(1));
+            Assert.That(PackageManagerPackageStatus.ShouldBlockEmbeddedRemoval(root, Name, packagePath,
+                state.IsReady, state.Snapshot), Is.True);
+        }
+
+        [Test]
+        public void SuccessfulResultWithoutMetadataStampCannotPublishReadyStatus()
+        {
+            var state = new PackageManagerPackageStatus.StatusState();
+            Assert.That(state.TryCompleteRefresh(root, new PackageManagerPackageStatus.StatusSnapshot()), Is.False);
+            Assert.That(state.IsReady, Is.False);
+            Assert.That(PackageManagerPackageStatus.ShouldBlockEmbeddedRemoval(root, Name, packagePath,
+                state.IsReady, state.Snapshot), Is.True);
+        }
+
+        private PackageManagerPackageStatus.StatusSnapshot InstalledSnapshot()
+        {
+            var data = Snapshot();
+            data.Packages.Add(Name, new PackageManagerPackageStatus.InstalledPackage(
+                packagePath, PackageSource.Embedded, Name + "@file:" + packagePath));
+            return data;
         }
 
         private void RunGit(string arguments)

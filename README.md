@@ -15,7 +15,8 @@ See how your installed Unity packages are sourced in the native Package Manager.
 
 This experimental `simplify-package-status` branch reduces the package to status
 and sources. The simplified implementation passed local validation on Unity
-`7000.0.0a10` on macOS, including all 133 EditMode tests. This branch is not a new published release.
+`7000.0.0a10` on macOS. See the [verification record](.github/CONTRIBUTING.md#performance-verification-on-2026-10-19)
+for the final checks. This branch is not a new published release.
 
 ## What It Shows
 

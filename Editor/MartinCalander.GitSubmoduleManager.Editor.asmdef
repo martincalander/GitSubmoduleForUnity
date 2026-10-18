@@ -9,8 +9,7 @@
     "allowUnsafeCode": false,
     "overrideReferences": true,
     "precompiledReferences": [
-        "GitSubmoduleManager.Harmony.dll",
-        "Newtonsoft.Json.dll"
+        "GitSubmoduleManager.Harmony.dll"
     ],
     "autoReferenced": false,
     "defineConstraints": [],

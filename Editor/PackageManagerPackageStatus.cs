@@ -34,8 +34,9 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         private static readonly StringComparison PathComparison =
             Path.DirectorySeparatorChar == '\\' ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
         private static readonly Regex PackageName = new Regex(@"\A[a-z0-9][a-z0-9_-]*(\.[a-z0-9][a-z0-9_-]*)+\z");
-        private static readonly Dictionary<string, PackageInfo> Registered = new Dictionary<string, PackageInfo>(StringComparer.Ordinal);
-        private static StatusSnapshot snapshot = new StatusSnapshot();
+        private static readonly StatusState State = new StatusState();
+        private static StatusSnapshot snapshot => State.Snapshot;
+        private static Dictionary<string, InstalledPackage> workerPackages;
         private static Task<StatusSnapshot> worker;
         private static CancellationTokenSource cancellation;
         private static int generation;
@@ -49,14 +50,104 @@ namespace MartinCalander.GitSubmoduleManager.Editor
 
         internal sealed class StatusSnapshot
         {
+            internal Dictionary<string, InstalledPackage> Packages = new Dictionary<string, InstalledPackage>(StringComparer.Ordinal);
             internal readonly Dictionary<string, string> Repositories = new Dictionary<string, string>(StringComparer.Ordinal);
             internal readonly HashSet<string> Gitlinks = new HashSet<string>(StringComparer.Ordinal);
             internal string IndexPath;
+            internal string FilesStamp;
             internal string Error = string.Empty;
+
+            internal bool HasSameContents(StatusSnapshot other)
+            {
+                if (Error != other.Error || Packages.Count != other.Packages.Count ||
+                    Repositories.Count != other.Repositories.Count || !Gitlinks.SetEquals(other.Gitlinks))
+                    return false;
+                foreach (KeyValuePair<string, InstalledPackage> package in Packages)
+                    if (!other.Packages.TryGetValue(package.Key, out InstalledPackage value) || !package.Value.Equals(value))
+                        return false;
+                foreach (KeyValuePair<string, string> repository in Repositories)
+                    if (!other.Repositories.TryGetValue(repository.Key, out string url) || repository.Value != url)
+                        return false;
+                return true;
+            }
         }
 
-        internal static event Action Changed;
-        internal static bool IsReady { get; private set; }
+        internal readonly struct InstalledPackage : IEquatable<InstalledPackage>
+        {
+            internal readonly string ResolvedPath;
+            internal readonly PackageSource Source;
+            internal readonly string PackageId;
+
+            internal InstalledPackage(string resolvedPath, PackageSource source, string packageId)
+            {
+                ResolvedPath = resolvedPath;
+                Source = source;
+                PackageId = packageId;
+            }
+
+            public bool Equals(InstalledPackage other) => ResolvedPath == other.ResolvedPath &&
+                Source == other.Source && PackageId == other.PackageId;
+        }
+
+        internal sealed class StatusState
+        {
+            internal StatusSnapshot Snapshot { get; private set; } = new StatusSnapshot();
+            internal bool IsReady { get; private set; }
+            internal event Action Changed;
+            internal event Action ReadinessChanged;
+
+            internal void BeginRefresh()
+            {
+                bool wasReady = IsReady;
+                IsReady = false;
+                if (wasReady)
+                    ReadinessChanged?.Invoke();
+            }
+
+            internal void CompleteRefresh(StatusSnapshot result)
+            {
+                bool changed = !Snapshot.HasSameContents(result);
+                bool wasReady = IsReady;
+                Snapshot = result;
+                IsReady = true;
+                if (changed)
+                    Changed?.Invoke();
+                if (!wasReady)
+                    ReadinessChanged?.Invoke();
+            }
+
+            internal bool TryCompleteRefresh(string root, StatusSnapshot result)
+            {
+                if ((result.FilesStamp == null && string.IsNullOrEmpty(result.Error)) ||
+                    (result.FilesStamp != null && result.FilesStamp != FileStamp(root, result.IndexPath)))
+                {
+                    BeginRefresh();
+                    return false;
+                }
+                CompleteRefresh(result);
+                return true;
+            }
+
+            internal bool TryCompleteRefresh(string root, StatusSnapshot result, int observerCount, Action retry)
+            {
+                bool complete = TryCompleteRefresh(root, result);
+                if (!complete && observerCount > 0)
+                    retry();
+                return complete;
+            }
+        }
+
+        internal static event Action Changed
+        {
+            add => State.Changed += value;
+            remove => State.Changed -= value;
+        }
+        internal static event Action ReadinessChanged
+        {
+            add => State.ReadinessChanged += value;
+            remove => State.ReadinessChanged -= value;
+        }
+        internal static bool IsReady => State.IsReady;
         internal static string Error => snapshot.Error;
 
         static PackageManagerPackageStatus()
@@ -82,7 +173,6 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             if (observers == 1)
             {
                 Events.registeredPackages += OnRegisteredPackages;
-                EditorApplication.projectChanged += Refresh;
                 Refresh();
             }
         }
@@ -95,7 +185,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             if (observers == 0)
             {
                 Events.registeredPackages -= OnRegisteredPackages;
-                EditorApplication.projectChanged -= Refresh;
+                refreshPending = false;
                 StopListeningIfIdle();
             }
         }
@@ -107,21 +197,20 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             if (shuttingDown)
                 return;
             generation++;
-            IsReady = false;
             refreshPending = true;
             if (!listening)
             {
                 listening = true;
                 EditorApplication.update += Update;
             }
-            Changed?.Invoke();
+            State.BeginRefresh();
         }
 
         private static void Update()
         {
             if (worker != null && worker.IsCompleted)
             {
-                StatusSnapshot result = worker.IsFaulted
+                StatusSnapshot result = worker.IsFaulted || worker.IsCanceled
                     ? new StatusSnapshot { Error = "Could not read local Git status." }
                     : worker.Result;
                 worker = null;
@@ -129,22 +218,22 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 cancellation = null;
                 if (workerGeneration == generation)
                 {
-                    snapshot = result;
-                    IsReady = true;
-                    observedFiles = FileStamp();
-                    Changed?.Invoke();
+                    result.Packages = workerPackages;
+                    if (State.TryCompleteRefresh(ProjectRoot, result, observers, Refresh))
+                        observedFiles = result.FilesStamp ?? FileStamp();
                 }
+                workerPackages = null;
             }
 
             if (refreshPending && worker == null)
             {
                 refreshPending = false;
-                Registered.Clear();
                 try
                 {
+                    workerPackages = new Dictionary<string, InstalledPackage>(StringComparer.Ordinal);
                     foreach (PackageInfo package in PackageInfo.GetAllRegisteredPackages())
                         if (package != null && !string.IsNullOrEmpty(package.name))
-                            Registered[package.name] = package;
+                            workerPackages[package.name] = new InstalledPackage(package.resolvedPath, package.source, package.packageId);
                     workerGeneration = generation;
                     cancellation = new CancellationTokenSource();
                     CancellationToken token = cancellation.Token;
@@ -152,9 +241,8 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 }
                 catch (Exception)
                 {
-                    snapshot = new StatusSnapshot { Error = "Unity's registered packages are unavailable." };
-                    IsReady = true;
-                    Changed?.Invoke();
+                    workerPackages = null;
+                    State.CompleteRefresh(new StatusSnapshot { Error = "Unity's registered packages are unavailable." });
                 }
             }
 
@@ -180,7 +268,12 @@ namespace MartinCalander.GitSubmoduleManager.Editor
 
         private static string FileStamp()
         {
-            return Stamp(Path.Combine(ProjectRoot, ".gitmodules")) + ":" + Stamp(snapshot.IndexPath);
+            return FileStamp(ProjectRoot, snapshot.IndexPath);
+        }
+
+        private static string FileStamp(string root, string indexPath)
+        {
+            return Stamp(Path.Combine(root, ".gitmodules")) + ":" + Stamp(indexPath);
         }
 
         private static string Stamp(string path)
@@ -200,7 +293,6 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             shuttingDown = true;
             cancellation?.Cancel();
             Events.registeredPackages -= OnRegisteredPackages;
-            EditorApplication.projectChanged -= Refresh;
             EditorApplication.update -= Update;
             try { worker?.Wait(1500); }
             catch (Exception) { }
@@ -210,8 +302,8 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         {
             status = null;
             return string.IsNullOrEmpty(Error) &&
-                   Registered.TryGetValue(name ?? string.Empty, out PackageInfo registered) &&
-                   SamePath(registered.resolvedPath, resolvedPath) &&
+                   snapshot.Packages.TryGetValue(name ?? string.Empty, out InstalledPackage registered) &&
+                   SamePath(registered.ResolvedPath, resolvedPath) &&
                    TryClassify(ProjectRoot, name, resolvedPath, snapshot, out status);
         }
 
@@ -259,19 +351,19 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             object version = Property(Property(nativePackage, "versions"), "primary");
             string name = Property(version, "name") as string;
             if (!(Property(version, "isInstalled") is bool installed) || !installed ||
-                string.IsNullOrEmpty(name) || !Registered.TryGetValue(name, out PackageInfo info))
+                string.IsNullOrEmpty(name) || !snapshot.Packages.TryGetValue(name, out InstalledPackage info))
                 return false;
-            if (TryGetSubmodule(name, info.resolvedPath, out PackageSubmoduleStatus status))
+            if (TryGetSubmodule(name, info.ResolvedPath, out PackageSubmoduleStatus status))
                 return status.IsGitHub;
-            return info.source == PackageSource.Git && IsGitHubUrl(PackageUrl(info));
+            return info.Source == PackageSource.Git && IsGitHubUrl(PackageUrl(name, info.PackageId));
         }
 
         internal static string Describe(PackageInfo info)
         {
             if (info == null)
                 return "Select an installed package to see its source.";
-            if (!Registered.TryGetValue(info.name ?? string.Empty, out PackageInfo installed) ||
-                !SamePath(installed.resolvedPath, info.resolvedPath))
+            if (!snapshot.Packages.TryGetValue(info.name ?? string.Empty, out InstalledPackage installed) ||
+                !SamePath(installed.ResolvedPath, info.resolvedPath))
                 return "Not installed in this project.";
             if (TryGetSubmodule(info.name, info.resolvedPath, out PackageSubmoduleStatus status))
                 return "Git submodule (editable checkout)";
@@ -289,11 +381,11 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 : info.source + " package (not a submodule)";
         }
 
-        private static string PackageUrl(PackageInfo info)
+        private static string PackageUrl(string name, string packageId)
         {
-            string prefix = info.name + "@";
-            return info.packageId != null && info.packageId.StartsWith(prefix, StringComparison.Ordinal)
-                ? info.packageId.Substring(prefix.Length) : string.Empty;
+            string prefix = name + "@";
+            return packageId != null && packageId.StartsWith(prefix, StringComparison.Ordinal)
+                ? packageId.Substring(prefix.Length) : string.Empty;
         }
 
         private static object Property(object value, string name)
@@ -344,6 +436,9 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                     throw new InvalidDataException("The Unity project is not the Git repository root.");
                 string index = Git(root, "rev-parse --git-path index", token).TrimEnd('\r', '\n');
                 result.IndexPath = Path.GetFullPath(Path.IsPathRooted(index) ? index : Path.Combine(root, index));
+                result.FilesStamp = FileStamp(root, result.IndexPath);
+                if (result.FilesStamp.IndexOf("unavailable", StringComparison.Ordinal) >= 0)
+                    throw new InvalidDataException("Could not verify local Git metadata.");
                 ParseIndex(Git(root, "ls-files --stage -z -- Packages/", token), result);
                 string modules = Path.Combine(root, ".gitmodules");
                 if (File.Exists(modules))

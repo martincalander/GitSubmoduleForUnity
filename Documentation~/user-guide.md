@@ -48,6 +48,17 @@ Package Manager. A submodule must be initialized and available as an installed
 Unity package before the page can display it. See
 [team clone setup](installation.md#team-clone-setup) for initialization commands.
 
+## Background Work
+
+Closing Package Manager stops its status observation and attachment work after
+any pending local read finishes. While it is open, the extension checks local
+Git metadata every two seconds and responds to package registration changes.
+Ordinary asset edits do not launch Git status reads. An unchanged result keeps
+the existing package view instead of rebuilding it.
+
+The extension performs no background network discovery. Its sidebar icons use
+small imports, and its native integration checks are cached until code reload.
+
 ## Switching from the Earlier Workflow
 
 This branch removes the manager's remote catalogue, install and conversion

@@ -21,6 +21,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         private static readonly ConditionalWeakTable<TextElement, TagState> Tags = new();
         private static Harmony harmony;
         internal static string LastError { get; private set; } = string.Empty;
+        internal static bool IsSidebarRepairInstalled { get; private set; }
 
         private sealed class TagState
         {
@@ -43,6 +44,9 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             Patch(FindMethod("RemoveCustomAction", "TriggerActionImplementation", typeof(bool), "IPackageVersion"), nameof(RemovePrefix), true);
             Patch(FindMethod("PackageOperationDispatcher", "RemoveEmbedded", typeof(void), "IPackage"), nameof(RemoveEmbeddedPrefix), true);
             Patch(PackageManagerSubmoduleNativePage.GetNativeRefreshTarget(), nameof(RefreshPostfix), false);
+            MethodInfo sidebarRefresh = PackageManagerSubmoduleNativePage.GetSidebarRefreshTarget();
+            Patch(sidebarRefresh, nameof(SidebarRefreshPostfix), false);
+            IsSidebarRepairInstalled = IsPatched(sidebarRefresh);
         }
 
         private static void Patch(MethodInfo target, string callback, bool prefix)
@@ -106,13 +110,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
 
         internal static Type FindType(string name)
         {
-            foreach (Assembly assembly in EditorAssemblyCompatibility.GetLoadedAssemblies())
-            {
-                Type type = assembly.GetType(name, false);
-                if (type != null)
-                    return type;
-            }
-            return null;
+            return typeof(UnityEditor.PackageManager.UI.IPackageManagerExtension).Assembly.GetType(name, false);
         }
 
         internal static object Read(object instance, string name)
@@ -234,6 +232,9 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             return !MustBlockRemoval(installed, PackageManagerPackageStatus.ShouldBlockEmbeddedRemoval);
         }
 
+        private static void SidebarRefreshPostfix(object __instance) =>
+            PackageManagerSubmoduleNativePage.NotifySidebarRefreshed(__instance as VisualElement);
+
         private static void RefreshPostfix(object __0)
         {
             if (PackageManagerSubmoduleNativePage.IsGitHubPage(__0))
@@ -259,6 +260,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
 
         internal static void Uninstall()
         {
+            IsSidebarRepairInstalled = false;
             if (harmony == null)
                 return;
 #if ENABLE_CORECLR
