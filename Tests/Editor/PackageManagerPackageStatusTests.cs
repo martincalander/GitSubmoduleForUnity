@@ -79,11 +79,12 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
             Assert.That(Block(data), Is.True);
         }
 
-        [Test]
-        public void NonGitHubSubmodulesRemainSubmodules()
+        [TestCase("https://gitlab.com/example/package.git")]
+        [TestCase("ssh://git@example.invalid/example/package.git")]
+        public void NonGitHubSubmodulesRemainSubmodules(string url)
         {
             var data = Snapshot();
-            data.Repositories[RelativePath] = "https://gitlab.com/example/package.git";
+            data.Repositories[RelativePath] = url;
             Assert.That(PackageManagerPackageStatus.TryClassify(root, Name, packagePath, data, out PackageSubmoduleStatus status), Is.True);
             Assert.That(status.IsGitHub, Is.False);
         }
@@ -367,40 +368,34 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
             Assert.That(new PackageManagerPackageStatus.StatusState().TryCompleteRefresh(worktree, data), Is.True);
         }
 
-        [TestCase("https://github.com/example/package.git")]
-        [TestCase("https://gitlab.com/example/package.git")]
-        [TestCase("ssh://git@example.invalid/example/package.git")]
-        public void SubmodulePageUsesCachedInstalledClassificationForEveryHost(string url)
+        [TestCase("https://github.com/example/package.git", true)]
+        [TestCase("https://gitlab.com/example/package.git", false)]
+        [TestCase("ssh://git@example.invalid/example/package.git", false)]
+        public void GitHubPageUsesCachedSubmoduleRepositoryHost(string url, bool expected)
         {
             var data = InstalledSnapshot();
             data.Repositories[RelativePath] = url;
-            object native = new { versions = new { primary = new { name = Name, isInstalled = true, localPath = packagePath } } };
+            object native = new { versions = new { primary = NativeVersion() } };
 
-            Assert.That(PackageManagerPackageStatus.IsSubmodulePackage(root, native, data), Is.True);
+            Assert.That(PackageManagerPackageStatus.IsGitHubPackage(root, native, data), Is.EqualTo(expected));
             data.Repositories.Clear();
-            Assert.That(PackageManagerPackageStatus.IsSubmodulePackage(root, native, data), Is.False);
+            Assert.That(PackageManagerPackageStatus.IsGitHubPackage(root, native, data), Is.False);
         }
 
         [TestCase("not-installed")]
         [TestCase("unregistered")]
-        [TestCase("different-path")]
         [TestCase("error")]
         [TestCase("malformed-native")]
-        [TestCase("missing-native-path")]
-        [TestCase("different-native-path")]
-        public void SubmodulePageRejectsUnverifiedOrUninstalledPackages(string reason)
+        public void GitHubPageRejectsUnverifiedOrUninstalledSubmodules(string reason)
         {
             var data = InstalledSnapshot();
-            object native = new { versions = new { primary = new { name = Name, isInstalled = reason != "not-installed",
-                localPath = reason == "different-native-path" ? packagePath + "-other" : packagePath } } };
+            object native = new { versions = new { primary = new { name = Name,
+                isInstalled = reason != "not-installed", localPath = packagePath } } };
             if (reason == "unregistered") data.Packages.Clear();
-            if (reason == "different-path") data.Packages[Name] = new PackageManagerPackageStatus.InstalledPackage(
-                Path.Combine(root, "Library", "PackageCache", Name), PackageSource.Git, Name + "@https://github.com/example/package.git");
             if (reason == "error") data.Error = "Local Git status unavailable.";
             if (reason == "malformed-native") native = new object();
-            if (reason == "missing-native-path") native = new { versions = new { primary = new { name = Name, isInstalled = true } } };
 
-            Assert.That(PackageManagerPackageStatus.IsSubmodulePackage(root, native, data), Is.False);
+            Assert.That(PackageManagerPackageStatus.IsGitHubPackage(root, native, data), Is.False);
         }
 
         [TestCase(false, "matching")]

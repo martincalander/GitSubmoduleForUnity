@@ -397,14 +397,6 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             return info.Source == PackageSource.Git && IsGitHubUrl(PackageUrl(name, info.PackageId));
         }
 
-        internal static bool IsSubmodulePackage(object nativePackage) => IsSubmodulePackage(ProjectRoot, nativePackage, snapshot);
-
-        internal static bool IsSubmodulePackage(string projectRoot, object nativePackage, StatusSnapshot data)
-        {
-            return TryGetNativeInstalledPackage(nativePackage, data, out string name, out InstalledPackage info) &&
-                   TryClassify(projectRoot, name, info.ResolvedPath, data, out _);
-        }
-
         private static bool TryGetNativeInstalledPackage(object nativePackage, StatusSnapshot data,
             out string name, out InstalledPackage info)
         {

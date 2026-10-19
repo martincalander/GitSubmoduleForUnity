@@ -72,6 +72,7 @@ been published as a new release; existing `0.8.1` artifacts remain unchanged.
 - Legacy bootstrap installer source and its build, verification, and release
   steps from `main`. The installer remains on `legacy`; signed UPM archives,
   checksum verification, and optional OpenUPM publication remain supported.
+- Unused submodule-filter predicates left after the custom filter was removed.
 
 - Custom package details text and the **Open repository**, **Reveal package
   folder**, and **Copy installed commit** buttons. Source URL, location,
