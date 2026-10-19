@@ -42,6 +42,7 @@ been published as a new release; existing `0.8.1` artifacts remain unchanged.
 
 - Keep submodule classification in a small value containing only the repository
   URL and GitHub membership, without unused name or normalized-path copies.
+- Move the test-only assembly enumeration helper into the Editor test assembly.
 
 - Cancel active local status reads when the last Package Manager window closes,
   discard their results, and coalesce a fresh read if the window reopens.

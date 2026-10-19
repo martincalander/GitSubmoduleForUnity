@@ -2,7 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Reflection;
 
-namespace MartinCalander.GitSubmoduleManager.Editor
+namespace MartinCalander.GitSubmoduleManager.Editor.Tests
 {
     internal static class EditorAssemblyCompatibility
     {

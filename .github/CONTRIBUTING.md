@@ -19,7 +19,7 @@ published `0.8.1` artifacts still contain that implementation.
 - Git for preparing test repositories and managing the checkout.
 - Python 3 and Node.js for repository, Markdown, and packaging checks.
 
-See the [performance and stability verification](#performance-and-stability-verification-on-2026-10-19)
+See the [lean cleanup verification](#lean-cleanup-verification-on-2026-10-19)
 and the earlier records below for the checks performed on each change.
 Existing version gates do not imply
 that the current design has been retested across all supported targets. GitHub
@@ -493,3 +493,44 @@ consumer projects. No supplemental `dotnet build`, player build, signed release
 artifact, or GitHub CI run was performed. No commits or pushes were made.
 Local results do not establish release evidence for another commit, Unity
 version, archive, or platform.
+
+## Lean Cleanup Verification on 2026-10-19
+
+The four cleanup changes after `3742a21` were verified with the existing Unity
+`7000.0.0a10` Editor on macOS, CLI `1.0.0-beta.13`, and Pipeline `0.8.0-exp.1`.
+
+- Fresh Unity compilation passed, followed by all 299 `PackageSourceFeatures`
+  and 105 `PackageManagerCompatibility` tests.
+- All 307 tests in the final Editor assembly passed, with zero failed, skipped,
+  or inconclusive tests. This includes two Play Mode cycles with domain reload
+  disabled; original Editor settings were restored. The final Editor Console
+  reported no errors, warnings, or compilation failure.
+- Thirty live Package Manager assertions passed, covering native links,
+  submodule and GitHub views, ordinary/empty/multiple selections, sidebar repair,
+  and close/reopen. Loaded assemblies confirmed the helper exists only in the
+  test assembly, the retired predicate is absent, and classification uses a
+  value type with only its two required fields.
+- The removed installer matches all 15 files on the unchanged `legacy` branch.
+  Retiring it removes 4,057 C# lines plus its build and release machinery.
+- Repository validation, eight remaining Python tests, Markdown lint,
+  actionlint `1.7.12`, package dry run, and whitespace checks passed. Sixteen
+  smoke checks exercised the release workflow's archive staging and payload
+  verification, including unsafe paths, duplicates, symlinks, changed contents
+  and modes, and missing/empty attestations. No real signing was performed.
+- All twelve audited DLLs and their metadata remain unchanged. The moved
+  helper preserves its original GUID; the production assembly has no test
+  assembly reference.
+
+A warmed local probe of GitHub membership for the installed manager used seven
+batches of 1,000 calls. Median allocation fell from 2,464 to 2,184 bytes per
+call (280 bytes, about 11%). Production Editor C# decreased from 87,978 to
+86,930 bytes. No Editor startup comparison was repeated. The installer was
+already excluded from package archives, so its removal mainly reduces source
+and maintenance overhead.
+
+Not retested: the other gated Unity versions (`6000.3.22f1`, `6000.5.*f1`,
+`6000.6.0f1`, `6000.6.2f1`, `6000.7.0b1`, `6000.7.0b2`, and Unity 7 alphas
+`a7`, `a8`, and `a9`), Windows or Linux Editor execution, and the six consumer
+projects. No supplemental `dotnet build`, player build, signed release,
+OpenUPM publication, or hosted CI run was performed. Local checks do not prove
+release behavior for another commit, artifact, Unity version, or platform.

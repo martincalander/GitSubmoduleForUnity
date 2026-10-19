@@ -178,5 +178,9 @@ checks pass. Report each untested Unity version and platform. Repository checks
 also verify metadata, local documentation links, Unity `.meta` files, dependency
 artifacts, and package contents.
 
+Assembly enumeration used by compatibility tests lives in the test assembly.
+It keeps the Mono/CoreCLR distinction without adding test-only helpers to the
+production Editor assembly.
+
 The retired bootstrap installer and its tooling remain on `legacy`; current CI
 and release checks cover the UPM package.
