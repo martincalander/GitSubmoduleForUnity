@@ -534,3 +534,53 @@ Not retested: the other gated Unity versions (`6000.3.22f1`, `6000.5.*f1`,
 projects. No supplemental `dotnet build`, player build, signed release,
 OpenUPM publication, or hosted CI run was performed. Local checks do not prove
 release behavior for another commit, artifact, Unity version, or platform.
+
+## Real Submodule Install and Removal on 2026-10-19
+
+Package commit `65d1bfd2121361a4feb677170f68bec4879f9dde` was exercised in
+OpenSourceWorkspace with the existing Unity `7000.0.0a10` Editor on macOS,
+CLI `1.0.0-beta.13`, and Pipeline `0.8.0-exp.1`. This supplements the earlier
+unit tests with real Git operations and live native Package Manager checks.
+
+The test used the public PlayerPrefs Editor repository, its `upm` branch, and
+commit `e7cc815ce6a2a213f889756cdcb8f9c166651cd4`, matching the project's
+existing Git dependency. Package Manager remained open throughout both cycles.
+
+1. Added `Packages/com.bgtools.playerprefseditor` with `git submodule add` and
+   pinned the recorded revision. Normal Unity package resolution and compilation
+   registered it as Embedded. The native package row showed **Submodule**,
+   **Sources > GitHub** contained it, and **Repository** was the first link with
+   the correct URL.
+2. Removed the checkout with `git rm`. With the original manifest dependency
+   present, Unity restored its Git installation. The Submodule badge cleared,
+   while GitHub membership and the Repository link remained correct.
+3. Reinstalled the submodule and temporarily removed its manifest dependency.
+   Removing the checkout then removed the package from Unity registration,
+   **In Project**, and **Sources > GitHub**. The removed selection cleared and
+   no stale Repository link remained.
+4. Restored the original manifest. Unity returned to the original Git package,
+   with its Repository link and no Submodule badge. Manifest, lockfile, and
+   `.gitmodules` matched their saved bytes; both preexisting submodule revisions
+   and branches were unchanged. Temporary checkout, Git configuration, and
+   module storage were removed, and Package Manager navigation was restored.
+
+The removal safety predicate blocked the embedded submodule and allowed its
+normal Git installation. The destructive native embedded-remove action was
+not executed. Observations did not invoke the manager's private refresh;
+normal Unity package resolution and reload drove the transitions. This verifies
+end-to-end behavior, not isolated timing of the two-second metadata poller.
+
+Each changed package state completed Unity compilation without C# errors.
+Seven Pipeline requests timed out while imports or domain reload occupied the
+main thread; subsequent observations succeeded after reload. The unchanged
+PlayerPrefs Editor emitted Unity 7 analyzer warnings (`UAL0010`, `UAL0013`,
+and `UAC0005`). No Git Submodule Manager integration errors were observed.
+The final Console retained two errors from Pipeline timeouts and one compiler
+warning; these were recorded rather than cleared. No production fix was needed.
+
+Repository validation, Markdown lint, and whitespace checks passed. The earlier
+307-test assembly result remains applicable to the unchanged manager source;
+the assembly was not rerun for this documentation-only record. Other supported
+Unity versions, Windows/Linux, the six consumer projects, player builds,
+release packaging, signing, publication, and hosted CI were not rerun. Nothing
+was pushed.
