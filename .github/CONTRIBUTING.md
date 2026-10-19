@@ -584,3 +584,71 @@ the assembly was not rerun for this documentation-only record. Other supported
 Unity versions, Windows/Linux, the six consumer projects, player builds,
 release packaging, signing, publication, and hosted CI were not rerun. Nothing
 was pushed.
+
+## Additional Edge Case Verification on 2026-10-19
+
+Commit `bc65333409d01b433afd7428c02a61050fccd43c` was verified in OpenSourceWorkspace with the
+existing Unity `7000.0.0a10` Editor on macOS, CLI `1.0.0-beta.13`, and Pipeline
+`0.8.0-exp.1`. The additional coverage is committed separately as `b1ff887`;
+the installed-identity fix and its regressions are in `bc65333`.
+
+A new regression reproduced stale GitHub membership when Unity's native package
+identity differed from the cached registration but its name and path still
+matched. Four missing/different-identity cases failed before the fix, for both
+embedded submodules and ordinary Git dependencies. Membership now requires the
+same package ID as the cached registration, matching the Repository link's
+existing boundary. Pending refresh still retains the coherent published snapshot.
+This adds no Git commands, network requests, or background work.
+
+Fresh Unity compilation passed. All 141 `PackageManagerPackageStatusTests`
+passed after the fix, followed by all 105 `PackageManagerCompatibility` tests,
+with no failures, skips, or inconclusive results. The 15 new cases include:
+
+- Symlinked and oversized `.gitmodules` files fail closed without changing the
+  target file or index; replacing oversized metadata restores classification.
+- Included Git configuration cannot supply submodule registrations.
+- Inherited `GIT_DIR`, `GIT_WORK_TREE`, `GIT_INDEX_FILE`, and `GIT_CONFIG_COUNT`
+  cannot redirect discovery; original environment values are restored.
+- A real SHA-256 index is accepted. Real stage 1/2/3 gitlink conflicts fail closed
+  and recover when resolved. Neither scan changes the index.
+- Native installed identity must match cached identity, including during a
+  pending refresh. Matching identities remain visible.
+
+The live metadata suite was repeated after the fix and passed 220 assertions,
+including cleanup and the final native identity checks. It used real edits to
+workspace `.gitmodules` and index entries, without private refresh calls,
+package resolution, code reload, or compilation during the metadata transitions.
+The same status-state object remained loaded throughout each run.
+
+- GitHub HTTPS, public SSH, GitLab, relative, unknown SSH, and file URLs updated
+  membership and links correctly. Dummy credentials and query/revision suffixes
+  were removed from the browser link.
+- Moving the selected package off GitHub cleared that selection. Missing
+  registrations/gitlinks, malformed metadata, duplicate paths, a missing
+  `.gitmodules`, and an index conflict removed unverified labels/links and
+  recovered automatically when restored. Checkout-removal protection remained
+  enabled; the destructive removal action was not executed.
+- Native package rows, search, and sorting remained intact. Source cards returned
+  to Unity's **Custom** label when unverified instead of retaining stale Git text.
+- Closing Package Manager stopped polling and scans. Reopening read metadata
+  changed while closed. Rapid edits converged on the final state. A dirty,
+  detached checkout retained its submodule status and unmodified local content.
+- Both embedded submodules and the normal PlayerPrefs Git dependency retained
+  GitHub membership with matching native and registered IDs. There was exactly
+  one GitHub source and no duplicate package rows.
+
+The original `.gitmodules`, manifest, lockfile, Blockbench branch/revision,
+checkout contents, and Package Manager navigation were restored. Temporary
+index conflicts and test files were removed. Final native Console counts were
+zero errors and warnings, with no compilation failure; older retained Pipeline
+buffer entries were not cleared. Repository validation, Markdown lint,
+whitespace checks, and the package dry run passed.
+
+Not rerun: the full Editor assembly or Play Mode cycles for this narrow identity
+check, the real install/removal cycles from the preceding record, the six
+consumer projects, other gated Unity versions (`6000.3.22f1`, `6000.5.*f1`,
+`6000.6.0f1`, `6000.6.2f1`, `6000.7.0b1`, `6000.7.0b2`, and Unity 7 `a7`, `a8`,
+`a9`), Windows/Linux, player builds, supplemental `dotnet build`, hosted CI,
+signing, release publication, or OpenUPM. The symlink fixture explicitly skips
+Windows; the SHA-256 fixture skips only if Git lacks that format. Neither was
+skipped on this machine. No branch or package was pushed.
