@@ -5,8 +5,6 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
     [Category("PackageSourceFeatures")]
     public sealed class PackageSourceDetailsTests
     {
-        private const string Commit = "0123456789abcdef0123456789abcdef01234567";
-
         [TestCase("https://github.com/example/package.git#main", "https://github.com/example/package")]
         [TestCase("git+https://github.com/example/package.git?path=/Packages/Child#main", "https://github.com/example/package")]
         [TestCase("git@github.com:example/package.git", "https://github.com/example/package")]
@@ -14,37 +12,36 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
         [TestCase("git://bitbucket.org/example/package.git", "https://bitbucket.org/example/package")]
         [TestCase("https://code.example.invalid:8443/team/package.git", "https://code.example.invalid:8443/team/package")]
         [TestCase("http://code.example.invalid/team/package.git", "http://code.example.invalid/team/package")]
+        [TestCase("GIT+HTTPS://GitHub.com/example/package.GIT/?path=/Child#release", "https://github.com/example/package")]
+        [TestCase("ssh://git@github.com/example/package.git?path=/Child#release", "https://github.com/example/package")]
         public void OpensOnlyRepositoryLocationWithoutUpmPathOrRevision(string url, string browser)
         {
-            var details = Read(url);
-            Assert.That(details.SourceUrl, Is.EqualTo(url));
-            Assert.That(details.RepositoryUrl, Is.EqualTo(browser));
+            Assert.That(PackageSourceDetails.GetRepositoryUrl(url), Is.EqualTo(browser));
         }
 
         [TestCase("git@code.example.invalid:example/package.git")]
         [TestCase("ssh://git@github.com:2222/example/package.git")]
+        [TestCase("git://github.com:1234/example/package.git")]
         [TestCase("../sibling.git")]
+        [TestCase("./sibling.git")]
         [TestCase("file:///tmp/example/package.git")]
-        public void NonWebLocationsAreDisplayedWithoutInventingABrowserLocation(string url)
+        [TestCase("file://github.com/example/package.git")]
+        public void NonWebLocationsDoNotInventABrowserLocation(string url)
         {
-            var details = Read(url);
-            Assert.That(details.SourceUrl, Is.EqualTo(url));
-            Assert.That(details.RepositoryUrl, Is.Empty);
+            Assert.That(PackageSourceDetails.GetRepositoryUrl(url), Is.Empty);
         }
 
-        [TestCase("https://user:secret@github.com/example/package.git#main", "https://github.com/example/package.git#main")]
-        [TestCase("https://secret@github.com/example/package.git", "https://github.com/example/package.git")]
-        [TestCase("ssh://user:secret@github.com/example/package.git", "ssh://github.com/example/package.git")]
-        [TestCase("secret@github.com:example/package.git", "ssh://github.com/example/package.git")]
-        [TestCase("https://github.com/example/package.git?token=secret#main", "https://github.com/example/package.git#main")]
-        [TestCase("https://github.com/example/package.git?path=/Packages/Child&token=secret#main", "https://github.com/example/package.git?path=/Packages/Child#main")]
-        [TestCase("git+https://user:secret@github.com/example/package.git?token=secret&path=/Packages/Child#main", "git+https://github.com/example/package.git?path=/Packages/Child#main")]
-        public void SourceDisplayOmitsCredentialsAndUnknownQueryParameters(string url, string clean)
+        [TestCase("https://user:secret@github.com/example/package.git#main")]
+        [TestCase("https://secret@github.com/example/package.git")]
+        [TestCase("ssh://user:secret@github.com/example/package.git")]
+        [TestCase("secret@github.com:example/package.git")]
+        [TestCase("https://github.com/example/package.git?token=secret#main")]
+        [TestCase("https://github.com/example/package.git?path=/Packages/Child&token=secret#main")]
+        [TestCase("git+https://user:secret@github.com/example/package.git?token=secret&path=/Packages/Child#main")]
+        [TestCase("https://github.com/example/package.git?path=%0A&token=secret#secret")]
+        public void RepositoryLinkOmitsCredentialsQueryAndFragment(string url)
         {
-            var details = Read(url);
-            Assert.That(details.SourceUrl, Is.EqualTo(clean));
-            Assert.That(details.SourceUrl, Does.Not.Contain("secret"));
-            Assert.That(details.RepositoryUrl, Does.Not.Contain("secret"));
+            Assert.That(PackageSourceDetails.GetRepositoryUrl(url), Is.EqualTo("https://github.com/example/package"));
         }
 
         [TestCase("javascript:alert(1)")]
@@ -53,80 +50,38 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
         [TestCase("https://github.com/example/package.git\nunsafe")]
         [TestCase("https://github.com/example/package.git\runsafe")]
         [TestCase("https://github.com/example/package.git\tunsafe")]
+        [TestCase("https://github.com/example/\0package.git")]
+        [TestCase("https://[invalid/example/package.git")]
+        [TestCase("https://")]
         [TestCase("")]
+        [TestCase(" ")]
         [TestCase(null)]
-        public void UnsupportedOrMalformedSourcesHaveNoActions(string url)
+        public void UnsupportedOrMalformedSourcesHaveNoLink(string url)
         {
-            var details = Read(url);
-            Assert.That(details.SourceUrl, Is.Empty);
-            Assert.That(details.RepositoryUrl, Is.Empty);
+            Assert.That(PackageSourceDetails.GetRepositoryUrl(url), Is.Empty);
         }
 
         [Test]
         public void SourceHostIsNeverReplacedWithAnUnrelatedTrustedHost()
         {
-            var details = Read("https://github.com@other.invalid/example/package.git");
-            Assert.That(details.SourceUrl, Is.EqualTo("https://other.invalid/example/package.git"));
-            Assert.That(details.RepositoryUrl, Is.EqualTo("https://other.invalid/example/package"));
+            Assert.That(PackageSourceDetails.GetRepositoryUrl("https://github.com@other.invalid/example/package.git"),
+                Is.EqualTo("https://other.invalid/example/package"));
         }
 
-        [TestCase("main")]
-        [TestCase("v1.2.3")]
-        [TestCase("feature/source-details")]
-        [TestCase(Commit)]
-        public void RequestedRefAndInstalledCommitAreSeparate(string revision)
+        [TestCase("ssh://git@github.com.other.invalid/example/package.git")]
+        [TestCase("git@othergithub.com:example/package.git")]
+        [TestCase("ssh://github.com@other.invalid/example/package.git")]
+        public void SshHostMappingRequiresAnExactRecognizedHost(string url)
         {
-            var details = PackageSourceDetails.Create("/project/Library/PackageCache/example",
-                "https://github.com/example/package.git#" + revision, revision, Commit, true);
-            Assert.That(details.RequestedRevision, Is.EqualTo(revision));
-            Assert.That(details.InstalledCommit, Is.EqualTo(Commit));
-            Assert.That(details.RevisionDescription, Is.EqualTo(revision + " → 0123456"));
+            Assert.That(PackageSourceDetails.GetRepositoryUrl(url), Is.Empty);
         }
 
         [Test]
-        public void MissingRevisionUsesDefaultBranchWithoutGuessingItsName()
+        public void OversizedSourceHasNoLink()
         {
-            var details = Read("https://github.com/example/package.git");
-            Assert.That(details.RequestedRevision, Is.EqualTo("default branch"));
-            Assert.That(details.RevisionDescription, Is.EqualTo("default branch → 0123456"));
+            const string prefix = "https://github.com/";
+            string url = prefix + new string('a', 4097 - prefix.Length);
+            Assert.That(PackageSourceDetails.GetRepositoryUrl(url), Is.Empty);
         }
-
-        [Test]
-        public void MissingGitRevisionMetadataFallsBackToRequestedPackageIdFragment()
-        {
-            Assert.That(Read("https://github.com/example/package.git#release").RequestedRevision, Is.EqualTo("release"));
-        }
-
-        [TestCase(null)]
-        [TestCase("")]
-        [TestCase("not-a-hash")]
-        [TestCase("0123456")]
-        public void MissingOrMalformedHashDoesNotBecomeAnInstalledCommit(string hash)
-        {
-            var details = PackageSourceDetails.Create("/project/package", "https://github.com/example/package.git#main", "main", hash, true);
-            Assert.That(details.InstalledCommit, Is.Empty);
-            Assert.That(details.RevisionDescription, Is.EqualTo("main → installed commit unavailable"));
-        }
-
-        [Test]
-        public void Sha256CommitKeepsItsFullValueForCopying()
-        {
-            string hash = new string('a', 64);
-            var details = PackageSourceDetails.Create("/project/package", "https://github.com/example/package.git", null, hash, true);
-            Assert.That(details.InstalledCommit, Is.EqualTo(hash));
-            Assert.That(details.RevisionDescription, Is.EqualTo("default branch → aaaaaaa"));
-        }
-
-        [Test]
-        public void NonGitPackageNeverReceivesRevisionOrCommitLabels()
-        {
-            var details = PackageSourceDetails.Create("/project/package", "https://github.com/example/package.git", "main", Commit, false);
-            Assert.That(details.RequestedRevision, Is.Empty);
-            Assert.That(details.InstalledCommit, Is.Empty);
-            Assert.That(details.RevisionDescription, Is.Empty);
-        }
-
-        private static PackageSourceDetails Read(string url) => PackageSourceDetails.Create(
-            "/project/Library/PackageCache/example", url, null, Commit, true);
     }
 }

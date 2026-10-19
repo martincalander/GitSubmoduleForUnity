@@ -39,6 +39,9 @@ been published as a new release; existing `0.8.1` artifacts remain unchanged.
 
 ### Changed
 
+- Remove the unused package-description and Git revision data paths left by
+  the details panel cleanup. Repository links now resolve only their browser URL.
+
 - Attach through Package Manager UI lifecycle events instead of continuously
   scanning Editor windows. Cache validated native contracts and stop attachment
   retries after success or a bounded construction timeout.

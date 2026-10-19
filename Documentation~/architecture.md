@@ -50,7 +50,8 @@ reads, remote requests, or polling.
 Repository links allow HTTP and HTTPS URLs and map recognized public SSH hosts
 to HTTPS. They omit credentials, unrelated query parameters, package paths, and
 revision suffixes. Relative URLs, file URLs, and unknown SSH hosts have no
-guessed browser address.
+guessed browser address. Resolution builds only the browser URL; the removed
+details panel has no retained revision, commit, or description model.
 
 ## Package Manager Integration
 
