@@ -8,7 +8,9 @@ the [Publish Release workflow](workflows/release.yml).
 preserves the former management workflow. Promoting the branch does not publish
 a release. Existing `v0.8.1` tags, OpenUPM packages, and installer artifacts stay
 unchanged. Choose a new version for the first simplified release and verify
-its exact payload and bootstrap before tagging.
+its exact package payload before tagging. The bootstrap installer and its build
+tools are preserved on [`legacy`](https://github.com/martincalander/GitSubmoduleForUnity/tree/legacy/Installer~).
+Current releases publish the UPM archive and its checksum manifest.
 
 ## Release Authority
 
@@ -67,24 +69,19 @@ The version in [`package.json`](../package.json) and the tag without its leading
    npm pack --ignore-scripts --dry-run
    ```
 
-6. Build the deterministic bootstrap, import that exact file into a clean
-   supported Unity project, and exercise its recovery path. After the test,
-   replace `Installer~/SHA256SUMS` with the exact SHA-256 and filename printed by
-   the builder. Repository validation and the release workflow require the
-   published bootstrap to match those locally tested bytes.
-7. In a clean Unity project, install the package from the exact release commit,
+6. In a clean Unity project, install the package from the exact release commit,
    run `MartinCalander.GitSubmoduleManager.Editor.Tests` in EditMode, then verify
    submodule classification, the installed GitHub source, ordinary package
    actions, and protection against raw embedded deletion of submodules.
-8. Record any platform or Unity version that could not be tested in the release
+7. Record any platform or Unity version that could not be tested in the release
    pull request.
-9. Merge the release pull request only after required checks pass and the
+8. Merge the release pull request only after required checks pass and the
    applicable review policy is satisfied.
 
 Hosted workflows do not launch the Unity Editor or run EditMode tests. Complete
 and report the applicable Unity checks locally before tagging a release.
 
-## OpenUPM Bootstrap
+## OpenUPM Registration
 
 The workflow always creates a signed GitHub Release. Its OpenUPM job remains
 disabled until the repository Actions variable `OPENUPM_ENABLED` is exactly
@@ -137,11 +134,8 @@ Pushing the tag starts the Publish Release workflow. The workflow:
 6. signs that validated payload with the pinned Unity UPM CLI;
 7. requires the signing attestation and verifies every other packaged file is
    unchanged;
-8. independently builds and byte-verifies the license-free Unity bootstrap,
-   including its committed locally tested SHA-256;
-9. creates the GitHub release with the signed archive, bootstrap installer, and
-   combined checksum manifest;
-10. when enabled, asks OpenUPM to publish the signed `.tgz` and verifies it
+8. creates the GitHub release with the signed archive and checksum manifest;
+9. when enabled, asks OpenUPM to publish the signed `.tgz` and verifies it
    recognizes the signature.
 
 Pre-release SemVer tags are published as GitHub pre-releases.
@@ -155,8 +149,6 @@ immutable release.
 - Confirm the workflow completed successfully.
 - Confirm the GitHub release points to the intended commit.
 - Download the `.tgz` and compare it with `SHA256SUMS`.
-- Download the `.unitypackage`, compare it with `SHA256SUMS`, and import it in
-  a clean supported Unity project.
 - Confirm the archive contains the nonempty signing attestation
   `package/.attestation.p7m`.
 - Inspect the archive and confirm development-only `.github` files are absent.

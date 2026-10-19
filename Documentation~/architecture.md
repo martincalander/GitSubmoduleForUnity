@@ -172,3 +172,6 @@ full `MartinCalander.GitSubmoduleManager.Editor.Tests` assembly after focused
 checks pass. Report each untested Unity version and platform. Repository checks
 also verify metadata, local documentation links, Unity `.meta` files, dependency
 artifacts, and package contents.
+
+The retired bootstrap installer and its tooling remain on `legacy`; current CI
+and release checks cover the UPM package.

@@ -211,7 +211,6 @@ jobs:
                       or path.as_posix() != raw
                       or not path.parts
                       or path.parts[0] != "package"
-                      or "Installer~" in path.parts
                   ):
                       raise SystemExit(f"Unsafe package archive path: {member.name!r}")
                   if raw in seen:
@@ -449,84 +448,11 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
-  installer:
-    name: Build verified bootstrap installer
-    needs: validate
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    permissions:
-      contents: read
-    outputs:
-      archive: ${{ steps.build.outputs.archive }}
-      sha256: ${{ steps.build.outputs.sha256 }}
-
-    steps:
-      - name: Check out exact release tag
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ needs.validate.outputs.tag }}
-          fetch-depth: 0
-          persist-credentials: false
-
-      - name: Verify installer source commit
-        env:
-          EXPECTED_COMMIT: ${{ needs.validate.outputs.commit }}
-          EXPECTED_TAG_OBJECT: ${{ needs.validate.outputs.tag_object }}
-          RELEASE_TAG: ${{ needs.validate.outputs.tag }}
-        run: |
-          set -euo pipefail
-          tag_ref="refs/tags/$RELEASE_TAG"
-          test "$(git cat-file -t "$tag_ref")" = tag
-          test "$(git rev-parse --verify "$tag_ref")" = "$EXPECTED_TAG_OBJECT"
-          test "$(git rev-parse --verify "${tag_ref}^{commit}")" = "$EXPECTED_COMMIT"
-          test "$(git rev-parse --verify HEAD)" = "$EXPECTED_COMMIT"
-          python3 .github/scripts/validate_repository.py
-
-      - name: Test deterministic installer builder
-        run: >-
-          python3 -m unittest discover
-          -s .github/scripts/tests -p 'test_*.py' -v
-
-      - name: Build and verify installer
-        id: build
-        env:
-          PACKAGE_VERSION: ${{ needs.validate.outputs.package_version }}
-        run: |
-          set -euo pipefail
-          mkdir -p dist
-          archive="GitSubmoduleManagerInstaller-$PACKAGE_VERSION.unitypackage"
-          python3 .github/scripts/build_installer.py \
-            --version "$PACKAGE_VERSION" \
-            --output "dist/$archive"
-          python3 .github/scripts/verify_installer.py \
-            "dist/$archive" \
-            --version "$PACKAGE_VERSION"
-          sha256="$(sha256sum "dist/$archive" | awk '{ print $1 }')"
-          if [[ ! "$sha256" =~ ^[0-9a-f]{64}$ ]]; then
-            echo "Installer builder returned an invalid SHA-256." >&2
-            exit 1
-          fi
-          printf '%s  ./%s\n' "$sha256" "$archive" > dist/SHA256SUMS
-          (cd dist && sha256sum --check --strict SHA256SUMS)
-          echo "archive=$archive" >> "$GITHUB_OUTPUT"
-          echo "sha256=$sha256" >> "$GITHUB_OUTPUT"
-
-      - name: Upload verified installer
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: verified-installer-${{ needs.validate.outputs.commit }}
-          path: |
-            dist/${{ steps.build.outputs.archive }}
-            dist/SHA256SUMS
-          if-no-files-found: error
-          retention-days: 14
-
   release:
     name: Publish release artifacts
     needs:
       - validate
       - sign
-      - installer
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -586,31 +512,20 @@ jobs:
           name: signed-release-${{ needs.validate.outputs.commit }}
           path: artifacts/signed
 
-      - name: Download verified installer
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          name: verified-installer-${{ needs.validate.outputs.commit }}
-          path: artifacts/installer
-
       - name: Verify and stage release artifacts
         env:
           SIGNED_ARCHIVE: ${{ needs.sign.outputs.archive }}
           SIGNED_SHA256: ${{ needs.sign.outputs.sha256 }}
-          INSTALLER_ARCHIVE: ${{ needs.installer.outputs.archive }}
-          INSTALLER_SHA256: ${{ needs.installer.outputs.sha256 }}
         run: |
           set -euo pipefail
 
-          if [[ ! "$SIGNED_SHA256" =~ ^[0-9a-f]{64}$ ||
-                ! "$INSTALLER_SHA256" =~ ^[0-9a-f]{64}$ ]]; then
-            echo "An artifact job returned an invalid SHA-256." >&2
+          if [[ ! "$SIGNED_SHA256" =~ ^[0-9a-f]{64}$ ]]; then
+            echo "The signing job returned an invalid SHA-256." >&2
             exit 1
           fi
 
           signed_path="artifacts/signed/$SIGNED_ARCHIVE"
-          installer_path="artifacts/installer/$INSTALLER_ARCHIVE"
           test -f "$signed_path"
-          test -f "$installer_path"
 
           mapfile -t signed_checksum_lines < artifacts/signed/SHA256SUMS
           if (( ${#signed_checksum_lines[@]} != 1 )) ||
@@ -618,26 +533,15 @@ jobs:
             echo "Signed artifact checksum manifest is not exact." >&2
             exit 1
           fi
-          mapfile -t installer_checksum_lines < artifacts/installer/SHA256SUMS
-          if (( ${#installer_checksum_lines[@]} != 1 )) ||
-             [[ "${installer_checksum_lines[0]:-}" != "$INSTALLER_SHA256  ./$INSTALLER_ARCHIVE" ]]; then
-            echo "Installer artifact checksum manifest is not exact." >&2
-            exit 1
-          fi
           (cd artifacts/signed && sha256sum --check --strict SHA256SUMS)
-          (cd artifacts/installer && sha256sum --check --strict SHA256SUMS)
-          if [[ "$(sha256sum "$signed_path" | awk '{ print $1 }')" != "$SIGNED_SHA256" ||
-                "$(sha256sum "$installer_path" | awk '{ print $1 }')" != "$INSTALLER_SHA256" ]]; then
-            echo "A release artifact digest changed after its producing job." >&2
+          if [[ "$(sha256sum "$signed_path" | awk '{ print $1 }')" != "$SIGNED_SHA256" ]]; then
+            echo "The release archive digest changed after signing." >&2
             exit 1
           fi
 
           mkdir -p dist
           install -m 0644 "$signed_path" "dist/$SIGNED_ARCHIVE"
-          install -m 0644 "$installer_path" "dist/$INSTALLER_ARCHIVE"
-          (cd dist && \
-            sha256sum -- "./$SIGNED_ARCHIVE" "./$INSTALLER_ARCHIVE" | \
-            sort -k2 > SHA256SUMS)
+          (cd dist && sha256sum -- "./$SIGNED_ARCHIVE" > SHA256SUMS)
           (cd dist && sha256sum --check --strict SHA256SUMS)
 
       - name: Create GitHub release
@@ -645,7 +549,6 @@ jobs:
           EXPECTED_TAG_OBJECT: ${{ needs.validate.outputs.tag_object }}
           GH_TOKEN: ${{ github.token }}
           RELEASE_ARCHIVE: ${{ needs.sign.outputs.archive }}
-          INSTALLER_ARCHIVE: ${{ needs.installer.outputs.archive }}
           RELEASE_TAG: ${{ needs.validate.outputs.tag }}
           IS_PRERELEASE: ${{ needs.validate.outputs.prerelease }}
         run: |
@@ -663,7 +566,6 @@ jobs:
           args=(
             "$RELEASE_TAG"
             "dist/$RELEASE_ARCHIVE"
-            "dist/$INSTALLER_ARCHIVE"
             dist/SHA256SUMS
             --verify-tag
             --generate-notes

@@ -27,11 +27,12 @@ been published as a new release; existing `0.8.1` artifacts remain unchanged.
 
 - Added exact Unity `7000.0.0a7` and `7000.0.0a8` alpha compatibility. Other Unity 7
   builds remain rejected by the runtime gate. Unity 7 requires a Git dependency
-  or local checkout containing these changes; the bundled bootstrap retains its
+  or local checkout containing these changes; the legacy bootstrap retains its
   validated Unity 6 targets.
 
 - Added exact Unity `6000.7.0b1` and `6000.7.0b2` beta compatibility. Other 6.7
-  builds remain rejected by the independent runtime and installer gates.
+  builds remain rejected by the runtime gate. The legacy installer retains its
+  separate version gate.
 
 - Added exact Unity `6000.6.0f1` and `6000.6.2f1` as supported Editor targets
   alongside Unity `6000.3.22f1` and `6000.5.*f1` final releases. Other `6000.6`
@@ -67,6 +68,10 @@ been published as a new release; existing `0.8.1` artifacts remain unchanged.
   Editor-only with explicit assembly references.
 
 ### Removed
+
+- Legacy bootstrap installer source and its build, verification, and release
+  steps from `main`. The installer remains on `legacy`; signed UPM archives,
+  checksum verification, and optional OpenUPM publication remain supported.
 
 - Custom package details text and the **Open repository**, **Reveal package
   folder**, and **Copy installed commit** buttons. Source URL, location,

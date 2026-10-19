@@ -87,10 +87,6 @@ node_modules/
 !Documentation~/
 !Documentation~/**
 
-# The release bootstrap source is hidden from Unity while remaining tracked.
-!Installer~/
-!Installer~/**
-
 # Python validation cache
 __pycache__/
 *.pyc

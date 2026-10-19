@@ -151,10 +151,12 @@ are in the [legacy installation guide](https://github.com/martincalander/GitSubm
 | `v0.8.1` Git tag, OpenUPM `0.8.1`, or signed release `.tgz` | Published earlier workflow |
 | `GitSubmoduleManagerInstaller-0.8.1.unitypackage` | Bootstrap for the earlier OpenUPM release |
 
-The bundled bootstrap rejects Unity 7. Use current `main` source for the
-simplified Unity 7 integration. Signed release tarballs contain a release-only
-attestation; Git and local-folder installs use source without that attestation.
-No new release artifact is produced by promoting `main`.
+The old bootstrap rejects Unity 7 and is preserved with its build tools on
+[`legacy`](https://github.com/martincalander/GitSubmoduleForUnity/tree/legacy/Installer~).
+It is no longer included or built on `main`. Use the standard Git installation
+above for the simplified Unity 7 integration. Signed release tarballs contain
+a release-only attestation; Git and local-folder installs use source without
+that attestation. No new release artifact is produced by promoting `main`.
 
 ### Moving from Legacy
 

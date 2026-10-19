@@ -47,9 +47,12 @@ Local checkouts and submodule installations are covered in the
 [installation guide](Documentation~/installation.md).
 
 The simplified version on `main` has not been published as a new release yet.
-Existing `0.8.1` downloads, OpenUPM packages, and the bundled bootstrap contain
+Existing `0.8.1` downloads, OpenUPM packages, and the legacy bootstrap contain
 the earlier workflow. Use the Git URL above or a current local checkout for the
 simplified version, including Unity 7.
+
+The old bootstrap installer is preserved on `legacy`. Current `main` uses
+standard UPM installation and no longer builds a separate installer.
 
 ## Use It
 
