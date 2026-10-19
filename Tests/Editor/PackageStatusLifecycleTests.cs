@@ -24,7 +24,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
             Type statusType = typeof(PackageManagerPackageStatus);
             var saved = new Dictionary<FieldInfo, object>();
             foreach (string name in new[] { "observers", "generation", "workerGeneration", "worker", "workerPackages",
-                         "cancellation", "refreshPending", "listening", "shuttingDown" })
+                         "cancellation", "refreshPending", "listening", "shuttingDown", "workerPackagesRevision" })
             {
                 FieldInfo field = statusType.GetField(name, flags);
                 Assert.That(field, Is.Not.Null, name);
@@ -34,6 +34,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
             FieldInfo readiness = typeof(PackageManagerPackageStatus.StatusState)
                 .GetField("<IsReady>k__BackingField", BindingFlags.Instance | BindingFlags.NonPublic);
             bool wasReady = state.IsReady;
+            int packagesRevision = state.PackagesRevision;
             var published = state.Snapshot;
             var pending = new TaskCompletionSource<PackageManagerPackageStatus.StatusSnapshot>();
             using var cancellation = new CancellationTokenSource();
@@ -92,6 +93,9 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                 foreach (KeyValuePair<FieldInfo, object> entry in saved)
                     entry.Key.SetValue(null, entry.Value);
                 readiness.SetValue(state, wasReady);
+                typeof(PackageManagerPackageStatus.StatusState)
+                    .GetField("<PackagesRevision>k__BackingField", BindingFlags.Instance | BindingFlags.NonPublic)
+                    .SetValue(state, packagesRevision);
                 typeof(PackageManagerPackageStatus.StatusState)
                     .GetField("<Snapshot>k__BackingField", BindingFlags.Instance | BindingFlags.NonPublic).SetValue(state, published);
                 EditorApplication.update -= update;

@@ -102,8 +102,11 @@ The compatibility gate and deletion guards remain independent.
 Only observed Package Manager sessions check `.gitmodules` and the Git index,
 at two-second intervals. Package registration events and explicit refresh also
 request a scan; ordinary project asset changes do not. Status and installed
-identity are published together. A changed metadata stamp during a read causes
-a retry before publication. Readiness notifications update the Repository link while
+identity are published together. Git-only refreshes reuse the accepted installed
+package dictionary. Package registration, reopening, and explicit refresh
+invalidate its revision; retries cannot erase that invalidation. Failed or
+superseded captures are never used as a new accepted snapshot. A changed metadata
+stamp during a read causes a retry before publication. Readiness notifications update the Repository link while
 content notifications rebuild views only when the result actually differs.
 Pending or failed reads continue to block unverified embedded-folder deletion.
 The deletion boundary rechecks the published metadata stamp before trusting a

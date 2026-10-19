@@ -40,6 +40,9 @@ been published as a new release; existing `0.8.1` artifacts remain unchanged.
 
 ### Changed
 
+- Reuse Unity's accepted installed-package snapshot for Git-only changes. Package
+  registration, reopening, and explicit refresh still capture current packages.
+
 - Reuse unchanged Git index and submodule registration results after bounded
   content and repository-identity checks. Keep full reads for uncertain metadata.
 

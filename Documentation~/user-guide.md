@@ -89,8 +89,10 @@ Closing Package Manager stops status observation and attachment work. It
 cancels an active local read and releases its update callback after that read
 drains. While open, it checks local Git metadata every two seconds and responds
 to package registration changes.
-Ordinary asset edits do not launch Git status reads. An unchanged result keeps
-the existing package view instead of rebuilding it.
+Ordinary asset edits do not launch Git status reads. Git-only changes reuse
+Unity's installed-package snapshot; registration changes, reopening, and explicit
+refresh capture it again. Unchanged Git metadata can reuse validated local
+results. An unchanged status keeps the existing package view.
 
 The Repository link reuses that installed-state snapshot. It adds no startup
 scans, remote requests, Git commands, or polling. The extension performs no

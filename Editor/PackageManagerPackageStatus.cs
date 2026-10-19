@@ -46,6 +46,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         private static CancellationTokenSource cancellation;
         private static int generation;
         private static int workerGeneration;
+        private static int workerPackagesRevision;
         private static int observers;
         private static bool listening;
         private static bool refreshPending;
@@ -58,6 +59,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             internal Dictionary<string, InstalledPackage> Packages = new Dictionary<string, InstalledPackage>(StringComparer.Ordinal);
             internal readonly Dictionary<string, string> Repositories = new Dictionary<string, string>(StringComparer.Ordinal);
             internal readonly HashSet<string> Gitlinks = new HashSet<string>(StringComparer.Ordinal);
+            internal int PackagesRevision = -1;
             internal string IndexPath;
             internal string GitDirectory;
             internal string IndexFingerprint;
@@ -102,11 +104,22 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         {
             internal StatusSnapshot Snapshot { get; private set; } = new StatusSnapshot();
             internal bool IsReady { get; private set; }
+            internal int PackagesRevision { get; private set; }
             internal event Action Changed;
             internal event Action ReadinessChanged;
 
-            internal void BeginRefresh()
+            internal Dictionary<string, InstalledPackage> ReadRegisteredPackages(
+                Func<Dictionary<string, InstalledPackage>> read, out int revision)
             {
+                revision = PackagesRevision;
+                return Snapshot.PackagesRevision == revision && string.IsNullOrEmpty(Snapshot.Error)
+                    ? Snapshot.Packages : read();
+            }
+
+            internal void BeginRefresh(bool packagesChanged = false)
+            {
+                if (packagesChanged)
+                    PackagesRevision++;
                 bool wasReady = IsReady;
                 IsReady = false;
                 if (wasReady)
@@ -203,7 +216,11 @@ namespace MartinCalander.GitSubmoduleManager.Editor
 
         private static void OnRegisteredPackages(PackageRegistrationEventArgs args) => Refresh();
 
-        internal static void Refresh()
+        internal static void Refresh() => QueueRefresh(true);
+
+        private static void RefreshGitMetadata() => QueueRefresh(false);
+
+        private static void QueueRefresh(bool packagesChanged)
         {
             if (shuttingDown)
                 return;
@@ -214,7 +231,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 listening = true;
                 EditorApplication.update += Update;
             }
-            State.BeginRefresh();
+            State.BeginRefresh(packagesChanged);
         }
 
         private static void Update()
@@ -230,7 +247,8 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 if (workerGeneration == generation)
                 {
                     result.Packages = workerPackages;
-                    if (State.TryCompleteRefresh(ProjectRoot, result, observers, Refresh))
+                    result.PackagesRevision = workerPackagesRevision;
+                    if (State.TryCompleteRefresh(ProjectRoot, result, observers, RefreshGitMetadata))
                         observedFiles = result.FilesStamp ?? FileStamp();
                 }
                 workerPackages = null;
@@ -241,11 +259,8 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 refreshPending = false;
                 try
                 {
-                    workerPackages = new Dictionary<string, InstalledPackage>(StringComparer.Ordinal);
-                    foreach (PackageInfo package in PackageInfo.GetAllRegisteredPackages())
-                        if (package != null && !string.IsNullOrEmpty(package.name))
-                            workerPackages[package.name] = new InstalledPackage(package.resolvedPath, package.source, package.packageId);
                     workerGeneration = generation;
+                    workerPackages = State.ReadRegisteredPackages(ReadRegisteredPackages, out workerPackagesRevision);
                     cancellation = new CancellationTokenSource();
                     CancellationToken token = cancellation.Token;
                     StatusSnapshot previous = snapshot;
@@ -263,10 +278,19 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 nextFileCheck = EditorApplication.timeSinceStartup + 2;
                 string files = FileStamp();
                 if (observedFiles != null && files != observedFiles)
-                    Refresh();
+                    RefreshGitMetadata();
                 observedFiles = files;
             }
             StopListeningIfIdle();
+        }
+
+        private static Dictionary<string, InstalledPackage> ReadRegisteredPackages()
+        {
+            var packages = new Dictionary<string, InstalledPackage>(StringComparer.Ordinal);
+            foreach (PackageInfo package in PackageInfo.GetAllRegisteredPackages())
+                if (package != null && !string.IsNullOrEmpty(package.name))
+                    packages[package.name] = new InstalledPackage(package.resolvedPath, package.source, package.packageId);
+            return packages;
         }
 
         private static void StopListeningIfIdle()
@@ -335,7 +359,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         {
             bool blocked = ShouldBlockEmbeddedRemoval(ProjectRoot, name, resolvedPath, IsReady, snapshot, out bool refreshRequired);
             if (refreshRequired)
-                Refresh();
+                RefreshGitMetadata();
             return blocked;
         }
 

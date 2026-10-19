@@ -702,6 +702,84 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
         }
 
         [Test]
+        public void GitOnlyRefreshReusesAcceptedRegisteredPackages()
+        {
+            var state = new PackageManagerPackageStatus.StatusState();
+            var initial = InstalledSnapshot();
+            int reads = 0;
+            Dictionary<string, PackageManagerPackageStatus.InstalledPackage> Read()
+            {
+                reads++;
+                return initial.Packages;
+            }
+            state.BeginRefresh(true);
+            initial.Packages = state.ReadRegisteredPackages(Read, out int revision);
+            initial.PackagesRevision = revision;
+            state.CompleteRefresh(initial);
+            state.BeginRefresh();
+            Assert.That(state.ReadRegisteredPackages(Read, out int reusedRevision), Is.SameAs(initial.Packages));
+            Assert.That(reusedRevision, Is.EqualTo(revision));
+            Assert.That(reads, Is.EqualTo(1));
+
+            state.BeginRefresh(true);
+            state.BeginRefresh();
+            state.ReadRegisteredPackages(Read, out int changedRevision);
+            Assert.That(changedRevision, Is.GreaterThan(revision));
+            Assert.That(reads, Is.EqualTo(2), "A metadata refresh must not erase a pending package invalidation.");
+        }
+
+        [TestCase(false)]
+        [TestCase(true)]
+        public void UnacceptedOrFailedPackageCaptureCannotBeReused(bool failed)
+        {
+            var state = new PackageManagerPackageStatus.StatusState();
+            int reads = 0;
+            Dictionary<string, PackageManagerPackageStatus.InstalledPackage> Read()
+            {
+                reads++;
+                return InstalledSnapshot().Packages;
+            }
+            state.BeginRefresh(true);
+            var packages = state.ReadRegisteredPackages(Read, out int revision);
+            if (failed)
+                state.CompleteRefresh(new PackageManagerPackageStatus.StatusSnapshot
+                    { Packages = packages, PackagesRevision = revision, Error = "Unreadable metadata" });
+            state.BeginRefresh();
+            state.ReadRegisteredPackages(Read, out _);
+            Assert.That(reads, Is.EqualTo(2));
+        }
+
+        [Test]
+        public void ReentrantPackageInvalidationIsNotLostWhenSnapshotPublishes()
+        {
+            var state = new PackageManagerPackageStatus.StatusState();
+            state.BeginRefresh(true);
+            var initial = InstalledSnapshot();
+            initial.Packages = state.ReadRegisteredPackages(() => initial.Packages, out int revision);
+            initial.PackagesRevision = revision;
+            state.Changed += () => state.BeginRefresh(true);
+            state.CompleteRefresh(initial);
+            int reads = 0;
+            state.ReadRegisteredPackages(() => { reads++; return initial.Packages; }, out int current);
+            Assert.That(current, Is.GreaterThan(revision));
+            Assert.That(reads, Is.EqualTo(1));
+            Assert.That(state.IsReady, Is.False);
+        }
+
+        [Test]
+        public void RegisteredPackageCaptureFailureRemainsInvalidated()
+        {
+            var state = new PackageManagerPackageStatus.StatusState();
+            state.BeginRefresh(true);
+            Assert.Throws<InvalidOperationException>(() => state.ReadRegisteredPackages(
+                () => throw new InvalidOperationException("Unavailable"), out _));
+            state.BeginRefresh();
+            int reads = 0;
+            state.ReadRegisteredPackages(() => { reads++; return InstalledSnapshot().Packages; }, out _);
+            Assert.That(reads, Is.EqualTo(1));
+        }
+
+        [Test]
         public void UnchangedRefreshNotifiesReadinessWithoutRebuildingPackageViews()
         {
             var state = new PackageManagerPackageStatus.StatusState();
