@@ -699,3 +699,97 @@ Unity `6000.3.22f1`, `6000.5.*f1`, `6000.6.0f1`, `6000.6.2f1`, `6000.7.0b1`,
 builds, package dry run, supplemental `dotnet build`, hosted CI, signing, release
 publication, or OpenUPM. This commit only records QA of unchanged product code.
 Nothing was pushed.
+
+## Final Cleanup Verification on 2026-10-19
+
+The five cleanup changes were committed separately as `fb47284`, `3baaf87`,
+`3fb326d`, `27f3544`, and `89dc8e6` before the real installation QA. The combined
+product source at `89dc8e6` was checked in OpenSourceWorkspace using the existing Unity
+`7000.0.0a10` Editor on macOS ARM64, CLI `1.0.0-beta.13`, and Pipeline
+`0.8.0-exp.1`. The final test run also includes the test-only warm-up correction
+at `b8122cc`. Later changes in this verification record are documentation only.
+
+- Fresh Unity compilation completed without compiler errors.
+- All 355 `PackageSourceFeatures` tests and all 107
+  `PackageManagerCompatibility` tests passed.
+- All 363 tests in the final Editor assembly passed, with no failures, skipped,
+  or inconclusive tests. This includes two Play Mode cycles with domain reload
+  disabled and original Editor settings restored.
+- 106 live installation and cleanup assertions passed. A real checkout of
+  `com.bgtools.playerprefseditor` was added with Git at the existing UPM lockfile
+  revision `e7cc815ce6a2a213f889756cdcb8f9c166651cd4`. The native Submodule badge,
+  GitHub membership, installed identity, Repository link, and deletion guard
+  reflected the installed checkout. Removal correctly fell back to the existing
+  UPM Git dependency and cleared the badge. A second installation followed by
+  removal without a manifest fallback cleared the package from both native
+  views, including the old selection and Repository link. Ordinary In Project
+  state was inspected before switching to the previously inactive GitHub page.
+- 156 additional live metadata assertions passed without private refresh calls,
+  asset imports, or code reload. They covered GitHub/GitLab/SSH/relative/unsafe
+  URLs, missing registrations and gitlinks, missing/malformed/duplicate
+  `.gitmodules`, index conflicts, dirty and detached checkouts, native search
+  and sort preservation, rapid updates, and Package Manager close/reopen.
+- Regression tests cover content changes with unchanged timestamps and lengths,
+  copied cache collections, changed repository identity, cached symlink
+  rejection, split indexes, oversized files, cancellation, stale publication,
+  registration revision invalidation, and recycled native presentation.
+- The live cache probe confirmed that a Git-only refresh reused the accepted
+  installed-package dictionary, while explicit refresh captured it again.
+  Selection, rows, links, observers, and callbacks stayed unchanged.
+- Temporary submodule storage was ownership-checked and removed. Original
+  `.gitmodules`, manifest, lockfile, Git configuration, sibling branches and
+  revisions, and native navigation were restored. No fixture installation or
+  test-only repository change was committed.
+
+The first full run passed 362 of 363 tests. Its allocation-budget test included
+CoreCLR's one-time reflection invoker generation: the runtime creates that
+invoker on the second call, after the test's original single warm-up. The test
+now warms the same attachment path eight more times while retaining the original
+100-call measurement, 16,384-byte budget, and row identity checks. The focused
+test passed immediately after a fresh code reload, followed by the complete
+363-test rerun. Product code did not change for this correction.
+
+Several Pipeline command responses timed out during package import and domain
+reload. Fresh retries confirmed successful compilation for every stage, and
+subsequent native UI probes passed. The errors came from Pipeline request
+timeouts, not compiler or package integration failures. The existing
+PlayerPrefs Editor UAC0005 warning was not changed. The final Editor Console
+reported zero errors and warnings; Pipeline retained its earlier request-timeout
+history. Console history was preserved.
+
+Repository validation, all eight Python repository tests, Markdown lint,
+package dry run, whitespace checks, and the audited dependency checks passed.
+All twelve bundled DLLs, their import settings, and package dependencies are
+unchanged. Four unused documentation asset files were removed. Those files and
+stale notice text account for 8,703 fewer unpacked bytes; the complete batch also
+adds cache code, regression tests, and documentation, so total archive size is
+close to its previous size.
+
+Warmed measurements used the same seven-batch probe as the baseline at
+`cd4e5dd`. Timings exclude CLI transport and dynamic compilation; allocations use
+`GC.GetAllocatedBytesForCurrentThread`.
+
+| Operation | Before, microseconds | After, microseconds | Before, bytes | After, bytes |
+| --- | ---: | ---: | ---: | ---: |
+| Submodule GitHub membership | 5.14 | 1.15 | 2,184 | 1,008 |
+| Submodule Repository URL | 6.11 | 1.72 | 3,360 | 1,552 |
+| UPM Git membership | 3.21 | 0.33 | 1,576 | 128 |
+| UPM Git Repository URL | 3.59 | 0.30 | 2,136 | 128 |
+| All 42 native installed package memberships | 130.75 | 16.23 | 33,504 | 6,856 |
+
+Three unchanged background refreshes completed in 0.77, 1.11, and 0.59 seconds,
+compared with the earlier 3.12, 2.64, and 2.82 seconds. The first of the new
+measurements was Git-only; the other two explicitly recaptured installed
+packages. Deterministic command-count tests confirm three Git commands for a
+cold scan with `.gitmodules`, one for unchanged validated metadata, and two
+when either metadata file changes. These are local Package Manager operation
+costs, not measurements of whole Editor startup or a frame stall. Cold startup
+and first-scan speedups were not established.
+
+Not retested: Unity `6000.3.22f1`, `6000.5.*f1`, `6000.6.0f1`,
+`6000.6.2f1`, `6000.7.0b1`, `6000.7.0b2`, `7000.0.0a7`,
+`7000.0.0a8`, and `7000.0.0a9`; Windows and Linux Editor execution; and the six
+consumer projects. No supplemental `dotnet build`, player build, signed release
+artifact, push, or GitHub CI run was performed. These local results do not
+establish release evidence for another commit, archive, Unity version, or
+platform.
