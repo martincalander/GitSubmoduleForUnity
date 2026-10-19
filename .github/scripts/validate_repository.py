@@ -153,8 +153,6 @@ def check_required_files() -> None:
         "Documentation~/architecture.md",
         "Documentation~/roadmap.md",
         "Documentation~/Images/GitSubmoduleManagerCover.png",
-        "Documentation~/Images/GitSubmoduleManagerIcon.png",
-        "Documentation~/Images/GitSubmoduleManagerIcon.svg",
         "Editor/MartinCalander.GitSubmoduleManager.Editor.asmdef",
         "Editor/GitEditorWindowIcon.png",
         "Editor/GitEditorWindowIconLight.png",

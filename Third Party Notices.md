@@ -1,7 +1,7 @@
 # Third-Party Notices
 
 Git Submodule Manager bundles the third-party libraries and artwork described
-below. Git and GitHub CLI remain external tools supplied separately by the user.
+below. Git remains an external tool supplied separately by the user.
 
 ## Bundled Software
 
@@ -116,16 +116,13 @@ SOFTWARE.
 ### Git Logomark
 
 - Files: `Documentation~/Images/GitSubmoduleManagerCover.png`,
-  `Documentation~/Images/GitSubmoduleManagerIcon.png`,
-  `Documentation~/Images/GitSubmoduleManagerIcon.svg`,
   `Editor/GitEditorWindowIcon.png`, and `Editor/GitEditorWindowIconLight.png`
 - Original Git logomark creator: Jason Long
 - Source: [Git logo downloads](https://git-scm.com/community/logos)
 - License: [Creative Commons Attribution 3.0 Unported](https://creativecommons.org/licenses/by/3.0/)
-- Use: the cover and SVG adapt the official mark into open-package artwork for
-  repository documentation. The PNG uses the official full-color icon.
-  One-color variants are recolored for Unity's dark and light skins and appear
-  in the Welcome window, Package Manager Sources row, and source presentation.
+- Use: the cover adapts the official mark into artwork for repository
+  documentation. One-color variants are recolored for Unity's dark and light
+  skins and appear in the Package Manager GitHub Sources row.
 
 ## External Tools
 
@@ -133,23 +130,14 @@ SOFTWARE.
 
 - Website: [git-scm.com](https://git-scm.com/)
 - License: GNU General Public License version 2
-- Role: required external executable for submodule and remote operations
-
-### GitHub CLI
-
-- Website: [cli.github.com](https://cli.github.com/)
-- License: MIT License
-- Role: optional external executable for authenticated GitHub discovery and API
-  requests
+- Role: reading local repository metadata to identify installed submodules
 
 ## Unity Module
 
-### Unity IMGUI
+### Unity UIElements
 
-- Package: `com.unity.modules.imgui`
-- License: Unity Companion License
-- Role: rendering Git Submodule Manager Preferences and the standalone Welcome
-  window
+- Package: `com.unity.modules.uielements`
+- Role: extending Unity's native Package Manager interface
 
 The Unity module is provided by the Unity Editor installation and is not
 redistributed by this repository.

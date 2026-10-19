@@ -85,6 +85,9 @@ been published as a new release; existing `0.8.1` artifacts remain unchanged.
 
 ### Removed
 
+- Unused documentation icon assets. Third-party notices now describe the current
+  installed-status integration and retained artwork.
+
 - Legacy bootstrap installer source and its build, verification, and release
   steps from `main`. The installer remains on `legacy`; signed UPM archives,
   checksum verification, and optional OpenUPM publication remain supported.
