@@ -282,22 +282,26 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             catch { } // Retired-page recovery must not prevent the GitHub source from attaching.
         }
 
-        internal void Refresh()
+        internal bool Refresh()
         {
             if (disposed || page == null)
-                return;
+                return false;
             try
             {
-                if (!ReferenceEquals(page, FindRegisteredPage(pageManager)))
-                    return;
+                // Unity rebuilds inactive pages when they are activated.
+                if (!ReferenceEquals(page, ReadMember(pageManager, "activePage")) ||
+                    !ReferenceEquals(page, FindRegisteredPage(pageManager)))
+                    return false;
                 rebuild?.Invoke(page, rebuildHasForceArgument ? new object[] { true } : null);
                 selectionChanged?.Invoke(page, new object[] { false });
                 root.MarkDirtyRepaint();
+                return rebuild != null && selectionChanged != null;
             }
             catch
             {
                 // A recycled native page must not interrupt other Package Manager views.
             }
+            return false;
         }
 
         public void Dispose()

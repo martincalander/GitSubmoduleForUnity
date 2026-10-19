@@ -40,6 +40,9 @@ been published as a new release; existing `0.8.1` artifacts remain unchanged.
 
 ### Changed
 
+- Refresh rendered submodule labels and Repository links when status changes,
+  without rebuilding unrelated native package lists or repeating readiness work.
+
 - Reduce repeated installed-path validation and UPM Git URL parsing while keeping
   package identity checks at the native presentation boundary.
 

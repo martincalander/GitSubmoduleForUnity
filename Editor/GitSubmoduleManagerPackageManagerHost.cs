@@ -37,6 +37,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             private IVisualElementScheduledItem retry;
             private int attempts;
             private bool attached;
+            private bool presentationObserved;
             private bool disposed;
             internal bool HasPendingAttachment => retry != null;
 
@@ -89,10 +90,28 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                     return;
                 attached = Page.TryAttach(out string error) && Page.IsAttached;
                 LastError = error;
+                if (attached && !presentationObserved)
+                {
+                    // Seed hooks for native elements that existed before this session attached.
+                    RefreshViews();
+                }
                 if (attached || ++attempts >= 50)
                 {
                     retry?.Pause();
                     retry = null;
+                }
+            }
+
+            internal void RefreshViews()
+            {
+                ScheduleAttachment();
+                if (Page.Refresh())
+                    presentationObserved = true;
+                else
+                {
+                    if (!presentationObserved)
+                        presentationObserved = PackageManagerSubmoduleHarmonyPatch.RefreshActivePage(Root);
+                    PackageManagerSubmoduleHarmonyPatch.RefreshPresentation(Root);
                 }
             }
 
@@ -122,8 +141,6 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             EditorApplication.quitting += Stop;
             PackageManagerPackageStatus.Changed -= RefreshViews;
             PackageManagerPackageStatus.Changed += RefreshViews;
-            PackageManagerPackageStatus.ReadinessChanged -= RefreshRepositoryLinks;
-            PackageManagerPackageStatus.ReadinessChanged += RefreshRepositoryLinks;
             PackageManagerSubmoduleHarmonyPatch.Install();
             // A window can already exist when scripts reload. This is a single catch-up pass.
             EditorApplication.delayCall -= AttachExistingWindows;
@@ -167,11 +184,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         private static void RefreshViews()
         {
             foreach (Session session in Sessions.Values)
-            {
-                session.ScheduleAttachment();
-                session.Page.Refresh();
-                PackageManagerSubmoduleHarmonyPatch.RefreshActivePage(session.Root);
-            }
+                session.RefreshViews();
         }
 
         private static void BeforeReload()
@@ -179,19 +192,10 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             Stop();
         }
 
-        private static void RefreshRepositoryLinks()
-        {
-            if (!PackageManagerPackageStatus.IsReady)
-                return;
-            foreach (Session session in Sessions.Values)
-                PackageRepositoryLink.RefreshInRoot(session.Root);
-        }
-
         private static void Stop()
         {
             EditorApplication.delayCall -= AttachExistingWindows;
             PackageManagerPackageStatus.Changed -= RefreshViews;
-            PackageManagerPackageStatus.ReadinessChanged -= RefreshRepositoryLinks;
             foreach (Session session in Sessions.Values)
             {
                 PackageRepositoryLink.Remove(session.Root);

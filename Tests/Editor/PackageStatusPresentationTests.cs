@@ -120,6 +120,80 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
             Assert.That(current.style.maxWidth.value.value, Is.EqualTo(456));
         }
 
+        [TestCase("InProject")]
+        [TestCase("UnityRegistry")]
+        [TestCase("MyAssets")]
+        [TestCase("Extension/another-package")]
+        public void ChangedStatus_UpdatesTrackedLabelsWithoutRebuildingOtherNativePages(string pageId)
+        {
+            var root = new NativeRootStub();
+            root.pageManager.activePage = new NativePageStub { id = pageId };
+            var container = new VisualElement { name = "tagContainer" };
+            var label = new Label("Custom") { tooltip = "Native tooltip" };
+            var unrelated = new Label("Submodule");
+            root.Add(container);
+            container.Add(label);
+            root.Add(unrelated);
+            ObserveTag(label, new VersionStub());
+            PackageManagerSubmoduleHarmonyPatch.ApplyTag(label, true);
+
+            PackageManagerSubmoduleHarmonyPatch.RefreshPresentation(root);
+
+            Assert.That(label.text, Is.EqualTo("Custom"));
+            Assert.That(label.tooltip, Is.EqualTo("Native tooltip"));
+            Assert.That(container.style.maxWidth.keyword, Is.EqualTo(StyleKeyword.Null));
+            Assert.That(unrelated.text, Is.EqualTo("Submodule"), "Only native labels observed by our hook may change.");
+            Assert.That(root.pageManager.activePage.Rebuilds, Is.Zero);
+            Assert.That(root.pageManager.activePage.SelectionChanges, Is.Zero);
+        }
+
+        [Test]
+        public void ChangedStatus_RecycledLabelUsesOnlyItsLatestObservedVersion()
+        {
+            var root = new VisualElement();
+            var label = new Label("Custom");
+            root.Add(label);
+            var previous = new ObservedVersionStub();
+            var current = new ObservedVersionStub();
+            ObserveTag(label, previous);
+            ObserveTag(label, current);
+            int previousReads = previous.Reads;
+            int currentReads = current.Reads;
+            PackageManagerSubmoduleHarmonyPatch.ApplyTag(label, true);
+
+            PackageManagerSubmoduleHarmonyPatch.RefreshPresentation(root);
+
+            Assert.That(previous.Reads, Is.EqualTo(previousReads));
+            Assert.That(current.Reads, Is.EqualTo(currentReads + 1));
+            Assert.That(label.text, Is.EqualTo("Custom"));
+        }
+
+        [Test]
+        public void NativeCatchUp_RefreshesAnExistingPageBeforePresentationOnlyUpdates()
+        {
+            var root = new NativeRootStub();
+            root.pageManager.activePage = new NativePageStub { id = "InProject" };
+            const BindingFlags instance = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
+            System.Type sessionType = typeof(GitSubmoduleManagerPackageManagerHost)
+                .GetNestedType("Session", BindingFlags.NonPublic);
+            object session = System.Activator.CreateInstance(sessionType, instance, null, new object[] { root }, null);
+            try
+            {
+                MethodInfo refresh = sessionType.GetMethod("RefreshViews", instance);
+                refresh.Invoke(session, null);
+                refresh.Invoke(session, null);
+                refresh.Invoke(session, null);
+
+                Assert.That(root.pageManager.activePage.Rebuilds, Is.EqualTo(1));
+                Assert.That(root.pageManager.activePage.SelectionChanges, Is.EqualTo(1));
+            }
+            finally
+            {
+                // This isolated session never retained a status observer.
+                ((System.IDisposable)sessionType.GetField("Page", instance).GetValue(session)).Dispose();
+            }
+        }
+
         [TestCase(true)]
         [TestCase(false)]
         public void EmbeddedRemoval_UsesTheExactSelectedIdentity(bool protectedCheckout)
@@ -214,6 +288,37 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
         {
             public string name { get; set; }
             public string localPath { get; set; }
+            public bool isInstalled { get; set; }
+        }
+
+        private static void ObserveTag(TextElement label, object version) =>
+            typeof(PackageManagerSubmoduleHarmonyPatch)
+                .GetMethod("TagPostfix", BindingFlags.Static | BindingFlags.NonPublic)
+                .Invoke(null, new[] { (object)label, version });
+
+        private sealed class ObservedVersionStub
+        {
+            internal int Reads { get; private set; }
+            public bool isInstalled { get { Reads++; return false; } }
+        }
+
+        private sealed class NativeRootStub : VisualElement
+        {
+            public NativeManagerStub pageManager { get; } = new();
+        }
+
+        private sealed class NativeManagerStub
+        {
+            public NativePageStub activePage { get; set; }
+        }
+
+        private sealed class NativePageStub
+        {
+            public string id { get; set; }
+            internal int Rebuilds { get; private set; }
+            internal int SelectionChanges { get; private set; }
+            public void Rebuild(bool force) => Rebuilds++;
+            public void TriggerOnSelectionChanged(bool direct) => SelectionChanges++;
         }
     }
 }

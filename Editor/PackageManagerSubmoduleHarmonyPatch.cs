@@ -21,6 +21,9 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         private const BindingFlags Instance = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
         private const BindingFlags Static = BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic;
         private static readonly ConditionalWeakTable<TextElement, TagState> Tags = new();
+        private static readonly ConditionalWeakTable<VisualElement, ObservedVersion> Versions = new();
+        private static readonly Lazy<MethodInfo> SourceRefresh = new(() =>
+            FindMethod("SourceInfoCard", "Refresh", typeof(void), "IPackageVersion"));
         private static Harmony harmony;
         private static bool installed;
         internal static string LastError { get; private set; } = string.Empty;
@@ -33,6 +36,18 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             internal bool HadEllipsis;
             internal VisualElement Container;
             internal EventCallback<AttachToPanelEvent> Attached;
+        }
+
+        private sealed class ObservedVersion
+        {
+            internal object Version;
+            internal readonly bool SourceCard;
+
+            internal ObservedVersion(object version, bool sourceCard)
+            {
+                Version = version;
+                SourceCard = sourceCard;
+            }
         }
 
         internal static void Install()
@@ -49,7 +64,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             }
             if (!hasTagTarget)
                 LastError += "Missing native contract for submodule labels. ";
-            Patch(FindMethod("SourceInfoCard", "Refresh", typeof(void), "IPackageVersion"), nameof(SourcePostfix), false);
+            Patch(SourceRefresh.Value, nameof(SourcePostfix), false);
             Patch(FindMethod("RemoveCustomAction", "TriggerActionImplementation", typeof(bool), "IPackageVersion"), nameof(RemovePrefix), true);
             Patch(FindMethod("PackageOperationDispatcher", "RemoveEmbedded", typeof(void), "IPackage"), nameof(RemoveEmbeddedPrefix), true);
             Patch(PackageManagerSubmoduleNativePage.GetNativeRefreshTarget(), nameof(RefreshPostfix), false);
@@ -158,7 +173,18 @@ namespace MartinCalander.GitSubmoduleManager.Editor
 
         private static void UpdateTag(object element, object version)
         {
-            ApplyTag(element as TextElement, TryGetStatus(version, out _));
+            if (element is not TextElement label)
+                return;
+            ObserveVersion(label, version, false);
+            ApplyTag(label, TryGetStatus(version, out _));
+        }
+
+        private static void ObserveVersion(VisualElement element, object version, bool sourceCard)
+        {
+            if (Versions.TryGetValue(element, out ObservedVersion observed))
+                observed.Version = version;
+            else
+                Versions.Add(element, new ObservedVersion(version, sourceCard));
         }
 
         internal static void ApplyTag(TextElement label, bool submodule)
@@ -225,7 +251,10 @@ namespace MartinCalander.GitSubmoduleManager.Editor
 
         private static void SourcePostfix(object __instance, object __0)
         {
-            if (!TryGetStatus(__0, out PackageSubmoduleStatus status) || !(__instance is VisualElement card))
+            if (__instance is not VisualElement card)
+                return;
+            ObserveVersion(card, __0, true);
+            if (!TryGetStatus(__0, out PackageSubmoduleStatus status))
                 return;
             TextElement text = card.Q<TextElement>(className: "informationCardText");
             if (text != null)
@@ -284,21 +313,42 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             }
         }
 
-        internal static void RefreshActivePage(VisualElement root)
+        internal static void RefreshPresentation(VisualElement root)
+        {
+            root.Query<VisualElement>().ForEach(element =>
+            {
+                try
+                {
+                    if (Versions.TryGetValue(element, out ObservedVersion observed))
+                    {
+                        if (observed.SourceCard)
+                            SourceRefresh.Value?.Invoke(element, new[] { observed.Version });
+                        else
+                            ApplyTag(element as TextElement, TryGetStatus(observed.Version, out _));
+                    }
+                    PackageRepositoryLink.RefreshElement(element);
+                }
+                catch { } // A recycled element must not interrupt other native presentation updates.
+            });
+        }
+
+        internal static bool RefreshActivePage(VisualElement root)
         {
             try
             {
                 object manager = Read(root, "m_PageManager") ?? Read(root, "pageManager");
                 object page = Read(manager, "activePage");
                 if (page == null || PackageManagerSubmoduleNativePage.IsOwnedPage(page))
-                    return;
+                    return false;
                 MethodInfo rebuild = page.GetType().GetMethod("Rebuild", Instance, null, new[] { typeof(bool) }, null);
                 if (rebuild != null && rebuild.ReturnType == typeof(void))
                     rebuild.Invoke(page, new object[] { true });
                 MethodInfo selection = page.GetType().GetMethod("TriggerOnSelectionChanged", Instance, null, new[] { typeof(bool) }, null);
                 selection?.Invoke(page, new object[] { false });
+                return rebuild != null && rebuild.ReturnType == typeof(void);
             }
             catch { }
+            return false;
         }
 
         internal static void Uninstall()

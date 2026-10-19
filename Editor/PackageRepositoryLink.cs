@@ -51,11 +51,16 @@ namespace MartinCalander.GitSubmoduleManager.Editor
 
         internal static void RefreshInRoot(VisualElement root)
         {
-            root.Query<VisualElement>().ForEach(element =>
-            {
-                if (element.GetType() == Contract.Value.LinksType)
-                    Refresh(element, PackageManagerSubmoduleHarmonyPatch.Read(FindHeader(element), "m_Version"));
-            });
+            root.Query<VisualElement>().ForEach(RefreshElement);
+        }
+
+        internal static void RefreshElement(VisualElement element)
+        {
+            NativeContract contract = Contract.Value;
+            if (element?.GetType() != contract.LinksType)
+                return;
+            VisualElement header = FindHeader(element);
+            Refresh(element, header == null ? null : contract.Version?.GetValue(header));
         }
 
         private static VisualElement FindHeader(VisualElement links)

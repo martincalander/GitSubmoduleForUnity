@@ -108,8 +108,11 @@ identity are published together. Git-only refreshes reuse the accepted installed
 package dictionary. Package registration, reopening, and explicit refresh
 invalidate its revision; retries cannot erase that invalidation. Failed or
 superseded captures are never used as a new accepted snapshot. A changed metadata
-stamp during a read causes a retry before publication. Readiness notifications update the Repository link while
-content notifications rebuild views only when the result actually differs.
+stamp during a read causes a retry before publication. Content notifications update rendered labels and Repository links only when the
+result actually differs. A one-time native refresh catches up an already-open
+window after attachment. Later changes rebuild the GitHub list only while active;
+other native lists keep their own membership, selection, and search state.
+Readiness transitions do not repeat the same link refresh.
 Pending or failed reads continue to block unverified embedded-folder deletion.
 The deletion boundary rechecks the published metadata stamp before trusting a
 negative result. Its checkout protection uses the actual direct child path

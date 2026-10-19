@@ -234,6 +234,50 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
             }
         }
 
+        [Test]
+        public void InactiveGitHubPage_DoesNotRebuildUntilActivated()
+        {
+            var fixture = new AttachmentFixture();
+            using (fixture.Page)
+            {
+                NativePageStub github = fixture.Root.pageManager.orderedExtensionPages[0];
+                var other = new NativePageStub("InProject");
+                fixture.Root.pageManager.activePage = other;
+                Assert.That(fixture.Page.Refresh(), Is.False);
+                Assert.That(github.Rebuilds, Is.Zero);
+                Assert.That(github.SelectionChanges, Is.Zero);
+                Assert.That(other.Rebuilds, Is.Zero);
+                Assert.That(other.SelectionChanges, Is.Zero);
+
+                fixture.Root.pageManager.activePage = github;
+                Assert.That(fixture.Page.Refresh(), Is.True);
+                Assert.That(github.Rebuilds, Is.EqualTo(1));
+                Assert.That(github.SelectionChanges, Is.EqualTo(1));
+            }
+        }
+
+        [Test]
+        public void ReplacedOrDisposedGitHubPage_DoesNotRefreshOldNativeModels()
+        {
+            var fixture = new AttachmentFixture();
+            NativePageStub github = fixture.Root.pageManager.orderedExtensionPages[0];
+            using (fixture.Page)
+            {
+                fixture.Root.pageManager.activePage = github;
+                fixture.Root.pageManager.orderedExtensionPages = new[]
+                    { new NativePageStub(PackageManagerSubmoduleNativePage.ExtensionPageId) };
+                Assert.That(fixture.Page.Refresh(), Is.False);
+                Assert.That(github.Rebuilds, Is.Zero);
+                Assert.That(github.SelectionChanges, Is.Zero);
+
+                fixture.Root.pageManager.orderedExtensionPages = new[] { github };
+                fixture.Page.Dispose();
+                Assert.That(fixture.Page.Refresh(), Is.False);
+                Assert.That(github.Rebuilds, Is.Zero);
+                Assert.That(github.SelectionChanges, Is.Zero);
+            }
+        }
+
         [UnityTest]
         public IEnumerator DetachedNativeRow_RequestsRepairAndDisposalRemovesTheCallback()
         {
@@ -617,6 +661,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
 
         private sealed class NativeManagerStub
         {
+            public NativePageStub activePage { get; set; }
             public NativePageStub[] orderedExtensionPages { get; set; } =
                 new[] { new NativePageStub(PackageManagerSubmoduleNativePage.ExtensionPageId) };
         }
@@ -637,6 +682,9 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                 Page = new PackageManagerSubmoduleNativePage(Root);
                 Set("pageManager", Root.pageManager);
                 Set("page", Root.pageManager.orderedExtensionPages[0]);
+                Set("rebuild", typeof(NativePageStub).GetMethod(nameof(NativePageStub.Rebuild)));
+                Set("rebuildHasForceArgument", true);
+                Set("selectionChanged", typeof(NativePageStub).GetMethod(nameof(NativePageStub.TriggerOnSelectionChanged)));
                 Set("sidebar", Sidebar);
                 Set("group", Sources);
                 TrackRow();
@@ -659,7 +707,11 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
         private sealed class NativePageStub
         {
             public string id { get; }
+            internal int Rebuilds { get; private set; }
+            internal int SelectionChanges { get; private set; }
             internal NativePageStub(string id) { this.id = id; }
+            public void Rebuild(bool force) => Rebuilds++;
+            public void TriggerOnSelectionChanged(bool direct) => SelectionChanges++;
         }
     }
 }

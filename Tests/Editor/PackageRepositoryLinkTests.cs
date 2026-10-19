@@ -221,6 +221,16 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                     .Where(element => element.name != PackageRepositoryLink.ElementName && element.name != SeparatorName)
                     .Select(element => element.text).ToArray(), Is.EqualTo(nativeLabels));
 
+                PackageRepositoryLink.Remove(links);
+                PackageRepositoryLink.RefreshInRoot(header);
+                Button repository = links.Q<Button>(PackageRepositoryLink.ElementName);
+                Assert.That(repository, Is.Not.Null, "First attachment must catch up an existing links row.");
+                Assert.That(links.Q(RowName)[0], Is.SameAs(repository));
+                PackageManagerSubmoduleHarmonyPatch.RefreshPresentation(header);
+                Assert.That(links.Q<Button>(PackageRepositoryLink.ElementName), Is.SameAs(repository),
+                    "Unchanged presentation must retain the existing link and callback.");
+                Assert.That(links.Query(name: PackageRepositoryLink.ElementName).ToList(), Has.Count.EqualTo(1));
+
                 VisualElement parent = links.parent;
                 int position = parent.IndexOf(links);
                 links.RemoveFromHierarchy();
@@ -232,6 +242,10 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                 selected.SetValue(header, ordinary);
                 Assert.That(PackageRepositoryLink.CurrentUrl(links, source), Is.Empty,
                     "A stale link must stop resolving as soon as the header selects another version.");
+                PackageManagerSubmoduleHarmonyPatch.RefreshPresentation(header);
+                Assert.That(links.Q(PackageRepositoryLink.ElementName), Is.Null,
+                    "Status presentation must clear a stale link without a native list rebuild.");
+                Assert.That(links.Q(SeparatorName), Is.Null);
                 refresh.Invoke(links, new[] { ordinary });
                 Assert.That(links.Q(PackageRepositoryLink.ElementName), Is.Null);
                 Assert.That(links.Q(SeparatorName), Is.Null);
