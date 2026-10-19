@@ -21,7 +21,9 @@ Editor/
 ├── PackageStatusDetailsView.cs
 │                               selected-package details and shortcuts
 ├── PackageManagerSubmoduleNativePage.cs
-│                               Project > Submodules and Sources > GitHub
+│                               Sources > GitHub
+├── PackageManagerSubmoduleFilter.cs
+│                               Submodules only in the native project list
 └── PackageManagerSubmoduleHarmonyPatch.cs
                                 native labels and embedded-removal protection
 ```
@@ -35,7 +37,9 @@ Classification is presentation data. It is not proof that a checkout is clean,
 published, current, or safe to remove.
 
 The GitHub source includes installed GitHub submodules and UPM Git dependencies.
-The Submodules view includes verified installed submodules across Git hosts.
+The **Submodules only** toggle filters the native project package list to
+verified installed submodules across Git hosts. It appears beside search in
+**Project > All Packages**, called **In Project** in older Editors.
 Both reuse Unity's package records, search, sorting, and selection. There is no
 remote catalogue or synthetic uninstalled-package projection. The extension
 never adds display records to the project's manifest or lockfile and performs
@@ -62,10 +66,14 @@ The host owns extension registration and updates the public package-details
 extension when selection changes. Native page registration and package labels
 use guarded internal contracts. Each reflected seam is checked independently;
 an unavailable seam disables that feature without replacing unrelated Package
-Manager pages. The Submodules page is placed under Project because it filters
-installation type across hosts; GitHub remains under Sources. Both page
-predicates read cached installed state. A failure to attach one page does not
-remove the other page's independent attachment attempt.
+Manager pages. GitHub remains under Sources. The submodule filter applies only
+to the native project package list and composes with its existing search and
+sorting. Its toggle state is not persisted and resets when Package Manager
+closes or scripts reload. Both predicates read cached installed state without
+additional scans, Git commands, network requests, or polling. The GitHub source
+and submodule filter have independently guarded attachment contracts. Failed
+filter attachment restores the full project list instead of leaving an active
+filter without its control.
 
 The details view keeps Unity's existing source URL for ordinary UPM Git
 dependencies and adds a selectable URL display for verified submodules.

@@ -19,9 +19,9 @@ published `0.8.1` artifacts still contain that implementation.
 - Git for preparing test repositories and managing the checkout.
 - Python 3 and Node.js for repository, Markdown, and packaging checks.
 
-See the [source feature verification](#source-feature-verification-on-2026-10-19)
-and [source button cleanup verification](#source-button-cleanup-on-2026-10-19)
-for the checks performed on each change. Existing version gates do not imply
+See the [submodule filter verification](#submodule-filter-verification-on-2026-10-19)
+and the earlier records below for the checks performed on each change.
+Existing version gates do not imply
 that the current design has been retested across all supported targets. GitHub
 CLI is not required.
 
@@ -317,3 +317,37 @@ Other supported Unity versions, Windows and Linux Editor execution, the six
 consumer projects, player builds, and signed release artifacts were not retested
 or produced. The preceding full-assembly result applies to the earlier source
 feature revision, not this subsequent change.
+
+## Submodule Filter Verification on 2026-10-19
+
+The replacement of the Submodules sidebar page with **Submodules only** in the
+native project list was tested in OpenSourceWorkspace with Unity CLI
+`1.0.0-beta.13`, Pipeline `0.8.0-exp.1`, and Unity `7000.0.0a10` on macOS.
+
+- Fresh Unity compilation completed without compiler errors.
+- All 14 focused filter tests passed. They cover native membership, search and
+  sorting, selection repair, shared window state, detached controls, migration
+  from the retired page, rebuild failure, and narrow toolbar layout.
+- All 280 tests in `MartinCalander.GitSubmoduleManager.Editor.Tests` passed after
+  the final source changes, with no failures, skipped, or inconclusive tests.
+  This includes `PackageManagerCompatibility` and two Play Mode cycles with
+  domain reload disabled. Original Editor settings were restored.
+- A live Package Manager pass verified 22 assertions, including sidebar repair,
+  native search and sorting, selection changes, unchanged GitHub membership,
+  and filter reset after closing and reopening. Script reload also reset the
+  filter. Narrow and wide toolbar layouts were visually inspected.
+- Closing the tested Package Manager window left zero sessions, attachment
+  retries, and filter states. The final Editor Console had no errors or warnings.
+- Repository validation, 13 Python repository tests, Markdown lint, package
+  dry run, and whitespace checks passed. No dependencies, Git scans, network
+  requests, or polling were added; audited third-party artifacts are unchanged.
+
+Not retested: Unity `6000.3.22f1`, `6000.5.*f1`, `6000.6.0f1`,
+`6000.6.2f1`, `6000.7.0b1`, `6000.7.0b2`, `7000.0.0a7`,
+`7000.0.0a8`, and `7000.0.0a9`; Windows and Linux Editor execution. The six
+consumer projects were not upgraded or reopened for this filter change.
+Startup and allocation benchmarks were not repeated. No player build was
+needed for this Editor-only change, and no signed release artifact was
+produced. GitHub CI checks repository structure and packaging, not Unity
+execution. Local validation is not release evidence for another Unity version,
+archive, or platform.

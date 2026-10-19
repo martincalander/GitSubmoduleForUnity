@@ -15,8 +15,9 @@ been published as a new release; existing `0.8.1` artifacts remain unchanged.
 
 ### Added
 
-- Add **Project > Submodules**, a native list of verified installed submodules
-  across Git hosts, using the existing cached classification.
+- Add **Submodules only** beside search in **Project > All Packages** (called
+  **In Project** in older Editors). It filters verified installed submodules
+  across Git hosts using the existing cached classification.
 - Add source details and shortcuts for installed packages: a selectable source URL
   for verified submodules, repository links where a browser URL is known, and a
   shortcut to reveal the resolved package folder. Ordinary UPM Git dependencies
@@ -47,6 +48,9 @@ been published as a new release; existing `0.8.1` artifacts remain unchanged.
 
 ### Changed
 
+- Replace the separate **Project > Submodules** sidebar page with the
+  **Submodules only** toggle. Native search and sorting continue to apply, and
+  the toggle starts off after closing Package Manager or reloading scripts.
 - Attach through Package Manager UI lifecycle events instead of continuously
   scanning Editor windows. Cache validated native contracts and stop attachment
   retries after success or a bounded construction timeout.

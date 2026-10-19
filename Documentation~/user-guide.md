@@ -1,8 +1,8 @@
 # User Guide
 
 Open **Window > Package Management > Package Manager**. Git Submodule Manager
-adds installed-package details, **Project > Submodules**, and **Sources > GitHub**
-to Unity's native window. This is the current design on `main`. See
+adds installed-package details, a **Submodules only** filter, and
+**Sources > GitHub** to Unity's native window. This is the current design on `main`. See
 [compatibility](installation.md#unity) for the exact Editor targets and local
 verification limits.
 
@@ -24,17 +24,24 @@ Submodule status describes how the package is installed. It does not report
 whether the checkout is clean, up to date, or pushed. Use your Git client for
 those details.
 
-## Submodules View
+## Submodules Filter
 
-Choose **Project > Submodules** to see only installed packages verified as
-submodules of this project. The filter works across Git hosts, including private
-hosts and relative submodule URLs. It uses the same cached classification as the
-**Submodule** label and Unity's native list, search, sorting, and selection.
+Choose **Project > All Packages** and enable **Submodules only** beside search.
+Older Editors call this page **In Project**. The toggle filters the existing
+list to packages verified as submodules of this project, across Git hosts,
+including private hosts and relative submodule URLs. It uses the same cached
+classification as the **Submodule** label. Unity's search and sorting continue
+to apply to the filtered list.
+
+Turn the toggle off to see the full list again. It applies only to this project
+page and starts off after closing Package Manager or reloading scripts.
+**Sources > GitHub** and other pages keep their own contents. There is no
+separate Submodules sidebar page.
 
 Ordinary UPM Git dependencies are not submodules and do not appear here. Neither
 do uninitialized submodules, packages that Unity has not resolved, or checkouts
-whose registration cannot be verified. Select such a package elsewhere in
-Package Manager to inspect its status explanation.
+whose registration cannot be verified. Turn off the filter and select such a
+package to inspect its status explanation.
 
 ## GitHub Source
 

@@ -47,6 +47,8 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             MethodInfo sidebarRefresh = PackageManagerSubmoduleNativePage.GetSidebarRefreshTarget();
             Patch(sidebarRefresh, nameof(SidebarRefreshPostfix), false);
             IsSidebarRepairInstalled = IsPatched(sidebarRefresh);
+            Patch(PackageManagerSubmoduleFilter.GetMembershipTarget(), nameof(SubmoduleFilterPostfix), false);
+            Patch(PackageManagerSubmoduleFilter.GetSearchPageChangedTarget(), nameof(SearchPageChangedPostfix), false);
         }
 
         private static void Patch(MethodInfo target, string callback, bool prefix)
@@ -243,8 +245,19 @@ namespace MartinCalander.GitSubmoduleManager.Editor
 
         private static void RefreshPostfix(object __0)
         {
-            if (PackageManagerSubmoduleNativePage.IsOwnedPage(__0))
+            if (PackageManagerSubmoduleNativePage.IsOwnedPage(__0) || PackageManagerSubmoduleFilter.IsEnabledFor(__0))
                 PackageManagerPackageStatus.Refresh();
+        }
+
+        private static void SubmoduleFilterPostfix(object __instance, object __0, ref bool __result)
+        {
+            __result = PackageManagerSubmoduleFilter.ApplyNativeFilter(__instance, __0, __result);
+        }
+
+        private static void SearchPageChangedPostfix(object __instance)
+        {
+            if (__instance is VisualElement searchBar)
+                PackageManagerSubmoduleFilter.NotifySearchPageChanged(searchBar);
         }
 
         internal static void RefreshActivePage(VisualElement root)
@@ -254,6 +267,8 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 object manager = Read(root, "m_PageManager") ?? Read(root, "pageManager");
                 object page = Read(manager, "activePage");
                 if (page == null || PackageManagerSubmoduleNativePage.IsOwnedPage(page))
+                    return;
+                if (PackageManagerSubmoduleFilter.TryRefreshAllPackages(page))
                     return;
                 MethodInfo rebuild = page.GetType().GetMethod("Rebuild", Instance, null, new[] { typeof(bool) }, null);
                 if (rebuild != null && rebuild.ReturnType == typeof(void))

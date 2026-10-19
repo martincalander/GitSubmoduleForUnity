@@ -38,7 +38,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         {
             internal readonly VisualElement Root;
             internal readonly PackageManagerSubmoduleNativePage Page;
-            internal readonly PackageManagerSubmoduleNativePage Submodules;
+            internal readonly PackageManagerSubmoduleFilter Filter;
             private IVisualElementScheduledItem retry;
             private int attempts;
             private bool attached;
@@ -49,10 +49,10 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             {
                 Root = root;
                 Page = new PackageManagerSubmoduleNativePage(root);
-                Submodules = new PackageManagerSubmoduleNativePage(root, true);
+                Filter = new PackageManagerSubmoduleFilter(root);
                 Root.RegisterCallback<DetachFromPanelEvent>(OnDetached);
                 Page.AttachmentInvalidated += OnAttachmentInvalidated;
-                Submodules.AttachmentInvalidated += OnAttachmentInvalidated;
+                Filter.AttachmentInvalidated += OnAttachmentInvalidated;
             }
 
             internal void Start()
@@ -79,9 +79,11 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             {
                 if (disposed || attached || retry != null || Root.panel == null)
                     return;
-                if (!PackageManagerSubmoduleNativePage.IsSupportedContract(out string error))
+                bool sourceSupported = PackageManagerSubmoduleNativePage.IsSupportedContract(out string sourceError);
+                bool filterSupported = PackageManagerSubmoduleFilter.IsSupportedContract(out string filterError);
+                if (!sourceSupported && !filterSupported)
                 {
-                    LastError = error;
+                    LastError = sourceError + " " + filterError;
                     return;
                 }
                 attempts = 0;
@@ -94,9 +96,10 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 if (disposed)
                     return;
                 bool sourceAttached = Page.TryAttach(out string sourceError);
-                bool submodulesAttached = Submodules.TryAttach(out string submodulesError);
-                attached = sourceAttached && submodulesAttached && Page.IsAttached && Submodules.IsAttached;
-                LastError = string.IsNullOrEmpty(sourceError) ? submodulesError : sourceError;
+                bool filterAttached = Filter.TryAttach(out string filterError);
+                attached = sourceAttached && filterAttached && Page.IsAttached && Filter.IsAttached;
+                LastError = string.IsNullOrEmpty(sourceError) ? filterError :
+                    string.IsNullOrEmpty(filterError) ? sourceError : sourceError + " " + filterError;
                 if (attached || ++attempts >= 50)
                 {
                     retry?.Pause();
@@ -113,9 +116,9 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 retry = null;
                 Root.UnregisterCallback<DetachFromPanelEvent>(OnDetached);
                 Page.AttachmentInvalidated -= OnAttachmentInvalidated;
-                Submodules.AttachmentInvalidated -= OnAttachmentInvalidated;
+                Filter.AttachmentInvalidated -= OnAttachmentInvalidated;
                 Page.Dispose();
-                Submodules.Dispose();
+                Filter.Dispose();
                 PackageManagerPackageStatus.Release();
             }
         }
@@ -186,7 +189,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             {
                 session.ScheduleAttachment();
                 session.Page.Refresh();
-                session.Submodules.Refresh();
+                session.Filter.Refresh();
                 PackageManagerSubmoduleHarmonyPatch.RefreshActivePage(session.Root);
             }
         }
