@@ -14,12 +14,16 @@ using UnityEngine;
 
 namespace MartinCalander.GitSubmoduleManager.Editor
 {
-    internal sealed class PackageSubmoduleStatus
+    internal readonly struct PackageSubmoduleStatus
     {
-        internal string Name;
-        internal string FullPath;
-        internal string RepositoryUrl;
-        internal bool IsGitHub;
+        internal readonly string RepositoryUrl;
+        internal readonly bool IsGitHub;
+
+        internal PackageSubmoduleStatus(string repositoryUrl, bool isGitHub)
+        {
+            RepositoryUrl = repositoryUrl;
+            IsGitHub = isGitHub;
+        }
     }
 
     [InitializeOnLoad]
@@ -302,7 +306,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
 
         internal static bool TryGetSubmodule(string name, string resolvedPath, out PackageSubmoduleStatus status)
         {
-            status = null;
+            status = default;
             return string.IsNullOrEmpty(Error) &&
                    snapshot.Packages.TryGetValue(name ?? string.Empty, out InstalledPackage registered) &&
                    SamePath(registered.ResolvedPath, resolvedPath) &&
@@ -312,18 +316,12 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         internal static bool TryClassify(string projectRoot, string name, string resolvedPath,
             StatusSnapshot data, out PackageSubmoduleStatus status)
         {
-            status = null;
+            status = default;
             if (!string.IsNullOrEmpty(data.Error) || !IsDirectPackage(projectRoot, name, resolvedPath) ||
                 !data.Gitlinks.Contains("Packages/" + name) ||
                 !data.Repositories.TryGetValue("Packages/" + name, out string url))
                 return false;
-            status = new PackageSubmoduleStatus
-            {
-                Name = name,
-                FullPath = Path.GetFullPath(resolvedPath),
-                RepositoryUrl = url,
-                IsGitHub = IsGitHubUrl(url)
-            };
+            status = new PackageSubmoduleStatus(url, IsGitHubUrl(url));
             return true;
         }
 

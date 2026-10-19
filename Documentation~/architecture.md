@@ -34,6 +34,11 @@ submodule from an ordinary embedded, local, registry, or UPM Git package.
 Classification is presentation data. It is not proof that a checkout is clean,
 published, current, or safe to remove.
 
+Successful classification returns a small immutable value containing the
+repository URL and GitHub membership. It does not allocate a result object or
+retain duplicate package-name and normalized-path fields. Installed identity
+and path validation remain in the classification boundary.
+
 The GitHub source includes installed GitHub submodules and UPM Git dependencies.
 It reuses Unity's package records, search, sorting, and selection. There is no
 remote catalogue or synthetic uninstalled-package projection. The extension

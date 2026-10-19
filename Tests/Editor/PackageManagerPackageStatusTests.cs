@@ -31,13 +31,14 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
             Directory.Delete(root, true);
         }
 
-        [Test]
-        public void ClassifiesOnlyMatchingRegisteredPathWithGitlinkAndRegistration()
+        [TestCase("")]
+        [TestCase(".")]
+        [TestCase("../" + Name)]
+        public void ClassifiesOnlyMatchingRegisteredPathWithGitlinkAndRegistration(string suffix)
         {
             var data = Snapshot();
-            Assert.That(PackageManagerPackageStatus.TryClassify(root, Name, packagePath, data, out PackageSubmoduleStatus status), Is.True);
-            Assert.That(status.Name, Is.EqualTo(Name));
-            Assert.That(status.FullPath, Is.EqualTo(packagePath));
+            Assert.That(PackageManagerPackageStatus.TryClassify(root, Name, Path.Combine(packagePath, suffix), data,
+                out PackageSubmoduleStatus status), Is.True);
             Assert.That(status.RepositoryUrl, Is.EqualTo("https://github.com/example/package.git"));
             Assert.That(status.IsGitHub, Is.True);
         }

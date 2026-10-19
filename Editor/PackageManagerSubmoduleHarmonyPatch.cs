@@ -147,7 +147,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
 
         private static bool TryGetStatus(object version, out PackageSubmoduleStatus status)
         {
-            status = null;
+            status = default;
             return Read(version, "isInstalled") is bool installed && installed &&
                    PackageManagerPackageStatus.TryGetSubmodule(Read(version, "name") as string,
                        Read(version, "localPath") as string, out status);
