@@ -70,10 +70,10 @@ checks.
 ## Editor Overhead
 
 The extension has no continuous window scan or remote discovery. Closing
-Package Manager releases its status observers and scheduled attachment work
-after any pending local read finishes. While open, it checks Git metadata every
-two seconds; ordinary asset edits do not trigger Git reads, and unchanged status
-does not rebuild package views.
+Package Manager releases its status observers and scheduled attachment work,
+cancels an active local read, and stops its update callback when that read drains.
+While open, it checks Git metadata every two seconds; ordinary asset edits do not
+trigger Git reads, and unchanged status does not rebuild package views.
 
 Native integration checks are cached, sidebar icons use 64-pixel imports, and
 the unused Newtonsoft dependency has been removed. Measurements show lower

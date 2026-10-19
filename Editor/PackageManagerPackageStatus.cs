@@ -186,6 +186,8 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             {
                 Events.registeredPackages -= OnRegisteredPackages;
                 refreshPending = false;
+                generation++;
+                cancellation?.Cancel();
                 StopListeningIfIdle();
             }
         }
@@ -567,6 +569,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
 
         private static string Git(string root, string arguments, CancellationToken token, bool allowNoMatch = false)
         {
+            token.ThrowIfCancellationRequested();
             using (var process = new Process())
             {
                 process.StartInfo = new ProcessStartInfo("git", "--no-optional-locks " + arguments)
@@ -584,6 +587,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                     process.StartInfo.EnvironmentVariables.Remove(key);
                 process.StartInfo.EnvironmentVariables["GIT_TERMINAL_PROMPT"] = "0";
                 process.StartInfo.EnvironmentVariables["GIT_OPTIONAL_LOCKS"] = "0";
+                token.ThrowIfCancellationRequested();
                 process.Start();
                 Task<string> output = Task.Run(() => ReadBounded(process.StandardOutput));
                 Task<string> error = Task.Run(() => ReadBounded(process.StandardError));

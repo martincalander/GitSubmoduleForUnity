@@ -2,8 +2,11 @@ using System;
 using System.Collections;
 using System.Collections.Generic;
 using System.Reflection;
+using System.Threading;
+using System.Threading.Tasks;
 using NUnit.Framework;
 using UnityEditor;
+using UnityEditor.PackageManager;
 using UnityEngine;
 using UnityEngine.UIElements;
 using UnityEngine.TestTools;
@@ -12,6 +15,94 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
 {
     public sealed class PackageStatusLifecycleTests
     {
+        [TestCase(1)]
+        [TestCase(2)]
+        [Category("PackageSourceFeatures")]
+        public void FinalReleaseCancelsStaleWorkAndRapidReopenQueuesAFreshGeneration(int observerCount)
+        {
+            const BindingFlags flags = BindingFlags.Static | BindingFlags.NonPublic;
+            Type statusType = typeof(PackageManagerPackageStatus);
+            var saved = new Dictionary<FieldInfo, object>();
+            foreach (string name in new[] { "observers", "generation", "workerGeneration", "worker", "workerPackages",
+                         "cancellation", "refreshPending", "listening", "shuttingDown" })
+            {
+                FieldInfo field = statusType.GetField(name, flags);
+                Assert.That(field, Is.Not.Null, name);
+                saved.Add(field, field.GetValue(null));
+            }
+            var state = (PackageManagerPackageStatus.StatusState)statusType.GetField("State", flags).GetValue(null);
+            FieldInfo readiness = typeof(PackageManagerPackageStatus.StatusState)
+                .GetField("<IsReady>k__BackingField", BindingFlags.Instance | BindingFlags.NonPublic);
+            bool wasReady = state.IsReady;
+            var published = state.Snapshot;
+            var pending = new TaskCompletionSource<PackageManagerPackageStatus.StatusSnapshot>();
+            using var cancellation = new CancellationTokenSource();
+            var update = (EditorApplication.CallbackFunction)Delegate.CreateDelegate(typeof(EditorApplication.CallbackFunction),
+                statusType.GetMethod("Update", flags));
+            var registered = (Action<PackageRegistrationEventArgs>)Delegate.CreateDelegate(typeof(Action<PackageRegistrationEventArgs>),
+                statusType.GetMethod("OnRegisteredPackages", flags));
+            object Get(string name) => statusType.GetField(name, flags).GetValue(null);
+            void Set(string name, object value) => statusType.GetField(name, flags).SetValue(null, value);
+
+            // Stay synchronous so the Editor cannot observe the isolated worker state.
+            try
+            {
+                Set("observers", observerCount);
+                Set("generation", 100);
+                Set("workerGeneration", 100);
+                Set("worker", pending.Task);
+                Set("cancellation", cancellation);
+                Set("refreshPending", true);
+                Set("listening", true);
+                Set("shuttingDown", false);
+
+                PackageManagerPackageStatus.Release();
+                if (observerCount == 2)
+                {
+                    Assert.That(cancellation.IsCancellationRequested, Is.False,
+                        "A remaining Package Manager session still owns the scan.");
+                    Assert.That(Get("generation"), Is.EqualTo(100));
+                    Assert.That(Get("refreshPending"), Is.True);
+                    PackageManagerPackageStatus.Release();
+                }
+                Assert.That(Get("observers"), Is.EqualTo(0));
+                Assert.That(cancellation.IsCancellationRequested, Is.True);
+                Assert.That(Get("generation"), Is.EqualTo(101));
+                Assert.That(Get("refreshPending"), Is.False);
+
+                PackageManagerPackageStatus.Retain();
+                Assert.That(Get("observers"), Is.EqualTo(1));
+                Assert.That(Get("generation"), Is.EqualTo(102));
+                Assert.That(Get("refreshPending"), Is.True);
+                Assert.That(Get("worker"), Is.SameAs(pending.Task), "Reopening must not overlap two Git scans.");
+                Assert.That(state.IsReady, Is.False);
+
+                PackageManagerPackageStatus.Release();
+                pending.SetResult(new PackageManagerPackageStatus.StatusSnapshot { Error = "Discard this cancelled generation." });
+                update();
+
+                Assert.That(state.Snapshot, Is.SameAs(published), "A cancelled worker must not publish stale status.");
+                Assert.That(Get("worker"), Is.Null);
+                Assert.That(Get("cancellation"), Is.Null);
+                Assert.That(Get("refreshPending"), Is.False);
+                Assert.That(Get("listening"), Is.False, "The final completed worker must release its Editor update callback.");
+            }
+            finally
+            {
+                foreach (KeyValuePair<FieldInfo, object> entry in saved)
+                    entry.Key.SetValue(null, entry.Value);
+                readiness.SetValue(state, wasReady);
+                typeof(PackageManagerPackageStatus.StatusState)
+                    .GetField("<Snapshot>k__BackingField", BindingFlags.Instance | BindingFlags.NonPublic).SetValue(state, published);
+                EditorApplication.update -= update;
+                if ((bool)Get("listening"))
+                    EditorApplication.update += update;
+                Events.registeredPackages -= registered;
+                if ((int)Get("observers") > 0 && !(bool)Get("shuttingDown"))
+                    Events.registeredPackages += registered;
+            }
+        }
+
         [Test]
         [Category("PackageManagerCompatibility")]
         public void NativeIntegration_DoesNotRegisterALegacyDetailsExtension()

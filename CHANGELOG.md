@@ -39,6 +39,8 @@ been published as a new release; existing `0.8.1` artifacts remain unchanged.
 
 ### Changed
 
+- Cancel active local status reads when the last Package Manager window closes,
+  discard their results, and coalesce a fresh read if the window reopens.
 - Remove the unused package-description and Git revision data paths left by
   the details panel cleanup. Repository links now resolve only their browser URL.
 

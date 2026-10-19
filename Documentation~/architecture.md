@@ -102,6 +102,10 @@ The deletion boundary rechecks the published metadata stamp before trusting a
 negative result. Its checkout protection uses the actual direct child path
 under `Packages/`, even when the folder name differs from the package ID;
 submodule classification retains its stricter matching-identity requirement.
+Closing the last observed window invalidates and cancels an active scan. Its
+result cannot publish, and each Git command checks cancellation before starting.
+Reopening queues a fresh generation after that worker drains.
+
 Classification distinguishes missing registration, missing gitlinks, package
 identity and path mismatches, and metadata-read failures. These conditions
 remain unverified and do not weaken deletion guards or trigger automatic repair.

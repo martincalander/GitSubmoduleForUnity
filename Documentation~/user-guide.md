@@ -82,9 +82,10 @@ Unity package before the page can display it. See
 
 ## Background Work
 
-Closing Package Manager stops its status observation and attachment work after
-any pending local read finishes. While it is open, the extension checks local
-Git metadata every two seconds and responds to package registration changes.
+Closing Package Manager stops status observation and attachment work. It
+cancels an active local read and releases its update callback after that read
+drains. While open, it checks local Git metadata every two seconds and responds
+to package registration changes.
 Ordinary asset edits do not launch Git status reads. An unchanged result keeps
 the existing package view instead of rebuilding it.
 

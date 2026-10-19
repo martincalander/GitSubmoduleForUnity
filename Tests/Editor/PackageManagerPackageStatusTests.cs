@@ -267,6 +267,20 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
         }
 
         [Test]
+        public void CancelledReadDoesNotStartGitEvenWhenItsWorkingDirectoryIsMissing()
+        {
+            using var cancellation = new CancellationTokenSource();
+            cancellation.Cancel();
+
+            var data = PackageManagerPackageStatus.ReadStatus(Path.Combine(root, "missing"), cancellation.Token);
+
+            Assert.That(data.Error, Is.EqualTo("Local Git status was cancelled."));
+            Assert.That(data.IndexPath, Is.Null);
+            Assert.That(data.FilesStamp, Is.Null);
+            Assert.That(Block(data), Is.True);
+        }
+
+        [Test]
         public void ReadsRealGitMetadataWithoutChangingRepositoryFiles()
         {
             RunGit("init --quiet");
