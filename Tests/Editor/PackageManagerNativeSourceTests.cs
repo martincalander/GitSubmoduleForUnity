@@ -197,6 +197,9 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
             using (fixture.Page)
             {
                 Assert.That(fixture.Page.TryAttach(out string error), Is.True, error);
+                // CoreCLR emits reflection invokers after the first call. Measure the warmed path.
+                for (int index = 0; index < 8; index++)
+                    Assert.That(fixture.Page.TryAttach(out error), Is.True, error);
                 long start = GC.GetAllocatedBytesForCurrentThread();
                 bool attached = true;
                 for (int index = 0; index < 100; index++)
