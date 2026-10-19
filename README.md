@@ -23,8 +23,6 @@ installation, conversion, and removal workflows, is preserved on
 
 - **Submodule** labels for installed package submodules.
 - Installation source and submodule status in the selected package's details.
-- **Submodules only** beside search in **Project > All Packages** to filter
-  installed submodules from any Git host.
 - Repository and package-folder shortcuts, plus a selectable source URL for
   verified submodules.
 - Requested Git revision and installed commit for UPM Git dependencies, using
@@ -61,22 +59,18 @@ simplified version, including Unity 7.
 
 1. Open **Window > Package Management > Package Manager**.
 2. Select an installed package to inspect its status and source.
-3. Enable **Submodules only** beside search in **Project > All Packages** to
-   view verified submodules from any host. Older Editors call this page
-   **In Project**. Choose **Sources > GitHub** for installed GitHub packages.
+3. Choose **Sources > GitHub** for installed GitHub packages.
 4. Use the selected package's source details to open its repository, reveal its
    installed folder, or inspect a UPM Git dependency's requested revision and
    installed commit.
 5. After changing submodules with Git, let Unity finish importing and refresh
    Package Manager.
 
-The filter works with Unity's search and sorting and starts off after closing
-Package Manager or reloading scripts. It does not add a separate sidebar page.
-
-The filter and GitHub source read local installed state. They do not browse your GitHub account,
-contact GitHub, or require GitHub CLI or account setup. An empty GitHub list is
-expected when no installed package uses GitHub. Source and revision details
-reuse the same cached installed state and add no remote checks.
+Package status and the GitHub source read local installed state. They do not
+browse your GitHub account, contact GitHub, or require GitHub CLI or account
+setup. An empty GitHub list is expected when no installed package uses GitHub.
+Source and revision details reuse the same cached installed state and add no
+remote checks.
 
 ## Editor Overhead
 

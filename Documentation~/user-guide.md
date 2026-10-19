@@ -1,8 +1,8 @@
 # User Guide
 
 Open **Window > Package Management > Package Manager**. Git Submodule Manager
-adds installed-package details, a **Submodules only** filter, and
-**Sources > GitHub** to Unity's native window. This is the current design on `main`. See
+adds installed-package details and **Sources > GitHub** to Unity's native window.
+This is the current design on `main`. See
 [compatibility](installation.md#unity) for the exact Editor targets and local
 verification limits.
 
@@ -12,6 +12,11 @@ An installed package recognised as a submodule is labelled **Submodule** in the
 package list. Select a package to see its installation source and submodule
 status in the details area. Other packages retain their Unity installation
 source, such as a registry, Git dependency, or local package.
+
+Submodule classification works across Git hosts, including private hosts and
+relative submodule URLs. A package must be installed and resolved by Unity and
+have a verified submodule registration to receive the label. Ordinary UPM Git
+dependencies retain their Git source even when hosted on the same server.
 
 While installed state is loading, the details area reports that the status is
 being checked. A failed read reports unavailable status rather than claiming
@@ -23,25 +28,6 @@ the extension does not repair registration or change files.
 Submodule status describes how the package is installed. It does not report
 whether the checkout is clean, up to date, or pushed. Use your Git client for
 those details.
-
-## Submodules Filter
-
-Choose **Project > All Packages** and enable **Submodules only** beside search.
-Older Editors call this page **In Project**. The toggle filters the existing
-list to packages verified as submodules of this project, across Git hosts,
-including private hosts and relative submodule URLs. It uses the same cached
-classification as the **Submodule** label. Unity's search and sorting continue
-to apply to the filtered list.
-
-Turn the toggle off to see the full list again. It applies only to this project
-page and starts off after closing Package Manager or reloading scripts.
-**Sources > GitHub** and other pages keep their own contents. There is no
-separate Submodules sidebar page.
-
-Ordinary UPM Git dependencies are not submodules and do not appear here. Neither
-do uninitialized submodules, packages that Unity has not resolved, or checkouts
-whose registration cannot be verified. Turn off the filter and select such a
-package to inspect its status explanation.
 
 ## GitHub Source
 
@@ -123,7 +109,7 @@ Git metadata every two seconds and responds to package registration changes.
 Ordinary asset edits do not launch Git status reads. An unchanged result keeps
 the existing package view instead of rebuilding it.
 
-The submodule filter, source shortcuts, revision details, and status explanations
+The source shortcuts, revision details, and status explanations
 reuse that installed-state snapshot. They add no startup scans, remote requests,
 Git commands, or polling. The extension performs no background network discovery.
 Its sidebar icons use small imports, and its native integration checks are

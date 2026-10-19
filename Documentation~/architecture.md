@@ -3,7 +3,7 @@
 ## Scope
 
 The `main` branch contains an Editor-only installed-package view. It classifies
-packages, labels and filters submodules, and lists installed GitHub packages in
+packages, labels submodules, and lists installed GitHub packages in
 Unity's native Package Manager. Selected-package details explain source metadata
 and provide repository, folder, and commit-copy shortcuts. Its scope is status
 and sources, with a small Editor footprint. It does not discover remote repositories, plan dependencies, or
@@ -22,8 +22,6 @@ Editor/
 │                               selected-package details and shortcuts
 ├── PackageManagerSubmoduleNativePage.cs
 │                               Sources > GitHub
-├── PackageManagerSubmoduleFilter.cs
-│                               Submodules only in the native project list
 └── PackageManagerSubmoduleHarmonyPatch.cs
                                 native labels and embedded-removal protection
 ```
@@ -37,10 +35,7 @@ Classification is presentation data. It is not proof that a checkout is clean,
 published, current, or safe to remove.
 
 The GitHub source includes installed GitHub submodules and UPM Git dependencies.
-The **Submodules only** toggle filters the native project package list to
-verified installed submodules across Git hosts. It appears beside search in
-**Project > All Packages**, called **In Project** in older Editors.
-Both reuse Unity's package records, search, sorting, and selection. There is no
+It reuses Unity's package records, search, sorting, and selection. There is no
 remote catalogue or synthetic uninstalled-package projection. The extension
 never adds display records to the project's manifest or lockfile and performs
 no account lookup or network scan.
@@ -66,14 +61,14 @@ The host owns extension registration and updates the public package-details
 extension when selection changes. Native page registration and package labels
 use guarded internal contracts. Each reflected seam is checked independently;
 an unavailable seam disables that feature without replacing unrelated Package
-Manager pages. GitHub remains under Sources. The submodule filter applies only
-to the native project package list and composes with its existing search and
-sorting. Its toggle state is not persisted and resets when Package Manager
-closes or scripts reload. Both predicates read cached installed state without
-additional scans, Git commands, network requests, or polling. The GitHub source
-and submodule filter have independently guarded attachment contracts. Failed
-filter attachment restores the full project list instead of leaving an active
-filter without its control.
+Manager pages. GitHub remains under Sources, and its membership predicate reads
+cached installed state. The native project package list keeps Unity's existing
+membership, search, and sorting. Submodule labels and selected-package details
+use the same cached classification across Git hosts.
+
+A saved selection of the retired Submodules page redirects to Unity's All
+Packages page during attachment. This recovery is guarded independently of
+GitHub source registration and leaves other selected pages unchanged.
 
 The details view keeps Unity's existing source URL for ordinary UPM Git
 dependencies and adds a selectable URL display for verified submodules.

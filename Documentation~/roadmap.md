@@ -10,8 +10,7 @@ workflows are preserved on
 ## Current Priorities
 
 - Keep submodules clearly distinguishable from ordinary Unity packages.
-- Keep the **Submodules only** filter focused on verified submodules across Git
-  hosts and **Sources > GitHub** limited to installed GitHub packages.
+- Keep **Sources > GitHub** limited to installed GitHub packages.
 - Make source URLs, package locations, and cached Git revisions easy to inspect
   without duplicating Unity's existing controls.
 - Explain uncertain classification without automatic repair or added Git reads.
