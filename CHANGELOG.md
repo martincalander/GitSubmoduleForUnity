@@ -40,6 +40,9 @@ been published as a new release; existing `0.8.1` artifacts remain unchanged.
 
 ### Changed
 
+- Reuse unchanged Git index and submodule registration results after bounded
+  content and repository-identity checks. Keep full reads for uncertain metadata.
+
 - Keep submodule classification in a small value containing only the repository
   URL and GitHub membership, without unused name or normalized-path copies.
 - Move the test-only assembly enumeration helper into the Editor test assembly.

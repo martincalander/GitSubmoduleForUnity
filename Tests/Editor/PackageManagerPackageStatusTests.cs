@@ -917,6 +917,225 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                 state.IsReady, state.Snapshot), Is.True, "Deletion must recheck metadata before using a negative cached result.");
         }
 
+        [TestCase(false, false, 1)]
+        [TestCase(true, false, 2)]
+        [TestCase(false, true, 2)]
+        [TestCase(true, true, 3)]
+        public void ReusesOnlyUnchangedMetadataIncludingEqualLengthAndTimestampChanges(bool changeIndex, bool changeModules, int expectedCommands)
+        {
+            CreateMetadataFixture();
+            var commands = new List<string>();
+            var first = ReadMetadataFixture(null, commands);
+            Assert.That(first.Error, Is.Empty);
+            Assert.That(commands.Count, Is.EqualTo(3));
+            if (changeIndex)
+                ReplacePreservingTimestamp(Path.Combine(root, ".git", "index"), "160000", "100644");
+            if (changeModules)
+                ReplacePreservingTimestamp(Path.Combine(root, ".gitmodules"), "example/package.git", "example/changed.git");
+            commands.Clear();
+            var next = ReadMetadataFixture(first, commands);
+            Assert.That(next.Error, Is.Empty);
+            Assert.That(next.FilesStamp, Is.Not.Null);
+            Assert.That(commands.Count, Is.EqualTo(expectedCommands));
+            Assert.That(next.Gitlinks.Contains(RelativePath), Is.EqualTo(!changeIndex));
+            Assert.That(next.Repositories[RelativePath], Is.EqualTo(changeModules ?
+                "https://github.com/example/changed.git" : "https://github.com/example/package.git"));
+            Assert.That(first.Gitlinks.Contains(RelativePath), Is.True);
+            Assert.That(first.Repositories[RelativePath], Is.EqualTo("https://github.com/example/package.git"));
+            next.Gitlinks.Clear();
+            next.Repositories.Clear();
+            Assert.That(first.Gitlinks, Is.Not.Empty, "Reused collections must be copied.");
+            Assert.That(first.Repositories, Is.Not.Empty);
+        }
+
+        [Test]
+        public void FailedMetadataSnapshotCannotSupplyCachedResults()
+        {
+            CreateMetadataFixture();
+            var commands = new List<string>();
+            var first = ReadMetadataFixture(null, commands);
+            first.Error = "Unverified";
+            commands.Clear();
+            Assert.That(ReadMetadataFixture(first, commands).Error, Is.Empty);
+            Assert.That(commands.Count, Is.EqualTo(3));
+        }
+
+        [Test]
+        public void MissingMetadataFilesCanBeReusedWithoutInventingRegistrations()
+        {
+            Directory.CreateDirectory(Path.Combine(root, ".git"));
+            var commands = new List<string>();
+            var first = ReadMetadataFixture(null, commands);
+            Assert.That(first.Error, Is.Empty);
+            Assert.That(commands.Count, Is.EqualTo(2));
+            commands.Clear();
+            var next = ReadMetadataFixture(first, commands);
+            Assert.That(next.Error, Is.Empty);
+            Assert.That(commands.Count, Is.EqualTo(1));
+            Assert.That(next.Gitlinks, Is.Empty);
+            Assert.That(next.Repositories, Is.Empty);
+        }
+
+        [TestCase(true)]
+        [TestCase(false)]
+        public void SplitOrOversizedIndexAlwaysUsesGitValidation(bool splitIndex)
+        {
+            CreateMetadataFixture();
+            if (!splitIndex)
+                using (var stream = File.OpenWrite(Path.Combine(root, ".git", "index")))
+                    stream.SetLength(4 * 1024 * 1024 + 1);
+            var commands = new List<string>();
+            var first = ReadMetadataFixture(null, commands, splitIndex, indexOutput: string.Empty);
+            Assert.That(first.Error, Is.Empty);
+            Assert.That(first.IndexFingerprint, Is.Null);
+            commands.Clear();
+            var next = ReadMetadataFixture(first, commands, splitIndex, indexOutput: string.Empty);
+            Assert.That(next.Error, Is.Empty);
+            Assert.That(commands.Count, Is.EqualTo(2));
+            Assert.That(commands[1], Does.StartWith("ls-files"));
+        }
+
+        [Test]
+        public void MetadataCacheStillRejectsOversizedModulesAndCancellation()
+        {
+            CreateMetadataFixture();
+            var commands = new List<string>();
+            var first = ReadMetadataFixture(null, commands);
+            File.WriteAllText(Path.Combine(root, ".gitmodules"), new string(' ', 128 * 1024 + 1));
+            commands.Clear();
+            Assert.That(ReadMetadataFixture(first, commands).Error, Does.Contain("too large"));
+            Assert.That(commands.Count, Is.EqualTo(1));
+            commands.Clear();
+            using (var cancellation = new CancellationTokenSource())
+            {
+                cancellation.Cancel();
+                Assert.That(ReadMetadataFixture(first, commands, token: cancellation.Token).Error, Does.Contain("cancelled"));
+            }
+            Assert.That(commands, Is.Empty);
+        }
+
+        [Test]
+        public void MetadataChangedDuringReadCannotPublishEvenWithItsOriginalTimestamp()
+        {
+            CreateMetadataFixture();
+            var commands = new List<string>();
+            var first = ReadMetadataFixture(null, commands);
+            ReplacePreservingTimestamp(Path.Combine(root, ".git", "index"), "160000", "100644");
+            var next = ReadMetadataFixture(first, commands, beforeCommand: arguments =>
+            {
+                if (arguments.StartsWith("ls-files", StringComparison.Ordinal))
+                    ReplacePreservingTimestamp(Path.Combine(root, ".gitmodules"), "example/package.git", "example/changed.git");
+            });
+            Assert.That(next.Error, Is.Empty);
+            Assert.That(next.FilesStamp, Is.Null);
+            Assert.That(new PackageManagerPackageStatus.StatusState().TryCompleteRefresh(root, next), Is.False);
+        }
+
+        [Test]
+        public void ChangedGitDirectoryIdentityInvalidatesBothMetadataCaches()
+        {
+            CreateMetadataFixture();
+            var commands = new List<string>();
+            var first = ReadMetadataFixture(null, commands);
+            commands.Clear();
+            var next = ReadMetadataFixture(first, commands, gitDirectory: Path.Combine(root, "different.git"));
+            Assert.That(next.Error, Is.Empty);
+            Assert.That(commands.Count, Is.EqualTo(3));
+        }
+
+        [Test]
+        public void RealSplitIndexRetainsGitValidationAndSubmoduleClassification()
+        {
+            RunGit("init --quiet");
+            WriteRegistration();
+            RunGit("update-index --add --cacheinfo 160000," + Commit + "," + RelativePath);
+            RunGit("update-index --split-index");
+            var first = PackageManagerPackageStatus.ReadStatus(root, CancellationToken.None);
+            var next = PackageManagerPackageStatus.ReadStatus(root, CancellationToken.None, first);
+            Assert.That(first.Error, Is.Empty);
+            Assert.That(next.Error, Is.Empty);
+            Assert.That(next.HasSharedIndex, Is.True);
+            Assert.That(next.IndexFingerprint, Is.Null);
+            Assert.That(next.Gitlinks.Contains(RelativePath), Is.True);
+            Assert.That(next.Repositories[RelativePath], Is.EqualTo("https://github.com/example/package.git"));
+        }
+
+        [Test]
+        public void CachedModulesAreRejectedWhenReplacedByASymlink()
+        {
+            if (Path.DirectorySeparatorChar == '\\')
+                Assert.Ignore("This fixture uses the Unix ln command to create a real file symlink.");
+            CreateMetadataFixture();
+            var commands = new List<string>();
+            var first = ReadMetadataFixture(null, commands);
+            string modules = Path.Combine(root, ".gitmodules");
+            string target = Path.Combine(root, "original-modules");
+            File.Move(modules, target);
+            using (var process = Process.Start(new ProcessStartInfo("ln", "-s \"" + target + "\" \"" + modules + "\"")
+            {
+                UseShellExecute = false, CreateNoWindow = true,
+                RedirectStandardOutput = true, RedirectStandardError = true
+            }))
+            {
+                Assert.That(process.WaitForExit(5000), Is.True);
+                Assert.That(process.ExitCode, Is.Zero, process.StandardError.ReadToEnd());
+            }
+            try
+            {
+                commands.Clear();
+                Assert.That(ReadMetadataFixture(first, commands).Error, Does.Contain("linked"));
+                Assert.That(commands.Count, Is.EqualTo(1));
+                Assert.That(File.ReadAllText(target), Does.Contain("https://github.com/example/package.git"));
+            }
+            finally { File.Delete(modules); }
+        }
+
+        [TestCase("relative.git", null)]
+        [TestCase("/valid.git\r\r", null)]
+        [TestCase("/valid.git", "\r\r")]
+        [TestCase("/valid.git", "bad\0shared")]
+        public void ReuseRequiresUnambiguousRepositoryIdentity(string directory, string sharedIndex)
+        {
+            var result = PackageManagerPackageStatus.ReadStatus(root, CancellationToken.None, null, (arguments, allowNoMatch) =>
+                "\n.git/index\n" + directory + "\n" + (sharedIndex == null ? string.Empty : sharedIndex + "\n"));
+            Assert.That(result.Error, Does.Contain("malformed"));
+        }
+
+        private void CreateMetadataFixture()
+        {
+            Directory.CreateDirectory(Path.Combine(root, ".git"));
+            File.WriteAllText(Path.Combine(root, ".git", "index"), "160000 " + Commit + " 0\t" + RelativePath + "\0");
+            File.WriteAllText(Path.Combine(root, ".gitmodules"), "submodule.example.path\n" + RelativePath + "\0" +
+                "submodule.example.url\nhttps://github.com/example/package.git\0");
+        }
+
+        private PackageManagerPackageStatus.StatusSnapshot ReadMetadataFixture(PackageManagerPackageStatus.StatusSnapshot previous,
+            List<string> commands, bool splitIndex = false, string gitDirectory = null, Action<string> beforeCommand = null,
+            string indexOutput = null, CancellationToken token = default)
+        {
+            return PackageManagerPackageStatus.ReadStatus(root, token, previous, (arguments, allowNoMatch) =>
+            {
+                commands.Add(arguments);
+                beforeCommand?.Invoke(arguments);
+                if (arguments.StartsWith("rev-parse", StringComparison.Ordinal))
+                    return "\n.git/index\n" + (gitDirectory ?? Path.Combine(root, ".git")) + "\n" +
+                        (splitIndex ? ".git/sharedindex.fixture\n" : string.Empty);
+                if (arguments.StartsWith("ls-files", StringComparison.Ordinal))
+                    return indexOutput ?? (File.Exists(Path.Combine(root, ".git", "index")) ?
+                        File.ReadAllText(Path.Combine(root, ".git", "index")) : string.Empty);
+                Assert.That(allowNoMatch, Is.True);
+                return File.ReadAllText(Path.Combine(root, ".gitmodules"));
+            });
+        }
+
+        private static void ReplacePreservingTimestamp(string path, string before, string after)
+        {
+            Assert.That(before.Length, Is.EqualTo(after.Length));
+            DateTime timestamp = File.GetLastWriteTimeUtc(path);
+            File.WriteAllText(path, File.ReadAllText(path).Replace(before, after));
+            File.SetLastWriteTimeUtc(path, timestamp);
+        }
+
         private PackageManagerPackageStatus.StatusSnapshot InstalledSnapshot()
         {
             var data = Snapshot();

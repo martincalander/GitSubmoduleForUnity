@@ -77,6 +77,8 @@ Package Manager releases its status observers and scheduled attachment work,
 cancels an active local read, and stops its update callback when that read drains.
 While open, it checks Git metadata every two seconds; ordinary asset edits do not
 trigger Git reads, and unchanged status does not rebuild package views.
+Background refreshes reuse unchanged Git metadata after content and repository
+identity checks, reducing repeated Git process launches.
 
 Native integration checks are cached, sidebar icons use 64-pixel imports, and
 the unused Newtonsoft dependency has been removed. Measurements show lower

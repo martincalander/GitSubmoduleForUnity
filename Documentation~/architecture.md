@@ -110,8 +110,15 @@ The deletion boundary rechecks the published metadata stamp before trusting a
 negative result. Its checkout protection uses the actual direct child path
 under `Packages/`, even when the folder name differs from the package ID;
 submodule classification retains its stricter matching-identity requirement.
-A local scan uses one Git command for repository root/index discovery, one for
-the package index, and one for `.gitmodules` when it exists. Closing the last
+Every local scan validates the repository root, resolved Git directory, and index
+location with Git. The background worker can reuse index and `.gitmodules`
+results independently when bounded content fingerprints and repository identity
+still match a successful snapshot. Timestamp and size alone cannot authorize
+reuse. Linked or oversized `.gitmodules` still fails closed. Split indexes and
+indexes too large to fingerprint retain full Git reads. A changed fingerprint
+during a scan rejects publication and queues a fresh read.
+A cold scan uses three Git commands when `.gitmodules` exists; a fully unchanged
+scan uses one, and a change to either metadata file normally uses two. Closing the last
 observed window invalidates and cancels an active scan. Its result cannot publish,
 and each Git command checks cancellation before starting. Reopening queues a
 fresh generation after that worker drains.

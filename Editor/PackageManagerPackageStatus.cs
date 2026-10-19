@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Reflection;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading;
@@ -58,6 +59,10 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             internal readonly Dictionary<string, string> Repositories = new Dictionary<string, string>(StringComparer.Ordinal);
             internal readonly HashSet<string> Gitlinks = new HashSet<string>(StringComparer.Ordinal);
             internal string IndexPath;
+            internal string GitDirectory;
+            internal string IndexFingerprint;
+            internal string ModulesFingerprint;
+            internal bool HasSharedIndex;
             internal string FilesStamp;
             internal string Error = string.Empty;
 
@@ -243,7 +248,8 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                     workerGeneration = generation;
                     cancellation = new CancellationTokenSource();
                     CancellationToken token = cancellation.Token;
-                    worker = Task.Run(() => ReadStatus(ProjectRoot, token));
+                    StatusSnapshot previous = snapshot;
+                    worker = Task.Run(() => ReadStatus(ProjectRoot, token, previous));
                 }
                 catch (Exception)
                 {
@@ -468,29 +474,120 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             catch (Exception) { return false; }
         }
 
-        internal static StatusSnapshot ReadStatus(string root, CancellationToken token)
+        internal static StatusSnapshot ReadStatus(string root, CancellationToken token) => ReadStatus(root, token, null);
+
+        internal static StatusSnapshot ReadStatus(string root, CancellationToken token, StatusSnapshot previous) =>
+            ReadStatus(root, token, previous, null);
+
+        internal static StatusSnapshot ReadStatus(string root, CancellationToken token, StatusSnapshot previous,
+            Func<string, bool, string> executeGit)
         {
             var result = new StatusSnapshot();
             try
             {
-                result.IndexPath = ParseRepositoryIndexPath(root,
-                    Git(root, "rev-parse --show-prefix --git-path index", token));
+                string ReadGit(string arguments, bool allowNoMatch = false)
+                {
+                    token.ThrowIfCancellationRequested();
+                    return executeGit != null ? executeGit(arguments, allowNoMatch) : Git(root, arguments, token, allowNoMatch);
+                }
+
+                ParseRepositoryLocation(root, ReadGit("rev-parse --show-prefix --git-path index --absolute-git-dir --shared-index-path"), result);
                 result.FilesStamp = FileStamp(root, result.IndexPath);
                 if (result.FilesStamp.IndexOf("unavailable", StringComparison.Ordinal) >= 0)
                     throw new InvalidDataException("Could not verify local Git metadata.");
-                ParseIndex(Git(root, "ls-files --stage -z -- Packages/", token), result);
                 string modules = Path.Combine(root, ".gitmodules");
-                if (File.Exists(modules))
+                bool hasModules = ValidateModulesFile(modules);
+                result.IndexFingerprint = result.HasSharedIndex ? null : Fingerprint(result.IndexPath, 4 * 1024 * 1024, token);
+                result.ModulesFingerprint = Fingerprint(modules, 128 * 1024, token);
+                bool canReuse = previous != null && string.IsNullOrEmpty(previous.Error) && previous.FilesStamp != null &&
+                    string.Equals(previous.GitDirectory, result.GitDirectory, PathComparison) && SamePath(previous.IndexPath, result.IndexPath);
+                if (canReuse && !previous.HasSharedIndex && result.IndexFingerprint != null && result.IndexFingerprint == previous.IndexFingerprint)
+                    result.Gitlinks.UnionWith(previous.Gitlinks);
+                else
+                    ParseIndex(ReadGit("ls-files --stage -z -- Packages/"), result);
+                if (hasModules)
                 {
-                    var file = new FileInfo(modules);
-                    if ((file.Attributes & FileAttributes.ReparsePoint) != 0 || file.Length > 128 * 1024)
-                        throw new InvalidDataException("The .gitmodules file is linked or too large.");
-                    ParseModules(Git(root, "config --no-includes -z --file .gitmodules --get-regexp ^submodule\\..*\\.(path|url)$", token, true), result);
+                    if (canReuse && result.ModulesFingerprint != null && result.ModulesFingerprint == previous.ModulesFingerprint)
+                        foreach (KeyValuePair<string, string> repository in previous.Repositories)
+                            result.Repositories.Add(repository.Key, repository.Value);
+                    else
+                        ParseModules(ReadGit("config --no-includes -z --file .gitmodules --get-regexp ^submodule\\..*\\.(path|url)$", true), result);
                 }
+                token.ThrowIfCancellationRequested();
+                if (hasModules != ValidateModulesFile(modules) ||
+                    result.IndexFingerprint != null && result.IndexFingerprint != Fingerprint(result.IndexPath, 4 * 1024 * 1024, token) ||
+                    result.ModulesFingerprint != null && result.ModulesFingerprint != Fingerprint(modules, 128 * 1024, token))
+                    result.FilesStamp = null;
+                token.ThrowIfCancellationRequested();
             }
             catch (OperationCanceledException) { result.Error = "Local Git status was cancelled."; }
             catch (Exception ex) { result.Error = ex is InvalidDataException ? ex.Message : "Could not read local Git status. Check that Git is installed and this project is a Git repository."; }
             return result;
+        }
+
+        private static bool ValidateModulesFile(string path)
+        {
+            try
+            {
+                FileAttributes attributes = File.GetAttributes(path);
+                if ((attributes & (FileAttributes.ReparsePoint | FileAttributes.Directory)) != 0 || new FileInfo(path).Length > 128 * 1024)
+                    throw new InvalidDataException("The .gitmodules file is linked or too large.");
+                return true;
+            }
+            catch (FileNotFoundException) { return false; }
+            catch (DirectoryNotFoundException) { return false; }
+        }
+
+        private static string Fingerprint(string path, int maximumBytes, CancellationToken token)
+        {
+            token.ThrowIfCancellationRequested();
+            try
+            {
+                if ((File.GetAttributes(path) & (FileAttributes.ReparsePoint | FileAttributes.Directory)) != 0)
+                    return null;
+                using (var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete))
+                using (var hash = SHA256.Create())
+                {
+                    if (stream.Length > maximumBytes)
+                        return null;
+                    var buffer = new byte[8192];
+                    int total = 0;
+                    int count;
+                    while ((count = stream.Read(buffer, 0, buffer.Length)) != 0)
+                    {
+                        token.ThrowIfCancellationRequested();
+                        total += count;
+                        if (total > maximumBytes)
+                            return null;
+                        hash.TransformBlock(buffer, 0, count, buffer, 0);
+                    }
+                    hash.TransformFinalBlock(Array.Empty<byte>(), 0, 0);
+                    return Convert.ToBase64String(hash.Hash);
+                }
+            }
+            catch (FileNotFoundException) { return "missing"; }
+            catch (DirectoryNotFoundException) { return "missing"; }
+            catch (IOException) { return null; }
+            catch (UnauthorizedAccessException) { return null; }
+        }
+
+        private static void ParseRepositoryLocation(string root, string text, StatusSnapshot result)
+        {
+            string[] lines = text?.Split('\n');
+            if (lines == null || (lines.Length != 4 && lines.Length != 5) || lines[lines.Length - 1].Length != 0)
+                throw new InvalidDataException("Git returned malformed repository location data.");
+            result.IndexPath = ParseRepositoryIndexPath(root, lines[0] + "\n" + lines[1] + "\n");
+            string directory = lines[2].EndsWith("\r", StringComparison.Ordinal) ? lines[2].Substring(0, lines[2].Length - 1) : lines[2];
+            if (!Path.IsPathRooted(directory) || directory.IndexOf('\0') >= 0 || directory.IndexOf('\r') >= 0)
+                throw new InvalidDataException("Git returned malformed repository location data.");
+            result.GitDirectory = Path.GetFullPath(directory);
+            result.HasSharedIndex = lines.Length == 5;
+            if (result.HasSharedIndex)
+            {
+                string shared = lines[3].EndsWith("\r", StringComparison.Ordinal) ? lines[3].Substring(0, lines[3].Length - 1) : lines[3];
+                if (string.IsNullOrWhiteSpace(shared) || shared.IndexOf('\0') >= 0 || shared.IndexOf('\r') >= 0)
+                    throw new InvalidDataException("Git returned malformed shared index data.");
+            }
         }
 
         internal static string ParseRepositoryIndexPath(string root, string text)
