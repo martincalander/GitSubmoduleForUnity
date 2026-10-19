@@ -42,7 +42,8 @@ been published as a new release; existing `0.8.1` artifacts remain unchanged.
 - Cancel active local status reads when the last Package Manager window closes,
   discard their results, and coalesce a fresh read if the window reopens.
 - Resolve the repository root and index in one Git command per local scan.
-- Reuse completed native hook installation.
+- Reuse completed native hook installation and unchanged submodule badge state.
+  Preserve native presentation changes and restore owned sizing when badges move.
 - Remove the unused package-description and Git revision data paths left by
   the details panel cleanup. Repository links now resolve only their browser URL.
 

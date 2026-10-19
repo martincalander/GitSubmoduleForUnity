@@ -49,6 +49,77 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
             Assert.That(label.text, Is.EqualTo("Custom"));
         }
 
+        [Test]
+        public void RepeatedTagRefresh_PreservesTheLatestNativePresentation()
+        {
+            var label = new Label("Custom") { tooltip = "Original tooltip" };
+            PackageManagerSubmoduleHarmonyPatch.ApplyTag(label, true);
+            label.text = "Git";
+            label.tooltip = "Updated native tooltip";
+            label.AddToClassList("disable-ellipsis");
+
+            PackageManagerSubmoduleHarmonyPatch.ApplyTag(label, true);
+            PackageManagerSubmoduleHarmonyPatch.ApplyTag(label, true);
+            PackageManagerSubmoduleHarmonyPatch.ApplyTag(label, false);
+
+            Assert.That(label.text, Is.EqualTo("Git"));
+            Assert.That(label.tooltip, Is.EqualTo("Updated native tooltip"));
+            Assert.That(label.ClassListContains("disable-ellipsis"), Is.True);
+        }
+
+        [Test]
+        public void RepeatedTagRefresh_PreservesANativeTooltipChange()
+        {
+            var label = new Label("Custom") { tooltip = "Original tooltip" };
+            PackageManagerSubmoduleHarmonyPatch.ApplyTag(label, true);
+            label.tooltip = "Updated native tooltip";
+
+            PackageManagerSubmoduleHarmonyPatch.ApplyTag(label, true);
+            PackageManagerSubmoduleHarmonyPatch.ApplyTag(label, false);
+
+            Assert.That(label.text, Is.EqualTo("Custom"));
+            Assert.That(label.tooltip, Is.EqualTo("Updated native tooltip"));
+            Assert.That(label.ClassListContains("disable-ellipsis"), Is.False);
+        }
+
+        [Test]
+        public void ReparentedTag_ReleasesThePreviousContainerAndFitsTheNewOne()
+        {
+            var previous = new VisualElement { name = "tagContainer" };
+            var current = new VisualElement { name = "tagContainer" };
+            var label = new Label("Custom");
+            previous.Add(label);
+            PackageManagerSubmoduleHarmonyPatch.ApplyTag(label, true);
+
+            current.Add(label);
+            PackageManagerSubmoduleHarmonyPatch.ApplyTag(label, true);
+
+            Assert.That(previous.style.maxWidth.keyword, Is.EqualTo(StyleKeyword.Null));
+            Assert.That(current.style.maxWidth.keyword, Is.EqualTo(StyleKeyword.None));
+            PackageManagerSubmoduleHarmonyPatch.ApplyTag(label, false);
+            Assert.That(current.style.maxWidth.keyword, Is.EqualTo(StyleKeyword.Null));
+            Assert.That(label.text, Is.EqualTo("Custom"));
+        }
+
+        [Test]
+        public void ReparentedTag_PreservesExplicitNativeContainerWidths()
+        {
+            var previous = new VisualElement { name = "tagContainer" };
+            var current = new VisualElement { name = "tagContainer" };
+            var label = new Label("Custom");
+            previous.Add(label);
+            PackageManagerSubmoduleHarmonyPatch.ApplyTag(label, true);
+            previous.style.maxWidth = 123;
+            current.style.maxWidth = 456;
+
+            current.Add(label);
+            PackageManagerSubmoduleHarmonyPatch.ApplyTag(label, true);
+            PackageManagerSubmoduleHarmonyPatch.ApplyTag(label, false);
+
+            Assert.That(previous.style.maxWidth.value.value, Is.EqualTo(123));
+            Assert.That(current.style.maxWidth.value.value, Is.EqualTo(456));
+        }
+
         [TestCase(true)]
         [TestCase(false)]
         public void EmbeddedRemoval_UsesTheExactSelectedIdentity(bool protectedCheckout)

@@ -89,8 +89,8 @@ source attachment fails closed if the hook could not be installed.
 
 Native-page contracts and reflected members are cached for the current code
 load. A complete hook installation is reused until teardown; incomplete seams
-remain eligible for another attempt. Reusing an attachment still checks its
-manager, page, and hierarchy.
+remain eligible for another attempt. Unchanged submodule badges retain their
+state and callback, and release owned width overrides when reparented. Reusing an attachment still checks its manager, page, and hierarchy.
 The compatibility gate and deletion guards remain independent.
 
 Only observed Package Manager sessions check `.gitmodules` and the Git index,

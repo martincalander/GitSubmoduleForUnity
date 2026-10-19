@@ -16,6 +16,8 @@ namespace MartinCalander.GitSubmoduleManager.Editor
     {
         internal const string HarmonyId = "com.martincalander.gitsubmodulemanager.package-status";
         private const string Prefix = "UnityEditor.PackageManager.UI.Internal.";
+        private const string SubmoduleTagText = "Submodule";
+        private const string SubmoduleTagTooltip = "Installed as a Git submodule under Packages/.";
         private const BindingFlags Instance = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
         private const BindingFlags Static = BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic;
         private static readonly ConditionalWeakTable<TextElement, TagState> Tags = new();
@@ -165,18 +167,24 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 return;
             if (Tags.TryGetValue(label, out TagState previous))
             {
+                if (submodule && label.text == SubmoduleTagText && label.tooltip == SubmoduleTagTooltip &&
+                    label.ClassListContains("disable-ellipsis"))
+                {
+                    FitTagContainer(label, previous);
+                    return;
+                }
                 // Native labels are recycled and can skip rebuilding an unchanged Custom tag.
-                if (label.text == "Submodule")
+                if (label.text == SubmoduleTagText)
                 {
                     label.text = previous.Text;
-                    label.tooltip = previous.Tooltip;
+                    if (label.tooltip == SubmoduleTagTooltip)
+                        label.tooltip = previous.Tooltip;
                     if (!previous.HadEllipsis)
                         label.RemoveFromClassList("disable-ellipsis");
                 }
                 if (previous.Attached != null)
                     label.UnregisterCallback(previous.Attached);
-                if (previous.Container != null && previous.Container.style.maxWidth.keyword == StyleKeyword.None)
-                    previous.Container.style.maxWidth = StyleKeyword.Null;
+                RestoreTagContainer(previous);
                 Tags.Remove(label);
             }
             if (!submodule)
@@ -191,18 +199,28 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             state.Attached = _ => FitTagContainer(label, state);
             label.RegisterCallback(state.Attached);
             Tags.Add(label, state);
-            label.text = "Submodule";
-            label.tooltip = "Installed as a Git submodule under Packages/.";
+            label.text = SubmoduleTagText;
+            label.tooltip = SubmoduleTagTooltip;
             label.AddToClassList("disable-ellipsis");
         }
 
         private static void FitTagContainer(TextElement label, TagState state)
         {
-            if (label.parent?.name == "tagContainer" && label.parent.style.maxWidth.keyword == StyleKeyword.Null)
+            VisualElement container = label.parent?.name == "tagContainer" ? label.parent : null;
+            if (!ReferenceEquals(state.Container, container))
+                RestoreTagContainer(state);
+            if (container != null && container.style.maxWidth.keyword == StyleKeyword.Null)
             {
-                state.Container = label.parent;
+                state.Container = container;
                 state.Container.style.maxWidth = StyleKeyword.None;
             }
+        }
+
+        private static void RestoreTagContainer(TagState state)
+        {
+            if (state.Container != null && state.Container.style.maxWidth.keyword == StyleKeyword.None)
+                state.Container.style.maxWidth = StyleKeyword.Null;
+            state.Container = null;
         }
 
         private static void SourcePostfix(object __instance, object __0)
