@@ -68,8 +68,8 @@ installation first. Do not create a second copy with the same package ID.
 
 ### Unity
 
-Local validation passed all 288 Editor tests on Unity `7000.0.0a10` on macOS.
-See the [verification record](../.github/CONTRIBUTING.md#details-cleanup-verification-on-2026-10-19)
+Local validation passed all 307 Editor tests on Unity `7000.0.0a10` on macOS.
+See the [verification record](../.github/CONTRIBUTING.md#performance-and-stability-verification-on-2026-10-19)
 for the exact checks and remaining untested targets.
 
 The compatibility gate retains exact Unity `6000.3.22f1`, Unity `6000.5.*f1`

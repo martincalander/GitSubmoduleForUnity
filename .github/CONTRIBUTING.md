@@ -19,7 +19,7 @@ published `0.8.1` artifacts still contain that implementation.
 - Git for preparing test repositories and managing the checkout.
 - Python 3 and Node.js for repository, Markdown, and packaging checks.
 
-See the [details cleanup verification](#details-cleanup-verification-on-2026-10-19)
+See the [performance and stability verification](#performance-and-stability-verification-on-2026-10-19)
 and the earlier records below for the checks performed on each change.
 Existing version gates do not imply
 that the current design has been retested across all supported targets. GitHub
@@ -420,3 +420,76 @@ consumer projects; startup and allocation benchmarks; and the unchanged Python
 repository test suite. No supplemental `dotnet build`, player build, signed
 release artifact, or GitHub CI run was performed. Local results do not establish
 release evidence for another Unity version, archive, or platform.
+
+## Performance and Stability Verification on 2026-10-19
+
+This local, uncommitted batch was verified in OpenSourceWorkspace with the
+existing Unity `7000.0.0a10` Editor on macOS, CLI `1.0.0-beta.13`, and Pipeline
+`0.8.0-exp.1`. The baseline was `cd45cbc` plus the uncommitted details cleanup
+described above. The measurements below isolate the subsequent performance work.
+
+- Fresh Unity compilation completed without compiler errors.
+- All 299 `PackageSourceFeatures` tests and all 105
+  `PackageManagerCompatibility` tests passed.
+- All 307 tests in the final Editor assembly passed, with no failures, skipped,
+  or inconclusive tests. This includes two Play Mode cycles with domain reload
+  disabled, with original Editor settings restored.
+- Fifteen live lifecycle assertions covered three close/reopen cycles during
+  active scans, cancellation, stale-result rejection, and script reload with
+  Package Manager open and closed. Closed-window reload started no status scan;
+  after cancellation drained, no sessions, observers, workers, attachment
+  retries, or package-owned Editor update callbacks remained.
+- Thirty live UI assertions checked both workspace submodules, a UPM Git
+  dependency, ordinary/empty/multiple selections, native Locate, Repository
+  link ordering, GitHub membership, sidebar reconstruction, and close/reopen.
+- Regression tests cover pre-cancelled reads, malformed combined Git output,
+  linked worktrees and paths with spaces, rapid reopen, recycled and reparented
+  labels, and repeat native hook installation.
+- The final Editor Console reported zero errors and warnings and no compilation
+  failure. Pipeline's retained buffer contained one five-second main-thread
+  request timeout during diagnostics; subsequent probes and tests completed.
+- Repository validation, all 13 Python repository tests, Markdown lint, package
+  dry run, and whitespace checks passed. All twelve audited DLL hashes remain
+  unchanged; no dependencies or import settings changed.
+
+A warmed probe used seven batches in the same Editor, with 1,000 badge calls,
+500 URL or membership calls, and 20 repeated installation calls per batch.
+Allocations use `GC.GetAllocatedBytesForCurrentThread`; timings exclude CLI
+transport and dynamic compilation. Hook-install measurements include reflection
+invocation. These are local operation costs, not whole Editor loading times.
+
+| Median allocation per call | Before | After |
+| --- | ---: | ---: |
+| Unchanged submodule badge | 196 bytes | 32 bytes |
+| Submodule repository URL | 4,560 bytes | 3,640 bytes |
+| UPM Git repository URL | 3,168 bytes | 2,136 bytes |
+| Repeated completed hook installation | 36,632 bytes | 0 bytes |
+| Unchanged GitHub membership control | 2,464 bytes | 2,464 bytes |
+
+The badge probe fell from 0.65 to 0.07 microseconds per call, and repeated hook
+installation from 42.59 to 0.04 microseconds. The unchanged membership control
+also changed from 11.56 to 5.42 microseconds, showing timing variability between
+runs. Allocation reductions are the stronger evidence for these small operations.
+The initial native hook installation still runs eagerly to preserve deletion
+protection; only repeated successful setup takes the fast path.
+
+A status scan with `.gitmodules` now uses three Git processes instead of four.
+A separate seven-sample interleaved probe of the same Git helper measured the
+two old repository-discovery commands at 204 ms median and the combined command
+at 100 ms. However, complete scan medians were 239 ms before and 245 ms after.
+Those full-scan probes ran synchronously for measurement; production scans run
+on a background task. They establish neither an overall scan speedup nor an
+Editor startup improvement. No cold Editor restart comparison was repeated.
+
+Production C# under `Editor/` decreased from 97,019 to 87,978 bytes, a reduction
+of 9,041 bytes (9.3%). The package archive remains approximately the same size:
+additional regression coverage and documentation offset the smaller product
+code, and the twelve audited DLLs still account for about 4.8 MB of its contents.
+
+Not retested: Unity `6000.3.22f1`, `6000.5.*f1`, `6000.6.0f1`,
+`6000.6.2f1`, `6000.7.0b1`, `6000.7.0b2`, `7000.0.0a7`,
+`7000.0.0a8`, and `7000.0.0a9`; Windows and Linux Editor execution; and the six
+consumer projects. No supplemental `dotnet build`, player build, signed release
+artifact, or GitHub CI run was performed. No commits or pushes were made.
+Local results do not establish release evidence for another commit, Unity
+version, archive, or platform.

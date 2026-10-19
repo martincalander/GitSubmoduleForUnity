@@ -79,7 +79,7 @@ Native integration checks are cached, sidebar icons use 64-pixel imports, and
 the unused Newtonsoft dependency has been removed. Measurements show lower
 allocation and icon-memory costs; isolated startup measurements did not establish
 a meaningful Editor launch speedup. See the
-[performance measurements](.github/CONTRIBUTING.md#performance-verification-on-2026-10-19).
+[performance measurements](.github/CONTRIBUTING.md#performance-and-stability-verification-on-2026-10-19).
 
 ## Unity Compatibility
 
