@@ -403,7 +403,8 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             info = default;
             return Property(version, "isInstalled") is bool installed && installed &&
                    !string.IsNullOrEmpty(name) && data.Packages.TryGetValue(name, out info) &&
-                   SamePath(Property(version, "localPath") as string, info.ResolvedPath);
+                   SamePath(Property(version, "localPath") as string, info.ResolvedPath) &&
+                   (Property(version, "packageId") as string) == info.PackageId;
         }
 
         internal static string GetRepositoryUrl(object version) => GetRepositoryUrl(ProjectRoot, version, snapshot);

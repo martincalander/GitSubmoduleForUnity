@@ -38,6 +38,9 @@ contains installed packages only, so an empty page is expected in a project
 without GitHub packages. Repositories that you own or can access do not appear
 unless a package from them is already installed.
 
+When Unity changes an installed package's source, GitHub membership waits for
+matching installed metadata instead of retaining the previous source's listing.
+
 Opening this page does not query GitHub, read account credentials, or require
 GitHub CLI. Private installed packages appear from their local source metadata.
 Their visibility does not grant access to teammates or build machines.

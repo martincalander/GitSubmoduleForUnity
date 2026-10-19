@@ -94,6 +94,9 @@ been published as a new release; existing `0.8.1` artifacts remain unchanged.
 
 ### Fixed
 
+- Require the current installed package identity to match cached GitHub source
+  membership, so a changed source cannot inherit the previous GitHub listing
+  while status refreshes.
 - Attach the GitHub source when Package Manager opens with no package selected
   or with several packages selected.
 - Protect Git checkouts in embedded folders whose names differ from their

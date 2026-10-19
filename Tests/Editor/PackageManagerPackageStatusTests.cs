@@ -574,7 +574,8 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
         {
             var data = InstalledSnapshot();
             object native = new { versions = new { primary = new { name = Name,
-                isInstalled = reason != "not-installed", localPath = packagePath } } };
+                isInstalled = reason != "not-installed", localPath = packagePath,
+                packageId = data.Packages[Name].PackageId } } };
             if (reason == "unregistered") data.Packages.Clear();
             if (reason == "error") data.Error = "Local Git status unavailable.";
             if (reason == "malformed-native") native = new object();
@@ -599,10 +600,42 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                     Name + "@https://github.com/example/package.git");
             }
             object native = new { versions = new { primary = new { name = Name, isInstalled = true,
-                localPath = nativePath == "different" ? packagePath + "-other" : packagePath } } };
-            if (nativePath == "missing") native = new { versions = new { primary = new { name = Name, isInstalled = true } } };
+                localPath = nativePath == "different" ? packagePath + "-other" : packagePath,
+                packageId = data.Packages[Name].PackageId } } };
+            if (nativePath == "missing") native = new { versions = new { primary = new { name = Name,
+                isInstalled = true, packageId = data.Packages[Name].PackageId } } };
 
             Assert.That(PackageManagerPackageStatus.IsGitHubPackage(root, native, data), Is.EqualTo(nativePath == "matching"));
+        }
+
+        [TestCase(false, "matching")]
+        [TestCase(false, "missing")]
+        [TestCase(false, "different")]
+        [TestCase(true, "matching")]
+        [TestCase(true, "missing")]
+        [TestCase(true, "different")]
+        public void GitHubPageRequiresTheNativeInstalledIdentityToMatchCachedRegistration(bool gitDependency, string identity)
+        {
+            var data = InstalledSnapshot();
+            if (gitDependency)
+            {
+                data.Repositories.Clear();
+                data.Gitlinks.Clear();
+                data.Packages[Name] = new PackageManagerPackageStatus.InstalledPackage(packagePath, PackageSource.Git,
+                    Name + "@https://github.com/example/package.git");
+            }
+            string id = identity == "matching" ? data.Packages[Name].PackageId :
+                identity == "missing" ? null : Name + "@https://gitlab.com/example/package.git";
+            object native = new { versions = new { primary = new { name = Name, isInstalled = true,
+                localPath = packagePath, packageId = id } } };
+            var state = new PackageManagerPackageStatus.StatusState();
+            state.CompleteRefresh(data);
+            state.BeginRefresh();
+
+            Assert.That(PackageManagerPackageStatus.IsGitHubPackage(root, native, state.Snapshot),
+                Is.EqualTo(identity == "matching"),
+                "Pending refresh may retain the published snapshot, but cannot apply its source to another installed identity.");
+            Assert.That(state.Snapshot, Is.SameAs(data));
         }
 
         [TestCase("registration")]

@@ -46,8 +46,9 @@ never adds display records to the project's manifest or lockfile and performs
 no account lookup or network scan.
 
 The installed snapshot binds each package's source, package ID, and resolved
-path. The Repository link requires that identity to match the current
-selection. A verified submodule's source comes from `.gitmodules`; a UPM Git
+path. GitHub membership and the Repository link require that identity to match
+Unity's current installed version, including while a new snapshot is pending.
+A verified submodule's source comes from `.gitmodules`; a UPM Git
 dependency's source comes from Unity's registered package metadata. Link
 resolution reuses existing reads without new Git commands, checkout `HEAD`
 reads, remote requests, or polling.
