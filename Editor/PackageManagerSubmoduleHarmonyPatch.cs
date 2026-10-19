@@ -20,6 +20,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         private const BindingFlags Static = BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic;
         private static readonly ConditionalWeakTable<TextElement, TagState> Tags = new();
         private static Harmony harmony;
+        private static bool installed;
         internal static string LastError { get; private set; } = string.Empty;
         internal static bool IsSidebarRepairInstalled { get; private set; }
 
@@ -34,12 +35,18 @@ namespace MartinCalander.GitSubmoduleManager.Editor
 
         internal static void Install()
         {
-            if (!PackageManagerUnityVersionSupport.IsCurrentVersionSupported)
+            if (installed || !PackageManagerUnityVersionSupport.IsCurrentVersionSupported)
                 return;
             harmony ??= new Harmony(HarmonyId);
             LastError = string.Empty;
+            bool hasTagTarget = false;
             foreach (MethodInfo target in TagTargets())
+            {
+                hasTagTarget = true;
                 Patch(target, target.IsStatic ? nameof(TagFactoryPostfix) : nameof(TagPostfix), false);
+            }
+            if (!hasTagTarget)
+                LastError += "Missing native contract for submodule labels. ";
             Patch(FindMethod("SourceInfoCard", "Refresh", typeof(void), "IPackageVersion"), nameof(SourcePostfix), false);
             Patch(FindMethod("RemoveCustomAction", "TriggerActionImplementation", typeof(bool), "IPackageVersion"), nameof(RemovePrefix), true);
             Patch(FindMethod("PackageOperationDispatcher", "RemoveEmbedded", typeof(void), "IPackage"), nameof(RemoveEmbeddedPrefix), true);
@@ -48,6 +55,8 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             Patch(sidebarRefresh, nameof(SidebarRefreshPostfix), false);
             IsSidebarRepairInstalled = IsPatched(sidebarRefresh);
             Patch(PackageRepositoryLink.GetRefreshTarget(), nameof(RepositoryLinksPostfix), false);
+            // Failed seams remain eligible for a later attempt; completed installs need no reflection or patch inspection.
+            installed = LastError.Length == 0 && IsSidebarRepairInstalled;
         }
 
         private static void Patch(MethodInfo target, string callback, bool prefix)
@@ -276,6 +285,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
 
         internal static void Uninstall()
         {
+            installed = false;
             IsSidebarRepairInstalled = false;
             if (harmony == null)
                 return;
