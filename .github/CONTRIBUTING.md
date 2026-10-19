@@ -652,3 +652,50 @@ consumer projects, other gated Unity versions (`6000.3.22f1`, `6000.5.*f1`,
 signing, release publication, or OpenUPM. The symlink fixture explicitly skips
 Windows; the SHA-256 fixture skips only if Git lacks that format. Neither was
 skipped on this machine. No branch or package was pushed.
+
+## Repeated Install and Removal Verification on 2026-10-19
+
+The real Git cycle was repeated against package commit `403d83a`, including the
+installed-identity fix, in the existing Unity `7000.0.0a10` Editor on macOS.
+CLI `1.0.0-beta.13`, Pipeline `0.8.0-exp.1`, and the same pinned PlayerPrefs
+Editor revision from the earlier cycle were used. No product code changed.
+
+- A real submodule installation registered as Embedded, displayed its Submodule
+  badge, appeared under GitHub, and had the correct Repository link.
+- Removing that checkout with its manifest dependency retained restored the
+  normal Git package and cleared its Submodule badge.
+- Reinstalling without a manifest entry and then removing the checkout removed
+  it from registration, GitHub, and the active In Project view. No removed
+  selection or stale Repository link remained.
+- Restoring the original manifest restored the Git dependency. Native package
+  IDs matched registration throughout the installed states. Removal protection
+  blocked the submodule and allowed the normal Git installation; the destructive
+  native removal action was not executed.
+
+The final run passed 95 live-state and cleanup assertions. Badges were observed
+before reselection; Repository links were checked after selecting the fixture.
+Unity selected another package during reload, so selection persistence across
+source changes is not claimed. Two probe assumptions were corrected: reflection
+needed an explicit overload, and an inactive native page's cached visual states
+were not evidence of its visible contents. Active-page checks passed.
+
+Every changed package state completed Unity compilation without C# errors.
+Three compile requests timed out during import/reload; fresh retries confirmed
+the completed state. A detached job record was lost at reload, so its completion
+was checked through a fresh compile request and status instead. Final Console
+counts were zero errors and one existing PlayerPrefs analyzer warning. Retained
+Pipeline timeout entries were not cleared. No manager integration error or
+product fix was needed.
+
+The manifest, lockfile, `.gitmodules`, and local Git configuration were restored
+byte for byte. Both original submodule branches and revisions were preserved.
+Temporary checkout and module storage were removed after ownership checks;
+generated Project Auditor defaults and Package Manager navigation were restored.
+Repository validation, Markdown lint, and whitespace checks passed.
+
+Not rerun: automated EditMode/PlayMode suites, the six consumer projects,
+Unity `6000.3.22f1`, `6000.5.*f1`, `6000.6.0f1`, `6000.6.2f1`, `6000.7.0b1`,
+`6000.7.0b2`, `7000.0.0a7`, `7000.0.0a8`, `7000.0.0a9`, Windows/Linux, player
+builds, package dry run, supplemental `dotnet build`, hosted CI, signing, release
+publication, or OpenUPM. This commit only records QA of unchanged product code.
+Nothing was pushed.
