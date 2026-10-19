@@ -482,11 +482,8 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             var result = new StatusSnapshot();
             try
             {
-                string prefix = Git(root, "rev-parse --show-prefix", token).TrimEnd('\r', '\n');
-                if (prefix.Length != 0)
-                    throw new InvalidDataException("The Unity project is not the Git repository root.");
-                string index = Git(root, "rev-parse --git-path index", token).TrimEnd('\r', '\n');
-                result.IndexPath = Path.GetFullPath(Path.IsPathRooted(index) ? index : Path.Combine(root, index));
+                result.IndexPath = ParseRepositoryIndexPath(root,
+                    Git(root, "rev-parse --show-prefix --git-path index", token));
                 result.FilesStamp = FileStamp(root, result.IndexPath);
                 if (result.FilesStamp.IndexOf("unavailable", StringComparison.Ordinal) >= 0)
                     throw new InvalidDataException("Could not verify local Git metadata.");
@@ -503,6 +500,20 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             catch (OperationCanceledException) { result.Error = "Local Git status was cancelled."; }
             catch (Exception ex) { result.Error = ex is InvalidDataException ? ex.Message : "Could not read local Git status. Check that Git is installed and this project is a Git repository."; }
             return result;
+        }
+
+        internal static string ParseRepositoryIndexPath(string root, string text)
+        {
+            string[] lines = text?.Split('\n');
+            if (lines == null || lines.Length != 3 || lines[2].Length != 0)
+                throw new InvalidDataException("Git returned malformed repository location data.");
+            if (lines[0].Length != 0 && lines[0] != "\r")
+                throw new InvalidDataException("The Unity project is not the Git repository root.");
+            string index = lines[1].EndsWith("\r", StringComparison.Ordinal)
+                ? lines[1].Substring(0, lines[1].Length - 1) : lines[1];
+            if (string.IsNullOrWhiteSpace(index) || index.IndexOf('\0') >= 0 || index.IndexOf('\r') >= 0)
+                throw new InvalidDataException("Git returned malformed repository location data.");
+            return Path.GetFullPath(Path.IsPathRooted(index) ? index : Path.Combine(root, index));
         }
 
         internal static void ParseIndex(string text, StatusSnapshot result)

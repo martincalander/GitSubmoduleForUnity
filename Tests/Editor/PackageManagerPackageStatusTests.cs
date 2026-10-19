@@ -280,6 +280,51 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
             Assert.That(Block(data), Is.True);
         }
 
+        [TestCase("\n.git/index\n")]
+        [TestCase("\r\n.git/index\r\n")]
+        public void CombinedRepositoryLocationResolvesTheProjectIndex(string text)
+        {
+            Assert.That(PackageManagerPackageStatus.ParseRepositoryIndexPath(root, text),
+                Is.EqualTo(Path.Combine(root, ".git", "index")));
+        }
+
+        [Test]
+        public void CombinedRepositoryLocationPreservesAbsolutePathsWithSpaces()
+        {
+            string index = Path.Combine(root, "linked worktree", "index");
+            Assert.That(PackageManagerPackageStatus.ParseRepositoryIndexPath(root, "\n" + index + "\n"), Is.EqualTo(index));
+        }
+
+        [TestCase(null)]
+        [TestCase("")]
+        [TestCase("\n")]
+        [TestCase("\n\n")]
+        [TestCase("\n \n")]
+        [TestCase("\n.git/index")]
+        [TestCase("\n.git/index\nextra\n")]
+        [TestCase("\n.git/index\n\n")]
+        [TestCase("\n.git/in\0dex\n")]
+        [TestCase("\n.git/index\r\r\n")]
+        [TestCase("Child/\n../.git/index\n")]
+        public void CombinedRepositoryLocationRejectsIncompleteOrAmbiguousOutput(string text)
+        {
+            Assert.Throws<InvalidDataException>(() => PackageManagerPackageStatus.ParseRepositoryIndexPath(root, text));
+        }
+
+        [Test]
+        public void NestedUnityProjectCannotUseItsParentRepositoryMetadata()
+        {
+            RunGit("init --quiet");
+            string nested = Path.Combine(root, "NestedProject");
+            Directory.CreateDirectory(nested);
+
+            var data = PackageManagerPackageStatus.ReadStatus(nested, CancellationToken.None);
+
+            Assert.That(data.Error, Is.EqualTo("The Unity project is not the Git repository root."));
+            Assert.That(data.IndexPath, Is.Null);
+            Assert.That(Block(data), Is.True);
+        }
+
         [Test]
         public void ReadsRealGitMetadataWithoutChangingRepositoryFiles()
         {
