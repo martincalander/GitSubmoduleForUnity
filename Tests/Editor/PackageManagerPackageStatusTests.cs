@@ -369,6 +369,189 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
             Assert.That(new PackageManagerPackageStatus.StatusState().TryCompleteRefresh(worktree, data), Is.True);
         }
 
+        [Test]
+        public void LinkedModulesFileFailsClosedWithoutReadingItsTarget()
+        {
+            if (Path.DirectorySeparatorChar == '\\')
+                Assert.Ignore("This fixture uses the Unix ln command to create a real file symlink.");
+            RunGit("init --quiet");
+            RunGit("update-index --add --cacheinfo 160000," + Commit + "," + RelativePath);
+            string target = Path.Combine(root, "linked-modules.config");
+            string modules = Path.Combine(root, ".gitmodules");
+            string contents = "[submodule \"example\"]\npath = " + RelativePath +
+                "\nurl = https://github.com/example/package.git\n";
+            File.WriteAllText(target, contents);
+            using (var process = Process.Start(new ProcessStartInfo("ln", "-s \"" + target + "\" \"" + modules + "\"")
+            {
+                UseShellExecute = false, CreateNoWindow = true,
+                RedirectStandardOutput = true, RedirectStandardError = true
+            }))
+            {
+                Assert.That(process.WaitForExit(5000), Is.True);
+                Assert.That(process.ExitCode, Is.Zero, process.StandardError.ReadToEnd());
+            }
+            try
+            {
+                Assert.That(new FileInfo(modules).Attributes & FileAttributes.ReparsePoint, Is.EqualTo(FileAttributes.ReparsePoint));
+                byte[] index = File.ReadAllBytes(Path.Combine(root, ".git", "index"));
+
+                var data = PackageManagerPackageStatus.ReadStatus(root, CancellationToken.None);
+
+                Assert.That(data.Error, Is.EqualTo("The .gitmodules file is linked or too large."));
+                Assert.That(data.Repositories, Is.Empty);
+                Assert.That(PackageManagerPackageStatus.TryClassify(root, Name, packagePath, data, out _), Is.False);
+                Assert.That(Block(data), Is.True);
+                Assert.That(File.ReadAllText(target), Is.EqualTo(contents));
+                Assert.That(File.ReadAllBytes(Path.Combine(root, ".git", "index")), Is.EqualTo(index));
+            }
+            finally
+            {
+                File.Delete(modules);
+            }
+        }
+
+        [Test]
+        public void OversizedModulesFileFailsClosedAndRecoversAfterReplacement()
+        {
+            RunGit("init --quiet");
+            RunGit("update-index --add --cacheinfo 160000," + Commit + "," + RelativePath);
+            string modules = Path.Combine(root, ".gitmodules");
+            string oversized = "#" + new string('x', 128 * 1024);
+            File.WriteAllText(modules, oversized);
+            byte[] index = File.ReadAllBytes(Path.Combine(root, ".git", "index"));
+
+            var failed = PackageManagerPackageStatus.ReadStatus(root, CancellationToken.None);
+
+            Assert.That(failed.Error, Is.EqualTo("The .gitmodules file is linked or too large."));
+            Assert.That(PackageManagerPackageStatus.TryClassify(root, Name, packagePath, failed, out _), Is.False);
+            Assert.That(Block(failed), Is.True);
+            Assert.That(File.ReadAllText(modules), Is.EqualTo(oversized));
+            Assert.That(File.ReadAllBytes(Path.Combine(root, ".git", "index")), Is.EqualTo(index));
+
+            WriteRegistration();
+            var recovered = PackageManagerPackageStatus.ReadStatus(root, CancellationToken.None);
+            Assert.That(recovered.Error, Is.Empty);
+            Assert.That(PackageManagerPackageStatus.TryClassify(root, Name, packagePath, recovered, out _), Is.True);
+            Assert.That(Block(recovered), Is.True);
+        }
+
+        [Test]
+        public void ModulesIncludesCannotSupplySubmoduleRegistrations()
+        {
+            RunGit("init --quiet");
+            RunGit("update-index --add --cacheinfo 160000," + Commit + "," + RelativePath);
+            string included = Path.Combine(root, "included.config");
+            string modules = Path.Combine(root, ".gitmodules");
+            string contents = "[submodule \"example\"]\npath = " + RelativePath +
+                "\nurl = https://github.com/example/package.git\n";
+            File.WriteAllText(included, contents);
+            const string include = "[include]\npath = included.config\n";
+            File.WriteAllText(modules, include);
+            byte[] index = File.ReadAllBytes(Path.Combine(root, ".git", "index"));
+
+            var data = PackageManagerPackageStatus.ReadStatus(root, CancellationToken.None);
+
+            Assert.That(data.Error, Is.Empty);
+            Assert.That(data.Repositories, Is.Empty);
+            Assert.That(data.Gitlinks, Does.Contain(RelativePath));
+            Assert.That(PackageManagerPackageStatus.TryClassify(root, Name, packagePath, data, out _), Is.False);
+            Assert.That(Block(data), Is.True);
+            Assert.That(File.ReadAllText(included), Is.EqualTo(contents));
+            Assert.That(File.ReadAllText(modules), Is.EqualTo(include));
+            Assert.That(File.ReadAllBytes(Path.Combine(root, ".git", "index")), Is.EqualTo(index));
+        }
+
+        [TestCase("GIT_DIR")]
+        [TestCase("GIT_WORK_TREE")]
+        [TestCase("GIT_INDEX_FILE")]
+        [TestCase("GIT_CONFIG_COUNT")]
+        public void InheritedGitEnvironmentCannotRedirectTheProjectScan(string variable)
+        {
+            RunGit("init --quiet");
+            RunGit("update-index --add --cacheinfo 160000," + Commit + "," + RelativePath);
+            WriteRegistration();
+            byte[] index = File.ReadAllBytes(Path.Combine(root, ".git", "index"));
+            byte[] modules = File.ReadAllBytes(Path.Combine(root, ".gitmodules"));
+            string unrelated = Path.Combine(root, "unrelated");
+            Directory.CreateDirectory(unrelated);
+            var replacements = new Dictionary<string, string> { [variable] = unrelated };
+            if (variable == "GIT_CONFIG_COUNT")
+            {
+                replacements[variable] = "1";
+                replacements["GIT_CONFIG_KEY_0"] = "core.bare";
+                replacements["GIT_CONFIG_VALUE_0"] = "true";
+            }
+            var saved = new Dictionary<string, string>();
+            PackageManagerPackageStatus.StatusSnapshot data;
+            try
+            {
+                foreach (KeyValuePair<string, string> entry in replacements)
+                {
+                    saved.Add(entry.Key, Environment.GetEnvironmentVariable(entry.Key));
+                    Environment.SetEnvironmentVariable(entry.Key, entry.Value);
+                }
+                data = PackageManagerPackageStatus.ReadStatus(root, CancellationToken.None);
+            }
+            finally
+            {
+                foreach (KeyValuePair<string, string> entry in saved)
+                    Environment.SetEnvironmentVariable(entry.Key, entry.Value);
+            }
+
+            Assert.That(data.Error, Is.Empty);
+            Assert.That(data.IndexPath, Is.EqualTo(Path.Combine(root, ".git", "index")));
+            Assert.That(PackageManagerPackageStatus.TryClassify(root, Name, packagePath, data, out _), Is.True);
+            Assert.That(File.ReadAllBytes(Path.Combine(root, ".git", "index")), Is.EqualTo(index));
+            Assert.That(File.ReadAllBytes(Path.Combine(root, ".gitmodules")), Is.EqualTo(modules));
+            Assert.That(Directory.GetFileSystemEntries(unrelated), Is.Empty);
+        }
+
+        [Test]
+        public void ReadsRealSha256GitlinksWhenGitSupportsThatObjectFormat()
+        {
+            int exit = ExecuteGit("init --quiet --object-format=sha256", out string error);
+            if (exit != 0 && (error.IndexOf("unknown option", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                error.IndexOf("unknown hash algorithm", StringComparison.OrdinalIgnoreCase) >= 0))
+                Assert.Ignore("This Git installation does not support SHA-256 repositories: " + error.Trim());
+            Assert.That(exit, Is.Zero, error);
+            RunGit("update-index --add --cacheinfo 160000," + new string('a', 64) + "," + RelativePath);
+            WriteRegistration();
+            byte[] index = File.ReadAllBytes(Path.Combine(root, ".git", "index"));
+
+            var data = PackageManagerPackageStatus.ReadStatus(root, CancellationToken.None);
+
+            Assert.That(data.Error, Is.Empty);
+            Assert.That(data.Gitlinks, Is.EquivalentTo(new[] { RelativePath }));
+            Assert.That(PackageManagerPackageStatus.TryClassify(root, Name, packagePath, data, out _), Is.True);
+            Assert.That(File.ReadAllBytes(Path.Combine(root, ".git", "index")), Is.EqualTo(index));
+        }
+
+        [Test]
+        public void RealConflictedGitlinkFailsClosedAndRecoversWhenResolved()
+        {
+            RunGit("init --quiet");
+            WriteRegistration();
+            RunGit("update-index --index-info", input:
+                "160000 " + Commit + " 1\t" + RelativePath + "\n" +
+                "160000 " + new string('a', 40) + " 2\t" + RelativePath + "\n" +
+                "160000 " + new string('b', 40) + " 3\t" + RelativePath + "\n");
+            byte[] index = File.ReadAllBytes(Path.Combine(root, ".git", "index"));
+
+            var conflicted = PackageManagerPackageStatus.ReadStatus(root, CancellationToken.None);
+
+            Assert.That(conflicted.Error, Is.EqualTo("The Git index contains malformed or conflicted package entries."));
+            Assert.That(PackageManagerPackageStatus.TryClassify(root, Name, packagePath, conflicted, out _), Is.False);
+            Assert.That(Block(conflicted), Is.True);
+            Assert.That(File.ReadAllBytes(Path.Combine(root, ".git", "index")), Is.EqualTo(index));
+
+            RunGit("update-index --force-remove -- " + RelativePath);
+            RunGit("update-index --add --cacheinfo 160000," + Commit + "," + RelativePath);
+            var resolved = PackageManagerPackageStatus.ReadStatus(root, CancellationToken.None);
+            Assert.That(resolved.Error, Is.Empty);
+            Assert.That(PackageManagerPackageStatus.TryClassify(root, Name, packagePath, resolved, out _), Is.True);
+            Assert.That(Block(resolved), Is.True);
+        }
+
         [TestCase("https://github.com/example/package.git", true)]
         [TestCase("https://gitlab.com/example/package.git", false)]
         [TestCase("ssh://git@example.invalid/example/package.git", false)]
@@ -725,16 +908,34 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
             return data;
         }
 
-        private void RunGit(string arguments, string workingDirectory = null)
+        private void WriteRegistration()
+        {
+            File.WriteAllText(Path.Combine(root, ".gitmodules"), "[submodule \"example\"]\npath = " + RelativePath +
+                "\nurl = https://github.com/example/package.git\n");
+        }
+
+        private void RunGit(string arguments, string workingDirectory = null, string input = null)
+        {
+            int exit = ExecuteGit(arguments, out string error, workingDirectory, input);
+            Assert.That(exit, Is.Zero, error);
+        }
+
+        private int ExecuteGit(string arguments, out string error, string workingDirectory = null, string input = null)
         {
             using (var process = Process.Start(new ProcessStartInfo("git", arguments)
             {
                 WorkingDirectory = workingDirectory ?? root, UseShellExecute = false, CreateNoWindow = true,
-                RedirectStandardOutput = true, RedirectStandardError = true
+                RedirectStandardOutput = true, RedirectStandardError = true, RedirectStandardInput = input != null
             }))
             {
+                if (input != null)
+                {
+                    process.StandardInput.Write(input);
+                    process.StandardInput.Close();
+                }
                 Assert.That(process.WaitForExit(5000), Is.True);
-                Assert.That(process.ExitCode, Is.Zero, process.StandardError.ReadToEnd());
+                error = process.StandardError.ReadToEnd();
+                return process.ExitCode;
             }
         }
 
