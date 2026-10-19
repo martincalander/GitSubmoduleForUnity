@@ -38,6 +38,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         {
             internal readonly VisualElement Root;
             internal readonly PackageManagerSubmoduleNativePage Page;
+            internal readonly PackageManagerSubmoduleNativePage Submodules;
             private IVisualElementScheduledItem retry;
             private int attempts;
             private bool attached;
@@ -48,8 +49,10 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             {
                 Root = root;
                 Page = new PackageManagerSubmoduleNativePage(root);
+                Submodules = new PackageManagerSubmoduleNativePage(root, true);
                 Root.RegisterCallback<DetachFromPanelEvent>(OnDetached);
                 Page.AttachmentInvalidated += OnAttachmentInvalidated;
+                Submodules.AttachmentInvalidated += OnAttachmentInvalidated;
             }
 
             internal void Start()
@@ -90,8 +93,10 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             {
                 if (disposed)
                     return;
-                attached = Page.TryAttach(out string error);
-                LastError = error;
+                bool sourceAttached = Page.TryAttach(out string sourceError);
+                bool submodulesAttached = Submodules.TryAttach(out string submodulesError);
+                attached = sourceAttached && submodulesAttached && Page.IsAttached && Submodules.IsAttached;
+                LastError = string.IsNullOrEmpty(sourceError) ? submodulesError : sourceError;
                 if (attached || ++attempts >= 50)
                 {
                     retry?.Pause();
@@ -108,7 +113,9 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 retry = null;
                 Root.UnregisterCallback<DetachFromPanelEvent>(OnDetached);
                 Page.AttachmentInvalidated -= OnAttachmentInvalidated;
+                Submodules.AttachmentInvalidated -= OnAttachmentInvalidated;
                 Page.Dispose();
+                Submodules.Dispose();
                 PackageManagerPackageStatus.Release();
             }
         }
@@ -179,6 +186,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             {
                 session.ScheduleAttachment();
                 session.Page.Refresh();
+                session.Submodules.Refresh();
                 PackageManagerSubmoduleHarmonyPatch.RefreshActivePage(session.Root);
             }
         }
@@ -204,24 +212,21 @@ namespace MartinCalander.GitSubmoduleManager.Editor
 
         private sealed class StatusDetails : IPackageManagerExtension
         {
-            private readonly HashSet<Label> labels = new();
+            private readonly HashSet<PackageStatusDetailsView> views = new();
             private PackageInfo selected;
 
             public VisualElement CreateExtensionUI()
             {
-                var label = new Label { name = "git-submodule-package-status" };
-                label.style.whiteSpace = WhiteSpace.Normal;
-                label.style.marginTop = 8;
-                label.style.marginBottom = 8;
-                label.RegisterCallback<AttachToPanelEvent>(_ =>
+                var view = new PackageStatusDetailsView();
+                view.RegisterCallback<AttachToPanelEvent>(_ =>
                 {
-                    labels.Add(label);
-                    ObserveAncestors(label);
-                    Refresh(label);
+                    views.Add(view);
+                    ObserveAncestors(view);
+                    view.Refresh(selected);
                 });
-                label.RegisterCallback<DetachFromPanelEvent>(_ => labels.Remove(label));
-                Refresh(label);
-                return label;
+                view.RegisterCallback<DetachFromPanelEvent>(_ => views.Remove(view));
+                view.Refresh(selected);
+                return view;
             }
 
             public void OnPackageSelectionChange(PackageInfo packageInfo)
@@ -236,20 +241,15 @@ namespace MartinCalander.GitSubmoduleManager.Editor
 
             internal void Refresh()
             {
-                foreach (Label label in labels)
-                    Refresh(label);
-            }
-
-            private void Refresh(Label label)
-            {
-                label.style.display = selected == null ? DisplayStyle.None : DisplayStyle.Flex;
-                label.text = selected == null ? string.Empty : PackageManagerPackageStatus.Describe(selected);
-                label.tooltip = selected?.resolvedPath ?? string.Empty;
+                foreach (PackageStatusDetailsView view in views)
+                    view.Refresh(selected);
             }
 
             internal void Clear()
             {
-                labels.Clear();
+                foreach (PackageStatusDetailsView view in views)
+                    view.Refresh(null);
+                views.Clear();
                 selected = null;
             }
         }

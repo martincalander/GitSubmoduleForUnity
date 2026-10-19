@@ -77,16 +77,21 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             internal readonly string ResolvedPath;
             internal readonly PackageSource Source;
             internal readonly string PackageId;
+            internal readonly string GitRevision;
+            internal readonly string GitHash;
 
-            internal InstalledPackage(string resolvedPath, PackageSource source, string packageId)
+            internal InstalledPackage(string resolvedPath, PackageSource source, string packageId,
+                string gitRevision = null, string gitHash = null)
             {
                 ResolvedPath = resolvedPath;
                 Source = source;
                 PackageId = packageId;
+                GitRevision = gitRevision;
+                GitHash = gitHash;
             }
 
             public bool Equals(InstalledPackage other) => ResolvedPath == other.ResolvedPath &&
-                Source == other.Source && PackageId == other.PackageId;
+                Source == other.Source && PackageId == other.PackageId && GitRevision == other.GitRevision && GitHash == other.GitHash;
         }
 
         internal sealed class StatusState
@@ -233,7 +238,8 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                     workerPackages = new Dictionary<string, InstalledPackage>(StringComparer.Ordinal);
                     foreach (PackageInfo package in PackageInfo.GetAllRegisteredPackages())
                         if (package != null && !string.IsNullOrEmpty(package.name))
-                            workerPackages[package.name] = new InstalledPackage(package.resolvedPath, package.source, package.packageId);
+                            workerPackages[package.name] = new InstalledPackage(package.resolvedPath, package.source, package.packageId,
+                                package.git?.revision, package.git?.hash);
                     workerGeneration = generation;
                     cancellation = new CancellationTokenSource();
                     CancellationToken token = cancellation.Token;
@@ -384,16 +390,53 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             catch (Exception) { return true; }
         }
 
-        internal static bool IsGitHubPackage(object nativePackage)
+        internal static bool IsGitHubPackage(object nativePackage) => IsGitHubPackage(ProjectRoot, nativePackage, snapshot);
+
+        internal static bool IsGitHubPackage(string projectRoot, object nativePackage, StatusSnapshot data)
         {
-            object version = Property(Property(nativePackage, "versions"), "primary");
-            string name = Property(version, "name") as string;
-            if (!(Property(version, "isInstalled") is bool installed) || !installed ||
-                string.IsNullOrEmpty(name) || !snapshot.Packages.TryGetValue(name, out InstalledPackage info))
+            if (!TryGetNativeInstalledPackage(nativePackage, data, out string name, out InstalledPackage info))
                 return false;
-            if (TryGetSubmodule(name, info.ResolvedPath, out PackageSubmoduleStatus status))
+            if (TryClassify(projectRoot, name, info.ResolvedPath, data, out PackageSubmoduleStatus status))
                 return status.IsGitHub;
             return info.Source == PackageSource.Git && IsGitHubUrl(PackageUrl(name, info.PackageId));
+        }
+
+        internal static bool IsSubmodulePackage(object nativePackage) => IsSubmodulePackage(ProjectRoot, nativePackage, snapshot);
+
+        internal static bool IsSubmodulePackage(string projectRoot, object nativePackage, StatusSnapshot data)
+        {
+            return TryGetNativeInstalledPackage(nativePackage, data, out string name, out InstalledPackage info) &&
+                   TryClassify(projectRoot, name, info.ResolvedPath, data, out _);
+        }
+
+        private static bool TryGetNativeInstalledPackage(object nativePackage, StatusSnapshot data,
+            out string name, out InstalledPackage info)
+        {
+            object version = Property(Property(nativePackage, "versions"), "primary");
+            name = Property(version, "name") as string;
+            info = default;
+            return Property(version, "isInstalled") is bool installed && installed &&
+                   !string.IsNullOrEmpty(name) && data.Packages.TryGetValue(name, out info) &&
+                   SamePath(Property(version, "localPath") as string, info.ResolvedPath);
+        }
+
+        internal static PackageSourceDetails GetSourceDetails(PackageInfo info)
+        {
+            return info == null ? PackageSourceDetails.Unavailable : GetSourceDetails(ProjectRoot, info.name,
+                info.resolvedPath, info.source, info.packageId, snapshot);
+        }
+
+        internal static PackageSourceDetails GetSourceDetails(string projectRoot, string name, string resolvedPath,
+            PackageSource source, string packageId, StatusSnapshot data)
+        {
+            if (!data.Packages.TryGetValue(name ?? string.Empty, out InstalledPackage installed) ||
+                !MatchesInstalled(installed, resolvedPath, source, packageId))
+                return PackageSourceDetails.Unavailable;
+            string url = source == PackageSource.Git ? PackageUrl(name, installed.PackageId) : string.Empty;
+            if (TryClassify(projectRoot, name, resolvedPath, data, out PackageSubmoduleStatus submodule))
+                url = submodule.RepositoryUrl;
+            return PackageSourceDetails.Create(installed.ResolvedPath, url, installed.GitRevision, installed.GitHash,
+                source == PackageSource.Git);
         }
 
         internal static string Describe(PackageInfo info) => Describe(info, IsReady, snapshot);
@@ -402,8 +445,13 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         {
             if (info == null)
                 return "Select an installed package to see its source.";
-            if (!data.Packages.TryGetValue(info.name ?? string.Empty, out InstalledPackage installed) ||
-                !SamePath(installed.ResolvedPath, info.resolvedPath))
+            return Describe(ProjectRoot, info.name, info.resolvedPath, info.source, info.packageId, ready, data);
+        }
+
+        internal static string Describe(string projectRoot, string name, string resolvedPath, PackageSource source,
+            string packageId, bool ready, StatusSnapshot data)
+        {
+            if (!data.Packages.TryGetValue(name ?? string.Empty, out InstalledPackage installed))
             {
                 if (!ready)
                     return "Checking package status...";
@@ -411,24 +459,49 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                     return "Package status unavailable. " + data.Error;
                 return "Not installed in this project.";
             }
-            if (TryClassify(ProjectRoot, info.name, info.resolvedPath, data, out _))
+            if (!MatchesInstalled(installed, resolvedPath, source, packageId))
+                return !ready ? "Checking package status..." :
+                    "The selected package does not match the installed version or location. Select the installed version or refresh Package Manager.";
+            if (TryClassify(projectRoot, name, resolvedPath, data, out _))
                 return "Git submodule (editable checkout)";
-            if (IsDirectPackage(ProjectRoot, info.name, info.resolvedPath))
+            if (TryGetDirectPackagePath(projectRoot, resolvedPath, out string relativePath))
             {
                 if (!ready)
                     return "Checking submodule status...";
                 if (!string.IsNullOrEmpty(data.Error))
-                    return "Submodule status unavailable. " + data.Error;
-                bool blocked = ShouldBlockEmbeddedRemoval(ProjectRoot, info.name, info.resolvedPath, ready, data, out bool refreshRequired);
+                    return "Submodule status unavailable. " + data.Error +
+                           " Inspect the project's .gitmodules file and Git index, then refresh Package Manager.";
+                bool blocked = ShouldBlockEmbeddedRemoval(projectRoot, name, resolvedPath, ready, data, out bool refreshRequired);
                 if (refreshRequired)
                     return "Checking submodule status...";
                 if (blocked)
-                    return "Git checkout. Its submodule registration could not be verified.";
+                {
+                    if (!IsDirectPackage(projectRoot, name, resolvedPath))
+                        return "Git checkout at " + relativePath + ". Its folder does not match package ID " + name +
+                               ". Inspect package.json and the package location before changing its submodule registration.";
+                    bool gitlink = data.Gitlinks.Contains(relativePath);
+                    bool registration = data.Repositories.ContainsKey(relativePath);
+                    if (gitlink && !registration)
+                        return "Git records this folder as a submodule, but its .gitmodules registration is missing. " +
+                               "Inspect the path and URL in .gitmodules, then refresh Package Manager.";
+                    if (registration && !gitlink)
+                        return ".gitmodules registers this folder, but the Git index has no matching submodule entry. " +
+                               "Inspect the parent repository's staged files, then refresh Package Manager.";
+                    if (ContainsPath(projectRoot, data.Gitlinks, relativePath) ||
+                        ContainsPath(projectRoot, data.Repositories.Keys, relativePath))
+                        return "The submodule metadata uses a different package path spelling. " +
+                               "Inspect the path in .gitmodules and the Git index, then refresh Package Manager.";
+                    return "Git checkout without a matching submodule registration or Git index entry. " +
+                           "Inspect .gitmodules and the parent repository's staged files to confirm how this package was installed.";
+                }
             }
-            return info.source == PackageSource.Git
+            return source == PackageSource.Git
                 ? "Git package (not a submodule)"
-                : info.source + " package (not a submodule)";
+                : source + " package (not a submodule)";
         }
+
+        private static bool MatchesInstalled(InstalledPackage installed, string resolvedPath, PackageSource source, string packageId) =>
+            SamePath(installed.ResolvedPath, resolvedPath) && installed.Source == source && installed.PackageId == packageId;
 
         private static string PackageUrl(string name, string packageId)
         {

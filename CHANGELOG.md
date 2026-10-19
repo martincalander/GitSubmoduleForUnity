@@ -15,6 +15,18 @@ been published as a new release; existing `0.8.1` artifacts remain unchanged.
 
 ### Added
 
+- Add **Project > Submodules**, a native list of verified installed submodules
+  across Git hosts, using the existing cached classification.
+- Add source details and shortcuts for installed packages: a copyable source URL
+  for verified submodules, repository links where a browser URL is known, and a
+  shortcut to reveal the resolved package folder. Ordinary UPM Git dependencies
+  keep Unity's native **Installed From** source URL.
+- Show requested Git revisions and installed commits for UPM Git dependencies,
+  with full commit copying, using Unity's cached metadata without remote checks.
+- Explain missing `.gitmodules` registration, missing Git index entries,
+  mismatched paths, and unavailable status, with guidance for inspecting the
+  existing project state.
+
 - Added exact Unity `7000.0.0a10` alpha compatibility while preserving the
   independently guarded Package Manager contracts and existing Unity targets.
 

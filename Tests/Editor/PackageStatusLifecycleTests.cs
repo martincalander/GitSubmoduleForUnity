@@ -133,6 +133,12 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                         BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic,
                         null, new[] { typeof(string) }, null).Invoke(sidebar, new object[] { "MyAssets" }) as VisualElement)?.parent;
                     Assert.That(rows[0].parent, Is.SameAs(sources));
+                    Assert.That(root.Q(PackageManagerSubmoduleNativePage.SubmodulesSidebarRowElementName), Is.Not.Null,
+                        "The Submodules view must survive disabled-domain-reload Play Mode.");
+                    Assert.That(PackageSourceDetails.Unavailable, Is.Not.Null);
+                    var details = new PackageStatusDetailsView();
+                    details.Refresh(null);
+                    Assert.That(details.Q<Button>("git-submodule-reveal-folder").enabledSelf, Is.False);
                     PackageManagerPackageStatus.Refresh();
                     double deadline = EditorApplication.timeSinceStartup + 20;
                     while (!PackageManagerPackageStatus.IsReady && EditorApplication.timeSinceStartup < deadline)

@@ -12,6 +12,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
 {
     [TestFixture]
     [Category("PackageManagerCompatibility")]
+    [Category("PackageSourceFeatures")]
     public sealed class PackageManagerNativeSourceTests
     {
         [TestCase("6000.3.22f1", true)]
@@ -109,27 +110,31 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
             Assert.That(PackageManagerSubmoduleHarmonyPatch.IsSidebarRepairInstalled, Is.True);
         }
 
-        [Test]
-        public void NativePageArguments_UseInstalledMembershipWithoutDiscoveryFilters()
+        [TestCase(false)]
+        [TestCase(true)]
+        public void NativePageArguments_UseInstalledMembershipWithoutDiscoveryFilters(bool submodulesOnly)
         {
-            object args = PackageManagerSubmoduleNativePage.CreateExtensionPageArgs();
+            object args = PackageManagerSubmoduleNativePage.CreateExtensionPageArgs(submodulesOnly);
             Assert.That(ReadField(args, "name"),
-                Is.EqualTo(PackageManagerSubmoduleNativePage.ExtensionPageName));
-            Assert.That(ReadField(args, "displayName"), Is.EqualTo("GitHub"));
+                Is.EqualTo(submodulesOnly ? PackageManagerSubmoduleNativePage.SubmodulesPageName :
+                    PackageManagerSubmoduleNativePage.ExtensionPageName));
+            Assert.That(ReadField(args, "displayName"), Is.EqualTo(submodulesOnly ? "Submodules" : "GitHub"));
             Assert.That(ReadField(args, "supportedStatusFilters"), Is.Empty);
             Assert.That(ReadField(args, "supportedSortOptions"), Has.Length.EqualTo(2));
             Assert.That(ReadField(args, "refreshOptions").ToString(), Is.EqualTo("UpmList"));
 
             var predicate = (Delegate)ReadField(args, "filter");
             Assert.That(predicate.Method.DeclaringType, Is.EqualTo(typeof(PackageManagerPackageStatus)));
+            Assert.That(predicate.Method.Name, Is.EqualTo(submodulesOnly ? "IsSubmodulePackage" : "IsGitHubPackage"));
             Assert.That(predicate.DynamicInvoke(new object[] { null }), Is.False);
         }
 
-        [Test]
-        public void NativePageArguments_ReuseDelegatesButDoNotShareMutableArguments()
+        [TestCase(false)]
+        [TestCase(true)]
+        public void NativePageArguments_ReuseDelegatesButDoNotShareMutableArguments(bool submodulesOnly)
         {
-            object first = PackageManagerSubmoduleNativePage.CreateExtensionPageArgs();
-            object second = PackageManagerSubmoduleNativePage.CreateExtensionPageArgs();
+            object first = PackageManagerSubmoduleNativePage.CreateExtensionPageArgs(submodulesOnly);
+            object second = PackageManagerSubmoduleNativePage.CreateExtensionPageArgs(submodulesOnly);
             var firstSort = (Array)ReadField(first, "supportedSortOptions");
             var secondSort = (Array)ReadField(second, "supportedSortOptions");
             firstSort.SetValue(firstSort.GetValue(1), 0);
@@ -139,7 +144,8 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
             Assert.That(secondSort, Is.Not.SameAs(firstSort));
             Assert.That(secondSort.GetValue(0).ToString(), Is.EqualTo("NameAsc"));
             Assert.That(ReadField(second, "name"),
-                Is.EqualTo(PackageManagerSubmoduleNativePage.ExtensionPageName));
+                Is.EqualTo(submodulesOnly ? PackageManagerSubmoduleNativePage.SubmodulesPageName :
+                    PackageManagerSubmoduleNativePage.ExtensionPageName));
             Assert.That(ReadField(second, "filter"), Is.SameAs(ReadField(first, "filter")));
             Assert.That(ReadField(second, "getGroupName"), Is.SameAs(ReadField(first, "getGroupName")));
         }
@@ -158,10 +164,11 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
             Assert.That(bytes, Is.LessThan(4096), "Warm compatibility checks must not recreate native arguments.");
         }
 
-        [Test]
-        public void AttachedNativePage_ReusesValidAttachmentWithoutRebuildingTheSidebar()
+        [TestCase(false)]
+        [TestCase(true)]
+        public void AttachedNativePage_ReusesValidAttachmentWithoutRebuildingTheSidebar(bool submodulesOnly)
         {
-            var fixture = new AttachmentFixture();
+            var fixture = new AttachmentFixture(submodulesOnly);
             using (fixture.Page)
             {
                 Assert.That(fixture.Page.TryAttach(out string error), Is.True, error);
@@ -178,13 +185,17 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
             }
         }
 
-        [TestCase("row")]
-        [TestCase("sidebar")]
-        [TestCase("manager")]
-        [TestCase("page")]
-        public void RecycledNativeState_DoesNotAcceptThePreviousAttachment(string recycled)
+        [TestCase("row", false)]
+        [TestCase("sidebar", false)]
+        [TestCase("manager", false)]
+        [TestCase("page", false)]
+        [TestCase("row", true)]
+        [TestCase("sidebar", true)]
+        [TestCase("manager", true)]
+        [TestCase("page", true)]
+        public void RecycledNativeState_DoesNotAcceptThePreviousAttachment(string recycled, bool submodulesOnly)
         {
-            var fixture = new AttachmentFixture();
+            var fixture = new AttachmentFixture(submodulesOnly);
             using (fixture.Page)
             {
                 if (recycled == "row")
@@ -194,7 +205,9 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                 else if (recycled == "manager")
                     fixture.Root.pageManager = new NativeManagerStub();
                 else
-                    fixture.Root.pageManager.orderedExtensionPages = new[] { new NativePageStub(PackageManagerSubmoduleNativePage.ExtensionPageId) };
+                    fixture.Root.pageManager.orderedExtensionPages = new[] { new NativePageStub(
+                        submodulesOnly ? PackageManagerSubmoduleNativePage.SubmodulesPageId :
+                            PackageManagerSubmoduleNativePage.ExtensionPageId) };
 
                 Assert.That(fixture.Page.TryAttach(out string error), Is.False);
                 Assert.That(error, Is.Not.Empty);
@@ -231,10 +244,11 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
             }
         }
 
-        [Test]
-        public void NativeSidebarRefresh_InvalidatesAnAttachedRowOnlyForItsOwnSidebar()
+        [TestCase(false)]
+        [TestCase(true)]
+        public void NativeSidebarRefresh_InvalidatesAnAttachedRowOnlyForItsOwnSidebar(bool submodulesOnly)
         {
-            var fixture = new AttachmentFixture();
+            var fixture = new AttachmentFixture(submodulesOnly);
             int invalidations = 0;
             fixture.Page.AttachmentInvalidated += () => invalidations++;
             using (fixture.Page)
@@ -242,10 +256,13 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                 PackageManagerSubmoduleNativePage.NotifySidebarRefreshed(new VisualElement());
                 Assert.That(invalidations, Is.Zero);
                 Assert.That(fixture.Page.TryAttach(out string error), Is.True, error);
+                Assert.That(fixture.Page.IsAttached, Is.True);
 
                 fixture.Sidebar.Add(new VisualElement { name = "new-native-extension-row" });
                 PackageManagerSubmoduleNativePage.NotifySidebarRefreshed(fixture.Sidebar);
                 Assert.That(invalidations, Is.EqualTo(1));
+                Assert.That(fixture.Page.IsAttached, Is.False,
+                    "Registering another owned page can invalidate this attachment during the same retry tick.");
                 Assert.That(fixture.Row.parent, Is.SameAs(fixture.Sources));
                 Assert.That(fixture.Page.TryAttach(out _), Is.False,
                     "A still-attached row must not bypass repair after native row recreation.");
@@ -294,7 +311,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
         }
 
         [UnityTest]
-        public IEnumerator NativeSidebarRecreation_RepairsTheSourceWithoutDuplicateRows()
+        public IEnumerator NativeSidebarRecreation_RepairsBothViewsInTheirOwnGroupsWithoutDuplicateRows()
         {
             Type windowType = typeof(UnityEditor.PackageManager.UI.IPackageManagerExtension).Assembly
                 .GetType(GitSubmoduleManagerPackageManagerHost.WindowTypeName);
@@ -305,6 +322,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
             bool ownsWindow = window == null;
             window = window != null ? window : EditorWindow.GetWindow(windowType);
             PackageManagerSubmoduleNativePage page = null;
+            PackageManagerSubmoduleNativePage submodules = null;
             try
             {
                 VisualElement root = null;
@@ -315,30 +333,49 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                 }
                 Assert.That(root, Is.Not.Null);
                 page = new PackageManagerSubmoduleNativePage(root);
+                submodules = new PackageManagerSubmoduleNativePage(root, true);
                 Assert.That(page.TryAttach(out string error), Is.True, error);
+                Assert.That(submodules.TryAttach(out error), Is.True, error);
+                Assert.That(page.TryAttach(out error), Is.True, error);
+                Assert.That(page.IsAttached && submodules.IsAttached, Is.True);
                 VisualElement sidebar = FindElement(root, PackageManagerSubmoduleNativePage.SidebarTypeName);
                 Assert.That(sidebar, Is.Not.Null);
                 var rows = new List<VisualElement>();
-                CollectGitHubRows(sidebar, rows);
+                CollectRows(sidebar, rows, PackageManagerSubmoduleNativePage.ExtensionPageId);
                 Assert.That(rows, Has.Count.EqualTo(1));
                 bool repairRequested = false;
+                bool submodulesRepairRequested = false;
                 page.AttachmentInvalidated += () => repairRequested = true;
+                submodules.AttachmentInvalidated += () => submodulesRepairRequested = true;
 
                 PackageManagerSubmoduleNativePage.GetSidebarRefreshTarget().Invoke(sidebar, null);
                 Assert.That(repairRequested, Is.True);
+                Assert.That(submodulesRepairRequested, Is.True);
                 VisualElement currentSources = (sidebar.GetType().GetMethod("GetRow",
                     BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic,
                     null, new[] { typeof(string) }, null).Invoke(sidebar, new object[] { "MyAssets" }) as VisualElement)?.parent;
                 Assert.That(currentSources, Is.Not.Null);
+                VisualElement currentProject = (sidebar.GetType().GetMethod("GetRow",
+                    BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic,
+                    null, new[] { typeof(string) }, null).Invoke(sidebar, new object[] { "InProject" }) as VisualElement)?.parent;
+                Assert.That(currentProject, Is.Not.Null);
+                Assert.That(currentProject, Is.Not.SameAs(currentSources));
                 Assert.That(page.TryAttach(out error), Is.True, error);
+                Assert.That(submodules.TryAttach(out error), Is.True, error);
                 rows.Clear();
-                CollectGitHubRows(sidebar, rows);
+                CollectRows(sidebar, rows, PackageManagerSubmoduleNativePage.ExtensionPageId);
                 Assert.That(rows, Has.Count.EqualTo(1));
                 Assert.That(rows[0].parent, Is.SameAs(currentSources));
+                rows.Clear();
+                CollectRows(sidebar, rows, PackageManagerSubmoduleNativePage.SubmodulesPageId);
+                Assert.That(rows, Has.Count.EqualTo(1));
+                Assert.That(rows[0].parent, Is.SameAs(currentProject));
+                Assert.That(rows[0].name, Is.EqualTo(PackageManagerSubmoduleNativePage.SubmodulesSidebarRowElementName));
             }
             finally
             {
                 page?.Dispose();
+                submodules?.Dispose();
                 if (ownsWindow && window != null)
                     window.Close();
             }
@@ -469,6 +506,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
         }
 
         [TestCase("Extension/git-submodule-manager", true)]
+        [TestCase("Extension/git-submodule-manager-submodules", false)]
         [TestCase("Extension/another-package", false)]
         [TestCase("InProject", false)]
         [TestCase("Extension/Git-Submodule-Manager", false)]
@@ -478,6 +516,21 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
             Assert.That(PackageManagerSubmoduleNativePage.IsGitHubPage(new NativePageStub(id)),
                 Is.EqualTo(expected));
             Assert.That(PackageManagerSubmoduleNativePage.IsGitHubPage(null), Is.False);
+        }
+
+        [TestCase("Extension/git-submodule-manager-submodules", true, true)]
+        [TestCase("Extension/git-submodule-manager", false, true)]
+        [TestCase("Extension/another-package", false, false)]
+        [TestCase("InProject", false, false)]
+        [TestCase("Extension/Git-Submodule-Manager-Submodules", false, false)]
+        [TestCase(null, false, false)]
+        public void SubmodulesPageIdentity_ClaimsOnlyItsOwnPage(string id, bool expectedSubmodules, bool expectedOwned)
+        {
+            var page = new NativePageStub(id);
+            Assert.That(PackageManagerSubmoduleNativePage.IsSubmodulesPage(page), Is.EqualTo(expectedSubmodules));
+            Assert.That(PackageManagerSubmoduleNativePage.IsOwnedPage(page), Is.EqualTo(expectedOwned));
+            Assert.That(PackageManagerSubmoduleNativePage.IsSubmodulesPage(null), Is.False);
+            Assert.That(PackageManagerSubmoduleNativePage.IsOwnedPage(null), Is.False);
         }
 
         private static VisualElement FindElement(VisualElement element, string typeName)
@@ -493,14 +546,14 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
             return null;
         }
 
-        private static void CollectGitHubRows(VisualElement element, List<VisualElement> rows)
+        private static void CollectRows(VisualElement element, List<VisualElement> rows, string pageId)
         {
             if (element.GetType().FullName == PackageManagerSubmoduleNativePage.SidebarRowTypeName &&
                 (string)PackageManagerSubmoduleHarmonyPatch.Read(element, "pageId") ==
-                PackageManagerSubmoduleNativePage.ExtensionPageId)
+                pageId)
                 rows.Add(element);
             foreach (VisualElement child in element.Children())
-                CollectGitHubRows(child, rows);
+                CollectRows(child, rows, pageId);
         }
 
         private static object ReadField(object instance, string name)
@@ -530,16 +583,18 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
             internal readonly VisualElement Row = new() { name = "existing-row" };
             internal readonly PackageManagerSubmoduleNativePage Page;
 
-            internal AttachmentFixture()
+            internal AttachmentFixture(bool submodulesOnly = false)
             {
                 Root.Add(Sidebar);
                 Sidebar.Add(Sources);
                 Sources.Add(Row);
-                Page = new PackageManagerSubmoduleNativePage(Root);
+                if (submodulesOnly)
+                    Root.pageManager.orderedExtensionPages = new[] { new NativePageStub(PackageManagerSubmoduleNativePage.SubmodulesPageId) };
+                Page = new PackageManagerSubmoduleNativePage(Root, submodulesOnly);
                 Set("pageManager", Root.pageManager);
                 Set("page", Root.pageManager.orderedExtensionPages[0]);
                 Set("sidebar", Sidebar);
-                Set("sources", Sources);
+                Set("group", Sources);
                 TrackRow();
             }
 

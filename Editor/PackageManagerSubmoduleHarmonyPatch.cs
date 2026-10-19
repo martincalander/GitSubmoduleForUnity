@@ -243,7 +243,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
 
         private static void RefreshPostfix(object __0)
         {
-            if (PackageManagerSubmoduleNativePage.IsGitHubPage(__0))
+            if (PackageManagerSubmoduleNativePage.IsOwnedPage(__0))
                 PackageManagerPackageStatus.Refresh();
         }
 
@@ -253,7 +253,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             {
                 object manager = Read(root, "m_PageManager") ?? Read(root, "pageManager");
                 object page = Read(manager, "activePage");
-                if (page == null || PackageManagerSubmoduleNativePage.IsGitHubPage(page))
+                if (page == null || PackageManagerSubmoduleNativePage.IsOwnedPage(page))
                     return;
                 MethodInfo rebuild = page.GetType().GetMethod("Rebuild", Instance, null, new[] { typeof(bool) }, null);
                 if (rebuild != null && rebuild.ReturnType == typeof(void))
