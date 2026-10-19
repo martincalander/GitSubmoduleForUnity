@@ -88,12 +88,49 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             internal readonly string ResolvedPath;
             internal readonly PackageSource Source;
             internal readonly string PackageId;
+            private readonly string normalizedPath;
+            private readonly GitSource gitSource;
+
+            private sealed class GitSource
+            {
+                internal readonly int NameLength;
+                internal readonly bool IsGitHub;
+                internal readonly string RepositoryUrl;
+
+                internal GitSource(string packageId, int nameLength)
+                {
+                    NameLength = nameLength;
+                    string url = packageId.Substring(nameLength + 1);
+                    IsGitHub = IsGitHubUrl(url);
+                    RepositoryUrl = PackageSourceDetails.GetRepositoryUrl(url);
+                }
+            }
 
             internal InstalledPackage(string resolvedPath, PackageSource source, string packageId)
             {
                 ResolvedPath = resolvedPath;
                 Source = source;
                 PackageId = packageId;
+                normalizedPath = NormalizePath(resolvedPath);
+                if (string.Equals(normalizedPath, resolvedPath, StringComparison.Ordinal))
+                    normalizedPath = resolvedPath;
+                int separator = source == PackageSource.Git && packageId != null ? packageId.IndexOf('@') : -1;
+                gitSource = separator > 0 ? new GitSource(packageId, separator) : null;
+            }
+
+            internal bool MatchesPath(string path) => normalizedPath != null && !string.IsNullOrEmpty(path) &&
+                (string.Equals(normalizedPath, path, PathComparison) ||
+                 string.Equals(normalizedPath, NormalizePath(path), PathComparison));
+
+            internal bool IsGitHubSource(string name) => gitSource != null && HasPackagePrefix(name, PackageId) &&
+                (name.Length == gitSource.NameLength ? gitSource.IsGitHub : IsGitHubUrl(PackageUrl(name, PackageId)));
+
+            internal string GetRepositoryUrl(string name)
+            {
+                if (gitSource == null || !HasPackagePrefix(name, PackageId))
+                    return string.Empty;
+                return name.Length == gitSource.NameLength ? gitSource.RepositoryUrl :
+                    PackageSourceDetails.GetRepositoryUrl(PackageUrl(name, PackageId));
             }
 
             public bool Equals(InstalledPackage other) => ResolvedPath == other.ResolvedPath &&
@@ -339,20 +376,45 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             status = default;
             return string.IsNullOrEmpty(Error) &&
                    snapshot.Packages.TryGetValue(name ?? string.Empty, out InstalledPackage registered) &&
-                   SamePath(registered.ResolvedPath, resolvedPath) &&
-                   TryClassify(ProjectRoot, name, resolvedPath, snapshot, out status);
+                   registered.MatchesPath(resolvedPath) &&
+                   TryClassifyInstalled(ProjectRoot, name, registered, snapshot, out status);
         }
 
         internal static bool TryClassify(string projectRoot, string name, string resolvedPath,
             StatusSnapshot data, out PackageSubmoduleStatus status)
         {
             status = default;
-            if (!string.IsNullOrEmpty(data.Error) || !IsDirectPackage(projectRoot, name, resolvedPath) ||
-                !data.Gitlinks.Contains("Packages/" + name) ||
-                !data.Repositories.TryGetValue("Packages/" + name, out string url))
+            if (!TryGetSubmoduleRepository(name, data, out string url) ||
+                !IsDirectPackage(projectRoot, name, resolvedPath))
                 return false;
             status = new PackageSubmoduleStatus(url, IsGitHubUrl(url));
             return true;
+        }
+
+        private static bool TryClassifyInstalled(string projectRoot, string name, InstalledPackage installed,
+            StatusSnapshot data, out PackageSubmoduleStatus status)
+        {
+            status = default;
+            if (!TryGetInstalledSubmoduleRepository(projectRoot, name, installed, data, out string url))
+                return false;
+            status = new PackageSubmoduleStatus(url, IsGitHubUrl(url));
+            return true;
+        }
+
+        private static bool TryGetInstalledSubmoduleRepository(string projectRoot, string name, InstalledPackage installed,
+            StatusSnapshot data, out string url)
+        {
+            return TryGetSubmoduleRepository(name, data, out url) && PackageName.IsMatch(name) &&
+                   installed.MatchesPath(Path.Combine(projectRoot, "Packages", name));
+        }
+
+        private static bool TryGetSubmoduleRepository(string name, StatusSnapshot data, out string url)
+        {
+            url = null;
+            if (!string.IsNullOrEmpty(data.Error) || string.IsNullOrEmpty(name))
+                return false;
+            string path = "Packages/" + name;
+            return data.Gitlinks.Contains(path) && data.Repositories.TryGetValue(path, out url);
         }
 
         internal static bool ShouldBlockEmbeddedRemoval(string name, string resolvedPath)
@@ -420,9 +482,9 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         {
             if (!TryGetNativeInstalledPackage(nativePackage, data, out string name, out InstalledPackage info))
                 return false;
-            if (TryClassify(projectRoot, name, info.ResolvedPath, data, out PackageSubmoduleStatus status))
+            if (TryClassifyInstalled(projectRoot, name, info, data, out PackageSubmoduleStatus status))
                 return status.IsGitHub;
-            return info.Source == PackageSource.Git && IsGitHubUrl(PackageUrl(name, info.PackageId));
+            return info.IsGitHubSource(name);
         }
 
         private static bool TryGetNativeInstalledPackage(object nativePackage, StatusSnapshot data,
@@ -433,7 +495,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             info = default;
             return Property(version, "isInstalled") is bool installed && installed &&
                    !string.IsNullOrEmpty(name) && data.Packages.TryGetValue(name, out info) &&
-                   SamePath(Property(version, "localPath") as string, info.ResolvedPath) &&
+                   info.MatchesPath(Property(version, "localPath") as string) &&
                    (Property(version, "packageId") as string) == info.PackageId;
         }
 
@@ -444,21 +506,21 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             string name = Property(version, "name") as string;
             if (Property(version, "isInstalled") is not true || string.IsNullOrEmpty(name) ||
                 !data.Packages.TryGetValue(name, out InstalledPackage installed) ||
-                !SamePath(Property(version, "localPath") as string, installed.ResolvedPath) ||
+                !installed.MatchesPath(Property(version, "localPath") as string) ||
                 (Property(version, "packageId") as string) != installed.PackageId)
                 return string.Empty;
-            string url = installed.Source == PackageSource.Git ? PackageUrl(name, installed.PackageId) : string.Empty;
-            if (TryClassify(projectRoot, name, installed.ResolvedPath, data, out PackageSubmoduleStatus submodule))
-                url = submodule.RepositoryUrl;
-            return PackageSourceDetails.GetRepositoryUrl(url);
+            return TryGetInstalledSubmoduleRepository(projectRoot, name, installed, data, out string url)
+                ? PackageSourceDetails.GetRepositoryUrl(url) : installed.GetRepositoryUrl(name);
         }
 
         private static string PackageUrl(string name, string packageId)
         {
-            string prefix = name + "@";
-            return packageId != null && packageId.StartsWith(prefix, StringComparison.Ordinal)
-                ? packageId.Substring(prefix.Length) : string.Empty;
+            return HasPackagePrefix(name, packageId) ? packageId.Substring(name.Length + 1) : string.Empty;
         }
+
+        private static bool HasPackagePrefix(string name, string packageId) =>
+            !string.IsNullOrEmpty(name) && packageId != null && packageId.Length > name.Length &&
+            packageId[name.Length] == '@' && packageId.StartsWith(name, StringComparison.Ordinal);
 
         private static object Property(object value, string name)
         {
@@ -496,6 +558,20 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                     Path.GetFullPath(right).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar), PathComparison);
             }
             catch (Exception) { return false; }
+        }
+
+        private static string NormalizePath(string path)
+        {
+            if (string.IsNullOrEmpty(path))
+                return null;
+            try
+            {
+                string fullPath = Path.GetFullPath(path);
+                string normalized = fullPath.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+                string root = Path.GetPathRoot(fullPath);
+                return normalized.Length < root.Length ? root : normalized;
+            }
+            catch (Exception) { return null; }
         }
 
         internal static StatusSnapshot ReadStatus(string root, CancellationToken token) => ReadStatus(root, token, null);

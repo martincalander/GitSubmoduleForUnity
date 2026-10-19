@@ -40,6 +40,9 @@ been published as a new release; existing `0.8.1` artifacts remain unchanged.
 
 ### Changed
 
+- Reduce repeated installed-path validation and UPM Git URL parsing while keeping
+  package identity checks at the native presentation boundary.
+
 - Reuse Unity's accepted installed-package snapshot for Git-only changes. Package
   registration, reopening, and explicit refresh still capture current packages.
 

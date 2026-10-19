@@ -51,6 +51,110 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
             Assert.That(PackageManagerPackageStatus.TryClassify(root, Name, packagePath, Snapshot(), out _), Is.True);
         }
 
+        [TestCase("", "")]
+        [TestCase(".", "")]
+        [TestCase("", ".")]
+        [TestCase("../" + Name, "../" + Name)]
+        public void InstalledSourceMatchesEquivalentPathsWithoutWeakeningIdentity(string registeredSuffix, string nativeSuffix)
+        {
+            string id = Name + "@https://github.com/example/package.git";
+            var data = new PackageManagerPackageStatus.StatusSnapshot();
+            data.Packages.Add(Name, new PackageManagerPackageStatus.InstalledPackage(
+                Path.Combine(packagePath, registeredSuffix), PackageSource.Git, id));
+            object version = NativeVersion(Path.Combine(packagePath, nativeSuffix), id);
+            object native = new { versions = new { primary = version } };
+
+            Assert.That(PackageManagerPackageStatus.IsGitHubPackage(root, native, data), Is.True);
+            Assert.That(PackageManagerPackageStatus.GetRepositoryUrl(root, version, data),
+                Is.EqualTo("https://github.com/example/package"));
+            Assert.That(data.Packages[Name].MatchesPath(packagePath + "-other"), Is.False);
+        }
+
+        [TestCase(null)]
+        [TestCase("")]
+        [TestCase("\0")]
+        public void IdenticalInvalidRegisteredAndNativePathsRemainUnverified(string path)
+        {
+            string id = Name + "@https://github.com/example/package.git";
+            var installed = new PackageManagerPackageStatus.InstalledPackage(path, PackageSource.Git, id);
+            var data = new PackageManagerPackageStatus.StatusSnapshot();
+            data.Packages.Add(Name, installed);
+            object version = new { name = Name, isInstalled = true, localPath = path, packageId = id };
+            object native = new { versions = new { primary = version } };
+
+            Assert.That(installed.MatchesPath(path), Is.False);
+            Assert.That(PackageManagerPackageStatus.IsGitHubPackage(root, native, data), Is.False);
+            Assert.That(PackageManagerPackageStatus.GetRepositoryUrl(root, version, data), Is.Empty);
+        }
+
+        [Test]
+        public void RegisteredFilesystemRootNeverMatchesAnEmptyNativePath()
+        {
+            string filesystemRoot = Path.GetPathRoot(packagePath);
+            var installed = new PackageManagerPackageStatus.InstalledPackage(filesystemRoot, PackageSource.Git,
+                Name + "@https://github.com/example/package.git");
+
+            Assert.That(installed.MatchesPath(filesystemRoot), Is.True);
+            Assert.That(installed.MatchesPath(string.Empty), Is.False);
+            Assert.That(installed.MatchesPath(null), Is.False);
+        }
+
+        [Test]
+        public void DerivedGitSourceStillRequiresTheRegisteredPackageNamePrefix()
+        {
+            string id = "com.example.other@https://github.com/example/package.git";
+            var data = new PackageManagerPackageStatus.StatusSnapshot();
+            data.Packages.Add(Name, new PackageManagerPackageStatus.InstalledPackage(packagePath, PackageSource.Git, id));
+            object version = NativeVersion(packagePath, id);
+
+            Assert.That(PackageManagerPackageStatus.IsGitHubPackage(root,
+                new { versions = new { primary = version } }, data), Is.False);
+            Assert.That(PackageManagerPackageStatus.GetRepositoryUrl(root, version, data), Is.Empty);
+        }
+
+        [Test]
+        public void DerivedGitSourceChangesWithTheInstalledIdentityAndSanitizesItsLink()
+        {
+            string originalId = Name + "@git+https://user:secret@github.com/example/package.git?path=/Packages/test#main";
+            string replacementId = Name + "@https://gitlab.com/example/replacement.git";
+            var data = new PackageManagerPackageStatus.StatusSnapshot();
+            data.Packages.Add(Name, new PackageManagerPackageStatus.InstalledPackage(packagePath, PackageSource.Git, originalId));
+            object original = NativeVersion(packagePath, originalId);
+
+            Assert.That(PackageManagerPackageStatus.IsGitHubPackage(root,
+                new { versions = new { primary = original } }, data), Is.True);
+            Assert.That(PackageManagerPackageStatus.GetRepositoryUrl(root, original, data),
+                Is.EqualTo("https://github.com/example/package"));
+
+            data.Packages[Name] = new PackageManagerPackageStatus.InstalledPackage(packagePath, PackageSource.Git, replacementId);
+            object replacement = NativeVersion(packagePath, replacementId);
+            Assert.That(PackageManagerPackageStatus.IsGitHubPackage(root,
+                new { versions = new { primary = original } }, data), Is.False);
+            Assert.That(PackageManagerPackageStatus.GetRepositoryUrl(root, original, data), Is.Empty);
+            Assert.That(PackageManagerPackageStatus.IsGitHubPackage(root,
+                new { versions = new { primary = replacement } }, data), Is.False);
+            Assert.That(PackageManagerPackageStatus.GetRepositoryUrl(root, replacement, data),
+                Is.EqualTo("https://gitlab.com/example/replacement"));
+        }
+
+        [Test]
+        public void InstalledSubmoduleReadsCurrentRepositoryAndGitlinkEntries()
+        {
+            var data = InstalledSnapshot();
+            object version = NativeVersion();
+            object native = new { versions = new { primary = version } };
+            Assert.That(PackageManagerPackageStatus.IsGitHubPackage(root, native, data), Is.True);
+
+            data.Repositories[RelativePath] = "https://gitlab.com/example/replacement.git";
+            Assert.That(PackageManagerPackageStatus.IsGitHubPackage(root, native, data), Is.False);
+            Assert.That(PackageManagerPackageStatus.GetRepositoryUrl(root, version, data),
+                Is.EqualTo("https://gitlab.com/example/replacement"));
+
+            data.Gitlinks.Clear();
+            Assert.That(PackageManagerPackageStatus.GetRepositoryUrl(root, version, data), Is.Empty);
+            Assert.That(PackageManagerPackageStatus.TryClassify(root, Name, packagePath, data, out _), Is.False);
+        }
+
         [TestCase("com.example.other", "Packages/com.example.package")]
         [TestCase("com.example.package", "Packages/com.example.other")]
         [TestCase("com.example.package", "Library/PackageCache/com.example.package")]

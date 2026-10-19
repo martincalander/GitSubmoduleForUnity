@@ -35,9 +35,11 @@ Classification is presentation data. It is not proof that a checkout is clean,
 published, current, or safe to remove.
 
 Successful classification returns a small immutable value containing the
-repository URL and GitHub membership. It does not allocate a result object or
-retain duplicate package-name and normalized-path fields. Installed identity
-and path validation remain in the classification boundary.
+repository URL and GitHub membership. Cheap metadata misses return before path
+normalization. Each installed-package record validates its path once and retains
+its derived Git URL information. Native presentation still checks installed
+identity and path; equivalent paths are normalized and malformed paths fail
+closed. Submodule registration changes remain visible in the current snapshot.
 
 The GitHub source includes installed GitHub submodules and UPM Git dependencies.
 It reuses Unity's package records, search, sorting, and selection. There is no
