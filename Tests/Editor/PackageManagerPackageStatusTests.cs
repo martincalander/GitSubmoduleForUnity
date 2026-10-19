@@ -10,6 +10,7 @@ using PackageInfo = UnityEditor.PackageManager.PackageInfo;
 
 namespace MartinCalander.GitSubmoduleManager.Editor.Tests
 {
+    [Category("PackageSourceFeatures")]
     public sealed class PackageManagerPackageStatusTests
     {
         private const string Name = "com.example.package";
@@ -334,6 +335,157 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                 Is.EqualTo("Not installed in this project."));
         }
 
+        [TestCase("https://github.com/example/package.git")]
+        [TestCase("https://gitlab.com/example/package.git")]
+        [TestCase("ssh://git@example.invalid/example/package.git")]
+        public void SubmodulePageUsesCachedInstalledClassificationForEveryHost(string url)
+        {
+            var data = InstalledSnapshot();
+            data.Repositories[RelativePath] = url;
+            object native = new { versions = new { primary = new { name = Name, isInstalled = true, localPath = packagePath } } };
+
+            Assert.That(PackageManagerPackageStatus.IsSubmodulePackage(root, native, data), Is.True);
+            data.Repositories.Clear();
+            Assert.That(PackageManagerPackageStatus.IsSubmodulePackage(root, native, data), Is.False);
+        }
+
+        [TestCase("not-installed")]
+        [TestCase("unregistered")]
+        [TestCase("different-path")]
+        [TestCase("error")]
+        [TestCase("malformed-native")]
+        [TestCase("missing-native-path")]
+        [TestCase("different-native-path")]
+        public void SubmodulePageRejectsUnverifiedOrUninstalledPackages(string reason)
+        {
+            var data = InstalledSnapshot();
+            object native = new { versions = new { primary = new { name = Name, isInstalled = reason != "not-installed",
+                localPath = reason == "different-native-path" ? packagePath + "-other" : packagePath } } };
+            if (reason == "unregistered") data.Packages.Clear();
+            if (reason == "different-path") data.Packages[Name] = new PackageManagerPackageStatus.InstalledPackage(
+                Path.Combine(root, "Library", "PackageCache", Name), PackageSource.Git, Name + "@https://github.com/example/package.git");
+            if (reason == "error") data.Error = "Local Git status unavailable.";
+            if (reason == "malformed-native") native = new object();
+            if (reason == "missing-native-path") native = new { versions = new { primary = new { name = Name, isInstalled = true } } };
+
+            Assert.That(PackageManagerPackageStatus.IsSubmodulePackage(root, native, data), Is.False);
+        }
+
+        [TestCase(false, "matching")]
+        [TestCase(false, "missing")]
+        [TestCase(false, "different")]
+        [TestCase(true, "matching")]
+        [TestCase(true, "missing")]
+        [TestCase(true, "different")]
+        public void GitHubPageRequiresTheNativeInstalledPathToMatchCachedRegistration(bool gitDependency, string nativePath)
+        {
+            var data = InstalledSnapshot();
+            if (gitDependency)
+            {
+                data.Repositories.Clear();
+                data.Gitlinks.Clear();
+                data.Packages[Name] = new PackageManagerPackageStatus.InstalledPackage(packagePath, PackageSource.Git,
+                    Name + "@https://github.com/example/package.git");
+            }
+            object native = new { versions = new { primary = new { name = Name, isInstalled = true,
+                localPath = nativePath == "different" ? packagePath + "-other" : packagePath } } };
+            if (nativePath == "missing") native = new { versions = new { primary = new { name = Name, isInstalled = true } } };
+
+            Assert.That(PackageManagerPackageStatus.IsGitHubPackage(root, native, data), Is.EqualTo(nativePath == "matching"));
+        }
+
+        [TestCase("registration", ".gitmodules registration is missing")]
+        [TestCase("gitlink", "Git index has no matching submodule entry")]
+        [TestCase("both", "without a matching submodule registration or Git index entry")]
+        [TestCase("alias", "different package path spelling")]
+        [TestCase("renamed-folder", "folder does not match package ID")]
+        public void UncertainCheckoutExplainsMissingEvidence(string missing, string explanation)
+        {
+            var data = ReadOrdinaryRepository();
+            string path = missing == "renamed-folder" ? Path.Combine(root, "Packages", "Renamed") : packagePath;
+            Directory.CreateDirectory(Path.Combine(path, ".git"));
+            data.Packages.Add(Name, new PackageManagerPackageStatus.InstalledPackage(path, PackageSource.Embedded, Name + "@file:" + path));
+            if (missing == "registration") data.Gitlinks.Add(RelativePath);
+            if (missing == "gitlink") data.Repositories.Add(RelativePath, "https://example.invalid/package.git");
+            if (missing == "alias") data.Repositories.Add("./" + RelativePath, "https://example.invalid/package.git");
+
+            string description = PackageManagerPackageStatus.Describe(root, Name, path, PackageSource.Embedded,
+                Name + "@file:" + path, true, data);
+
+            Assert.That(description, Does.Contain(explanation));
+            Assert.That(description, Does.Contain("Inspect"));
+            Assert.That(PackageManagerPackageStatus.ShouldBlockEmbeddedRemoval(root, Name, path, true, data), Is.True);
+        }
+
+        [Test]
+        public void UnreadableMetadataProvidesInspectionGuidanceWithoutNegativeClassification()
+        {
+            var data = InstalledSnapshot();
+            data.Error = "Submodule registrations are incomplete or duplicated.";
+            string description = PackageManagerPackageStatus.Describe(root, Name, packagePath, PackageSource.Embedded,
+                Name + "@file:" + packagePath, true, data);
+
+            Assert.That(description, Does.Contain(data.Error).And.Contain("Inspect the project's .gitmodules file and Git index"));
+            Assert.That(description, Does.Not.Contain("not a submodule"));
+        }
+
+        [Test]
+        public void SourceDetailsUseCachedGitRevisionAndHash()
+        {
+            string url = "https://github.com/example/package.git?path=/Packages/Child#release";
+            string id = Name + "@" + url;
+            var data = new PackageManagerPackageStatus.StatusSnapshot();
+            data.Packages.Add(Name, new PackageManagerPackageStatus.InstalledPackage(packagePath, PackageSource.Git, id, "release", Commit));
+
+            var details = PackageManagerPackageStatus.GetSourceDetails(root, Name, packagePath, PackageSource.Git, id, data);
+
+            Assert.That(details.IsInstalled, Is.True);
+            Assert.That(details.ResolvedPath, Is.EqualTo(packagePath));
+            Assert.That(details.SourceUrl, Is.EqualTo(url));
+            Assert.That(details.RepositoryUrl, Is.EqualTo("https://github.com/example/package"));
+            Assert.That(details.RequestedRevision, Is.EqualTo("release"));
+            Assert.That(details.InstalledCommit, Is.EqualTo(Commit));
+        }
+
+        [TestCase("path")]
+        [TestCase("source")]
+        [TestCase("package-id")]
+        [TestCase("missing")]
+        public void SourceDetailsNeverExposeActionsForDifferentInstalledIdentity(string mismatch)
+        {
+            var data = InstalledSnapshot();
+            if (mismatch == "missing") data.Packages.Clear();
+            string path = mismatch == "path" ? packagePath + "-other" : packagePath;
+            PackageSource source = mismatch == "source" ? PackageSource.Git : PackageSource.Embedded;
+            string id = Name + "@file:" + packagePath + (mismatch == "package-id" ? "-other" : "");
+
+            var details = PackageManagerPackageStatus.GetSourceDetails(root, Name, path, source, id, data);
+
+            Assert.That(details.IsInstalled, Is.False);
+            Assert.That(details.ResolvedPath, Is.Empty);
+            Assert.That(details.SourceUrl, Is.Empty);
+            Assert.That(details.InstalledCommit, Is.Empty);
+            if (mismatch != "missing")
+                Assert.That(PackageManagerPackageStatus.Describe(root, Name, path, source, id, true, data),
+                    Does.Contain("does not match the installed version or location"));
+        }
+
+        [Test]
+        public void SubmoduleSourceDoesNotPretendParentGitlinkIsTheCheckoutCommit()
+        {
+            var data = InstalledSnapshot();
+            var details = PackageManagerPackageStatus.GetSourceDetails(root, Name, packagePath, PackageSource.Embedded,
+                Name + "@file:" + packagePath, data);
+
+            Assert.That(details.SourceUrl, Is.EqualTo(data.Repositories[RelativePath]));
+            Assert.That(details.RequestedRevision, Is.Empty);
+            Assert.That(details.InstalledCommit, Is.Empty);
+            Assert.That(details.RevisionDescription, Is.Empty);
+            data.Repositories.Clear();
+            Assert.That(PackageManagerPackageStatus.GetSourceDetails(root, Name, packagePath, PackageSource.Embedded,
+                Name + "@file:" + packagePath, data).SourceUrl, Is.Empty);
+        }
+
         [Test]
         public void UnchangedRefreshNotifiesReadinessWithoutRebuildingPackageViews()
         {
@@ -364,6 +516,8 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
         [TestCase("package-path")]
         [TestCase("package-source")]
         [TestCase("package-id")]
+        [TestCase("git-revision")]
+        [TestCase("git-hash")]
         [TestCase("package-added")]
         [TestCase("package-removed")]
         public void ChangedInstalledStatusNotifiesPackageViewsOnce(string change)
@@ -390,6 +544,14 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                 case "package-id":
                     refreshed.Packages[Name] = new PackageManagerPackageStatus.InstalledPackage(
                         packagePath, PackageSource.Embedded, Name + "@https://github.com/example/package.git");
+                    break;
+                case "git-revision":
+                    refreshed.Packages[Name] = new PackageManagerPackageStatus.InstalledPackage(
+                        packagePath, PackageSource.Embedded, Name + "@file:" + packagePath, "next");
+                    break;
+                case "git-hash":
+                    refreshed.Packages[Name] = new PackageManagerPackageStatus.InstalledPackage(
+                        packagePath, PackageSource.Embedded, Name + "@file:" + packagePath, null, Commit);
                     break;
                 case "package-added":
                     refreshed.Packages.Add("com.example.other", new PackageManagerPackageStatus.InstalledPackage(

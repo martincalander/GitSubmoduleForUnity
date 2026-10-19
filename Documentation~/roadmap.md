@@ -1,7 +1,8 @@
 # Roadmap
 
 Git Submodule Manager has a focused role: show how packages are installed and
-make installed GitHub packages easy to find in Unity's native Package Manager.
+make installed submodules and GitHub packages easy to find in Unity's native
+Package Manager.
 The `main` branch develops this status and sources view. The former management
 workflows are preserved on
 [`legacy`](https://github.com/martincalander/GitSubmoduleForUnity/tree/legacy).
@@ -9,7 +10,11 @@ workflows are preserved on
 ## Current Priorities
 
 - Keep submodules clearly distinguishable from ordinary Unity packages.
-- Keep **Sources > GitHub** limited to installed GitHub packages.
+- Keep **Project > Submodules** focused on verified submodules across Git hosts
+  and **Sources > GitHub** limited to installed GitHub packages.
+- Make source URLs, package locations, and cached Git revisions easy to inspect
+  without duplicating Unity's existing controls.
+- Explain uncertain classification without automatic repair or added Git reads.
 - Preserve a small Editor footprint, with no continuous window scanning or
   background network discovery.
 - Keep classification and embedded-folder deletion protection reliable across
@@ -19,10 +24,9 @@ workflows are preserved on
 The compatibility gate retains exact Unity `6000.3.22f1`, `6000.5.*f1` final
 releases, exact `6000.6.0f1` and `6000.6.2f1`, exact `6000.7.0b1` and
 `6000.7.0b2` betas, and exact `7000.0.0a7`, `7000.0.0a8`, `7000.0.0a9`, and
-`7000.0.0a10` alphas. Local validation passed all 192 Editor tests on Unity
-`7000.0.0a10` on macOS. Other retained targets and platforms still need
-verification against this implementation before a release claim. See the
-[verification record](../.github/CONTRIBUTING.md#edge-case-verification-on-2026-10-19).
+`7000.0.0a10` alphas. Each retained target and platform needs verification
+against the implementation being released before a release claim. See the
+[verification records](../.github/CONTRIBUTING.md) for exact local coverage.
 
 ## Product Boundary
 

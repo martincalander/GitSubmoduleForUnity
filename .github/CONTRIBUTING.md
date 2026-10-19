@@ -19,8 +19,8 @@ published `0.8.1` artifacts still contain that implementation.
 - Git for preparing test repositories and managing the checkout.
 - Python 3 and Node.js for repository, Markdown, and packaging checks.
 
-The current implementation passed all 192 Editor tests on Unity `7000.0.0a10`
-on macOS. See the [verification record](#edge-case-verification-on-2026-10-19)
+The current implementation passed all 280 Editor tests on Unity `7000.0.0a10`
+on macOS. See the [source feature verification](#source-feature-verification-on-2026-10-19)
 for the final checks. Existing version gates do not imply that the current design
 has been retested across all supported targets. GitHub CLI is not required.
 
@@ -261,3 +261,36 @@ for this Editor-only change. Startup and allocation benchmarks were not repeated
 because these fixes do not add periodic work or change package dependencies.
 Signed release archives and protected CI were not run. Local results do not
 establish release evidence for another Unity version, platform, or artifact.
+
+## Source Feature Verification on 2026-10-19
+
+The source-details and Submodules-view changes were tested from the package
+checkout in OpenSourceWorkspace with Unity CLI `1.0.0-beta.13`, Pipeline
+`0.8.0-exp.1`, and Unity `7000.0.0a10` on macOS.
+
+- Fresh Unity compilation completed without compiler errors or warnings.
+- All 273 focused source-feature tests passed before final lifecycle verification.
+- All 280 tests in `MartinCalander.GitSubmoduleManager.Editor.Tests` passed after
+  the final C# changes, with no failures, skipped, or inconclusive tests. This
+  includes `PackageManagerCompatibility` and two Play Mode cycles with domain
+  reload disabled, with the original settings restored.
+- Regression coverage includes source URL sanitization, unsupported protocols,
+  relative and SSH URLs, branch/tag/SHA/default revision display, missing commit
+  metadata, stale native package identities, uncertain classification, and
+  both native sidebar entries surviving reconstruction.
+- A live Package Manager pass verified 23 assertions: Submodules and GitHub
+  membership, source and commit clipboard actions, selection changes, proper
+  sidebar placement, two close/reopen cycles, and sidebar reconstruction.
+- Closed Package Manager sessions left zero status observers, scheduled
+  attachments, or package-owned Editor update callbacks after pending reads
+  completed. The new features add no dependencies or background scans.
+- Repository validation, 13 Python repository tests, Markdown lint, package
+  dry run, and whitespace checks passed.
+
+Not retested: Unity `6000.3.22f1`, `6000.5.*f1`, `6000.6.0f1`,
+`6000.6.2f1`, `6000.7.0b1`, `6000.7.0b2`, `7000.0.0a7`,
+`7000.0.0a8`, and `7000.0.0a9`; Windows and Linux. The six consumer projects
+were not upgraded or reopened for these subsequent feature changes. No player
+build was needed for this Editor-only change. Signed release archives were not
+produced. Local validation is not release evidence for another commit, Unity
+version, archive, or platform.

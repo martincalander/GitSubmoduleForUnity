@@ -114,6 +114,9 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         internal const string ExtensionPageName = "git-submodule-manager";
         internal const string ExtensionPageId = "Extension/" + ExtensionPageName;
         internal const string ExtensionPageDisplayName = "GitHub";
+        internal const string SubmodulesPageName = "git-submodule-manager-submodules";
+        internal const string SubmodulesPageId = "Extension/" + SubmodulesPageName;
+        internal const string SubmodulesPageDisplayName = "Submodules";
         internal const string ExtensionPageArgsTypeName =
             "UnityEditor.PackageManager.UI.Internal.ExtensionPageArgs";
         internal const string PageManagerTypeName =
@@ -126,6 +129,8 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             "UnityEditor.PackageManager.UI.Internal.IPage";
         internal const string NativeSidebarRowElementName =
             "git-submodule-manager-native-sidebar-row";
+        internal const string SubmodulesSidebarRowElementName =
+            "git-submodule-manager-submodules-sidebar-row";
 
         private const BindingFlags Instance =
             BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
@@ -138,10 +143,11 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             GetVoidMethod(FindType(SidebarTypeName), "UpdateExtensionPageRelatedRows") ??
             GetVoidMethod(FindType(SidebarTypeName), "CreateRows"));
         private readonly VisualElement root;
+        private readonly bool submodulesOnly;
         private object pageManager;
         private object page;
         private VisualElement sidebar;
-        private VisualElement sources;
+        private VisualElement group;
         private VisualElement row;
         private MethodInfo rebuild;
         private MethodInfo selectionChanged;
@@ -150,6 +156,8 @@ namespace MartinCalander.GitSubmoduleManager.Editor
 
         private static event Action<VisualElement> SidebarRefreshed;
         internal event Action AttachmentInvalidated;
+        internal bool IsAttached => !disposed && row != null && ReferenceEquals(row.parent, group) &&
+            sidebar != null && sidebar.Contains(group) && root.Contains(sidebar);
 
         private sealed class NativeContract
         {
@@ -159,11 +167,13 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             internal MethodInfo GetRow;
             internal FieldInfo[] ArgumentFields;
             internal object[] ArgumentValues;
+            internal object[] SubmodulesArgumentValues;
         }
 
-        internal PackageManagerSubmoduleNativePage(VisualElement root)
+        internal PackageManagerSubmoduleNativePage(VisualElement root, bool submodulesOnly = false)
         {
             this.root = root ?? throw new ArgumentNullException(nameof(root));
+            this.submodulesOnly = submodulesOnly;
             SidebarRefreshed += OnSidebarRefreshed;
         }
 
@@ -179,7 +189,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 return false;
             if (!PackageManagerSubmoduleHarmonyPatch.IsSidebarRepairInstalled)
             {
-                error = "Unity's Sources sidebar lifecycle hook is unavailable.";
+                error = "Unity's Package Manager sidebar lifecycle hook is unavailable.";
                 return false;
             }
 
@@ -188,9 +198,8 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 object currentManager = ReadMember(root, "m_PageManager") ??
                                         ReadMember(root, "pageManager");
                 if (ReferenceEquals(pageManager, currentManager) &&
-                    page != null && ReferenceEquals(page, FindRegisteredPage(currentManager)) &&
-                    row != null && ReferenceEquals(row.parent, sources) &&
-                    sidebar != null && sidebar.Contains(sources) && root.Contains(sidebar))
+                    page != null && ReferenceEquals(page, FindRegisteredPage(currentManager, submodulesOnly)) &&
+                    IsAttached)
                     return true;
 
                 StopTrackingRow();
@@ -198,42 +207,44 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 if (pageManager == null)
                     throw new InvalidOperationException("Package Manager is still loading.");
 
-                page = FindRegisteredPage(pageManager);
+                page = FindRegisteredPage(pageManager, submodulesOnly);
                 if (page == null)
                 {
-                    object args = CreateExtensionPageArgs();
+                    object args = CreateExtensionPageArgs(submodulesOnly);
                     Contract.Value.AddPage.Invoke(pageManager, new[] { args });
-                    page = FindRegisteredPage(pageManager);
+                    page = FindRegisteredPage(pageManager, submodulesOnly);
                 }
                 if (page == null)
-                    throw new InvalidOperationException("The GitHub package source could not be registered.");
+                    throw new InvalidOperationException("The " + (submodulesOnly ? "Submodules view" : "GitHub source") + " could not be registered.");
 
                 sidebar = FindElement(root, SidebarTypeName);
                 if (sidebar == null)
                     throw new InvalidOperationException("The Package Manager sidebar is still loading.");
-                sources = (Contract.Value.GetRow.Invoke(sidebar,
-                    new object[] { "MyAssets" }) as VisualElement)?.parent;
-                if (sources == null)
-                    throw new InvalidOperationException("The Package Manager Sources group is unavailable.");
+                group = (Contract.Value.GetRow.Invoke(sidebar,
+                    new object[] { submodulesOnly ? "InProject" : "MyAssets" }) as VisualElement)?.parent;
+                if (group == null)
+                    throw new InvalidOperationException("The Package Manager " + (submodulesOnly ? "Project" : "Sources") + " group is unavailable.");
 
                 var rows = new List<VisualElement>();
-                FindSidebarRows(sidebar, rows);
+                string pageId = submodulesOnly ? SubmodulesPageId : ExtensionPageId;
+                FindSidebarRows(sidebar, rows, pageId);
                 if (rows.Count == 0)
                 {
                     GetSidebarRefreshTarget()?.Invoke(sidebar, null);
-                    FindSidebarRows(sidebar, rows);
+                    FindSidebarRows(sidebar, rows, pageId);
                 }
                 if (rows.Count == 0)
-                    throw new InvalidOperationException("The GitHub source row is still loading.");
+                    throw new InvalidOperationException("The " + (submodulesOnly ? "Submodules" : "GitHub") + " row is still loading.");
 
-                VisualElement attachedRow = rows.Find(candidate => ReferenceEquals(candidate.parent, sources)) ?? rows[0];
+                VisualElement attachedRow = rows.Find(candidate => ReferenceEquals(candidate.parent, group)) ?? rows[0];
                 foreach (VisualElement duplicate in rows)
                     if (!ReferenceEquals(duplicate, attachedRow))
                         duplicate.RemoveFromHierarchy();
-                if (!ReferenceEquals(attachedRow.parent, sources))
-                    sources.Add(attachedRow);
-                attachedRow.name = NativeSidebarRowElementName;
-                attachedRow.tooltip = "Installed packages hosted on GitHub.";
+                if (!ReferenceEquals(attachedRow.parent, group))
+                    group.Add(attachedRow);
+                attachedRow.name = submodulesOnly ? SubmodulesSidebarRowElementName : NativeSidebarRowElementName;
+                attachedRow.tooltip = submodulesOnly ? "Installed packages verified as Git submodules, from any host." :
+                    "Installed packages hosted on GitHub.";
                 VisualElement icon = attachedRow.Q("sidebarIcon") ?? attachedRow.Q(className: "sidebarIcon");
                 if (icon != null && GitSubmoduleManagerIcons.GitIcon != null)
                     icon.style.backgroundImage = new StyleBackground(GitSubmoduleManagerIcons.GitIcon);
@@ -257,7 +268,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 return;
             try
             {
-                if (!ReferenceEquals(page, FindRegisteredPage(pageManager)))
+                if (!ReferenceEquals(page, FindRegisteredPage(pageManager, submodulesOnly)))
                     return;
                 rebuild?.Invoke(page, rebuildHasForceArgument ? new object[] { true } : null);
                 selectionChanged?.Invoke(page, new object[] { false });
@@ -278,7 +289,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             page = null;
             pageManager = null;
             sidebar = null;
-            sources = null;
+            group = null;
             rebuild = null;
             selectionChanged = null;
             // Unity owns registration. Another window can still use the same page.
@@ -296,7 +307,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 !ReferenceEquals(sidebar, refreshedSidebar) && !root.Contains(refreshedSidebar))
                 return;
             // This also rearms attachment when native rows appear after an earlier retry timed out.
-            // Unity can recreate its extension rows without removing our row from Sources.
+            // Unity can recreate its extension rows without removing our relocated row.
             StopTrackingRow();
             AttachmentInvalidated?.Invoke();
         }
@@ -333,7 +344,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             var contract = new NativeContract();
             if (!PackageManagerUnityVersionSupport.IsCurrentVersionSupported)
             {
-                contract.Error = "This Unity version has not been validated for the GitHub package source.";
+                contract.Error = "This Unity version has not been validated for the installed-package views.";
                 return contract;
             }
             try
@@ -348,7 +359,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                     managerType.GetProperty("orderedExtensionPages", Instance) == null ||
                     GetRowMethod(sidebarType) == null || GetSidebarRefreshTarget() == null)
                 {
-                    contract.Error = "Unity's native extension-page or Sources sidebar contract has changed.";
+                    contract.Error = "Unity's native extension-page or sidebar contract has changed.";
                     return contract;
                 }
                 object args = Activator.CreateInstance(argsType, true);
@@ -372,11 +383,20 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                     "getGroupName", "compareGroup" };
                 contract.ArgumentFields = new FieldInfo[names.Length];
                 contract.ArgumentValues = new object[names.Length];
+                contract.SubmodulesArgumentValues = new object[names.Length];
                 for (int index = 0; index < names.Length; index++)
                 {
                     FieldInfo field = argsType.GetField(names[index], Instance);
                     contract.ArgumentFields[index] = field;
                     contract.ArgumentValues[index] = field.GetValue(args);
+                    contract.SubmodulesArgumentValues[index] = names[index] switch
+                    {
+                        "name" => SubmodulesPageName,
+                        "displayName" => SubmodulesPageDisplayName,
+                        "priority" => 101,
+                        "filter" => new Func<object, bool>(PackageManagerPackageStatus.IsSubmodulePackage),
+                        _ => contract.ArgumentValues[index]
+                    };
                 }
             }
             catch (Exception exception)
@@ -386,7 +406,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             return contract;
         }
 
-        internal static object CreateExtensionPageArgs()
+        internal static object CreateExtensionPageArgs(bool submodulesOnly = false)
         {
             NativeContract contract = Contract.Value;
             if (!IsSupportedContract(out string error))
@@ -394,7 +414,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             object args = Activator.CreateInstance(contract.ArgsType, true);
             for (int index = 0; index < contract.ArgumentFields.Length; index++)
             {
-                object value = contract.ArgumentValues[index];
+                object value = (submodulesOnly ? contract.SubmodulesArgumentValues : contract.ArgumentValues)[index];
                 contract.ArgumentFields[index].SetValue(args, value is Array array ? array.Clone() : value);
             }
             return args;
@@ -406,28 +426,41 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 ExtensionPageId, StringComparison.Ordinal);
         }
 
+        internal static bool IsSubmodulesPage(object candidate)
+        {
+            return string.Equals(ReadMember(candidate, "id") as string,
+                SubmodulesPageId, StringComparison.Ordinal);
+        }
+
+        internal static bool IsOwnedPage(object candidate)
+        {
+            string id = ReadMember(candidate, "id") as string;
+            return string.Equals(id, ExtensionPageId, StringComparison.Ordinal) ||
+                   string.Equals(id, SubmodulesPageId, StringComparison.Ordinal);
+        }
+
         internal static MethodInfo GetNativeRefreshTarget() => NativeRefresh.Value;
 
         internal static MethodInfo GetSidebarRefreshTarget() => SidebarRefresh.Value;
 
-        private static object FindRegisteredPage(object manager)
+        private static object FindRegisteredPage(object manager, bool submodulesOnly)
         {
             if (!(ReadMember(manager, "orderedExtensionPages") is IEnumerable pages))
                 return null;
             foreach (object candidate in pages)
-                if (IsGitHubPage(candidate))
+                if (submodulesOnly ? IsSubmodulesPage(candidate) : IsGitHubPage(candidate))
                     return candidate;
             return null;
         }
 
-        private static void FindSidebarRows(VisualElement element, List<VisualElement> rows)
+        private static void FindSidebarRows(VisualElement element, List<VisualElement> rows, string pageId)
         {
             if (element.GetType().FullName == SidebarRowTypeName &&
                 string.Equals(ReadMember(element, "pageId") as string,
-                    ExtensionPageId, StringComparison.Ordinal))
+                    pageId, StringComparison.Ordinal))
                 rows.Add(element);
             foreach (VisualElement child in element.Children())
-                FindSidebarRows(child, rows);
+                FindSidebarRows(child, rows, pageId);
         }
 
         private static VisualElement FindElement(VisualElement element, string typeName)

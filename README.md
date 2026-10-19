@@ -23,6 +23,12 @@ installation, conversion, and removal workflows, is preserved on
 
 - **Submodule** labels for installed package submodules.
 - Installation source and submodule status in the selected package's details.
+- **Project > Submodules** to filter installed submodules from any Git host.
+- Repository and package-folder shortcuts, plus a copyable source URL for
+  verified submodules.
+- Requested Git revision and installed commit for UPM Git dependencies, using
+  Unity's existing metadata.
+- Specific explanations when a package's submodule registration cannot be verified.
 - **Sources > GitHub** for the project's installed GitHub submodules and UPM Git
   dependencies, using Unity's native package list, search, and selection.
 - Protection against Unity deleting a Git checkout as an ordinary embedded
@@ -54,13 +60,18 @@ simplified version, including Unity 7.
 
 1. Open **Window > Package Management > Package Manager**.
 2. Select an installed package to inspect its status and source.
-3. Choose **Sources > GitHub** to view installed packages hosted on GitHub.
-4. After changing submodules with Git, let Unity finish importing and refresh
+3. Choose **Project > Submodules** to view verified submodules from any host, or
+   **Sources > GitHub** to view installed packages hosted on GitHub.
+4. Use the selected package's source details to open its repository, reveal its
+   installed folder, or inspect a UPM Git dependency's requested revision and
+   installed commit.
+5. After changing submodules with Git, let Unity finish importing and refresh
    Package Manager.
 
-The GitHub source reads local installed state. It does not browse your GitHub
-account, contact GitHub, or require GitHub CLI or account setup. An empty list
-is expected when no installed package uses GitHub.
+Both views read local installed state. They do not browse your GitHub account,
+contact GitHub, or require GitHub CLI or account setup. An empty GitHub list is
+expected when no installed package uses GitHub. Source and revision details
+reuse the same cached installed state and add no remote checks.
 
 ## Editor Overhead
 
@@ -78,17 +89,16 @@ a meaningful Editor launch speedup. See the
 
 ## Unity Compatibility
 
-The simplified implementation passed **192 Editor tests on Unity
-`7000.0.0a10`, macOS**, including native Package Manager integration, Git
-worktrees, and Play Mode lifecycle checks. See the
-[verification record](.github/CONTRIBUTING.md#edge-case-verification-on-2026-10-19)
-for scope and untested targets.
+See the [verification records](.github/CONTRIBUTING.md) for the exact commits,
+Unity versions, platforms, and checks exercised locally. These records distinguish
+prior status-view validation from subsequent feature changes.
 
 The compatibility gate retains exact Unity `6000.3.22f1`, `6000.5.*f1` final
 releases, exact `6000.6.0f1` and `6000.6.2f1`, exact `6000.7.0b1` and
 `6000.7.0b2` betas, and exact `7000.0.0a7`, `7000.0.0a8`, `7000.0.0a9`, and
-`7000.0.0a10` alphas. Other versions remain unsupported. The remaining targets
-have not been retested with this implementation. The package is Editor-only.
+`7000.0.0a10` alphas. Other versions remain unsupported. Consult the verification
+records for targets not yet retested with these changes. The package is
+Editor-only.
 
 ## Moving from the Earlier Manager
 
