@@ -12,6 +12,13 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
 {
     public sealed class PackageStatusLifecycleTests
     {
+        [Test]
+        [Category("PackageManagerCompatibility")]
+        public void NativeIntegration_DoesNotRegisterALegacyDetailsExtension()
+        {
+            AssertNoLegacyDetailsRegistration();
+        }
+
         [UnityTest]
         public IEnumerator DetachedRootsDoNotRetainStatusObserversOrScheduledWork()
         {
@@ -137,10 +144,16 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                         "Play Mode must not recreate the removed custom filter.");
                     Assert.That(root.Q("git-submodule-manager-submodules-sidebar-row"), Is.Null,
                         "Play Mode must not recreate the former Submodules sidebar row.");
-                    Assert.That(PackageSourceDetails.Unavailable, Is.Not.Null);
-                    var details = new PackageStatusDetailsView();
-                    details.Refresh(null);
-                    Assert.That(details.Q<Button>("git-submodule-reveal-folder").enabledSelf, Is.False);
+                    Assert.That(root.Q("git-submodule-package-details"), Is.Null,
+                        "Play Mode must not recreate the removed custom details panel.");
+                    Assert.That(root.Q("git-submodule-open-repository"), Is.Null);
+                    Assert.That(root.Q("git-submodule-reveal-folder"), Is.Null);
+                    Assert.That(root.Q("git-submodule-copy-commit"), Is.Null);
+                    Assert.That(root.Q("git-submodule-copy-source"), Is.Null);
+                    AssertNoLegacyDetailsRegistration();
+                    Assert.That(PackageManagerSubmoduleHarmonyPatch.IsPatched(
+                        PackageRepositoryLink.GetRefreshTarget()), Is.True,
+                        "The native Repository link must survive disabled-domain-reload Play Mode.");
                     PackageManagerPackageStatus.Refresh();
                     double deadline = EditorApplication.timeSinceStartup + 20;
                     while (!PackageManagerPackageStatus.IsReady && EditorApplication.timeSinceStartup < deadline)
@@ -158,6 +171,19 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                 if (ownsWindow && window != null)
                     window.Close();
             }
+        }
+
+        private static void AssertNoLegacyDetailsRegistration()
+        {
+            PropertyInfo registry = typeof(UnityEditor.PackageManager.UI.PackageManagerExtensions)
+                .GetProperty("Extensions", BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic);
+            Assert.That(registry, Is.Not.Null);
+            var extensions = registry.GetValue(null) as IEnumerable;
+            Assert.That(extensions, Is.Not.Null);
+            foreach (object extension in extensions)
+                Assert.That(extension?.GetType().Assembly,
+                    Is.Not.SameAs(typeof(GitSubmoduleManagerPackageManagerHost).Assembly),
+                    "Native integration must not register a package-owned legacy details extension.");
         }
 
         private static VisualElement FindSidebar(VisualElement element)

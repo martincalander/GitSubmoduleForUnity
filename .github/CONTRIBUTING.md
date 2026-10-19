@@ -19,7 +19,7 @@ published `0.8.1` artifacts still contain that implementation.
 - Git for preparing test repositories and managing the checkout.
 - Python 3 and Node.js for repository, Markdown, and packaging checks.
 
-See the [filter removal verification](#filter-removal-verification-on-2026-10-19)
+See the [details cleanup verification](#details-cleanup-verification-on-2026-10-19)
 and the earlier records below for the checks performed on each change.
 Existing version gates do not imply
 that the current design has been retested across all supported targets. GitHub
@@ -382,3 +382,41 @@ repository test suite. No player build or signed release artifact was produced.
 GitHub CI checks repository structure and packaging, not Unity execution.
 Local results do not establish release evidence for another Unity version,
 archive, or platform.
+
+## Details Cleanup Verification on 2026-10-19
+
+The extra details panel and buttons were replaced by a Repository link in
+Unity's existing links row. This local, uncommitted batch was verified in
+OpenSourceWorkspace with Unity `7000.0.0a10` on macOS, CLI `1.0.0-beta.13`, and
+Pipeline `0.8.0-exp.1`.
+
+- Fresh Unity compilation completed without compiler errors.
+- All 280 `PackageSourceFeatures` tests and all 104
+  `PackageManagerCompatibility` tests passed.
+- All 288 tests in the final Editor assembly passed, with no failures, skipped,
+  or inconclusive tests. This includes two Play Mode cycles with domain reload
+  disabled, with original settings restored.
+- Thirty live assertions checked Repository before the native Documentation,
+  Changelog, and Licenses links; native Locate; both workspace submodules and
+  an ordinary UPM Git dependency; ordinary, empty, and multiple selections;
+  sidebar reconstruction; and Package Manager close/reopen cleanup.
+- An explicit script reload preserved the selected package and restored one
+  Repository link and one GitHub source without a public details extension.
+- Focused tests cover missing and mismatched installed identities, safe URLs,
+  stale and detached selections, native link order, and owned-row cleanup.
+- Screenshot capture returned blank frames. UI checks used the live native
+  hierarchy, link ordering, and layout coordinates instead.
+- Two CLI evaluations timed out while code reload settled. Retrying succeeded;
+  the captured errors were from Pipeline, not package compilation or UI errors.
+  The final Console had no errors and one collapsed FMOD device warning from
+  the Play Mode cycles; no audio code was changed.
+- Repository validation, Markdown lint, package dry run, and whitespace checks
+  passed. Package dependencies and audited third-party artifacts are unchanged.
+
+Not retested: Unity `6000.3.22f1`, `6000.5.*f1`, `6000.6.0f1`,
+`6000.6.2f1`, `6000.7.0b1`, `6000.7.0b2`, `7000.0.0a7`,
+`7000.0.0a8`, and `7000.0.0a9`; Windows and Linux Editor execution; the six
+consumer projects; startup and allocation benchmarks; and the unchanged Python
+repository test suite. No supplemental `dotnet build`, player build, signed
+release artifact, or GitHub CI run was performed. Local results do not establish
+release evidence for another Unity version, archive, or platform.

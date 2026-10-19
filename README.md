@@ -22,12 +22,8 @@ installation, conversion, and removal workflows, is preserved on
 ## What You Get
 
 - **Submodule** labels for installed package submodules.
-- Installation source and submodule status in the selected package's details.
-- Repository and package-folder shortcuts, plus a selectable source URL for
-  verified submodules.
-- Requested Git revision and installed commit for UPM Git dependencies, using
-  Unity's existing metadata.
-- Specific explanations when a package's submodule registration cannot be verified.
+- **Repository** as the first link beside Unity's Documentation, Changelog, and
+  Licenses links when a safe repository URL is available.
 - **Sources > GitHub** for the project's installed GitHub submodules and UPM Git
   dependencies, using Unity's native package list, search, and selection.
 - Protection against Unity deleting a Git checkout as an ordinary embedded
@@ -58,19 +54,18 @@ simplified version, including Unity 7.
 ## Use It
 
 1. Open **Window > Package Management > Package Manager**.
-2. Select an installed package to inspect its status and source.
+2. Look for **Submodule** labels on installed package submodules.
 3. Choose **Sources > GitHub** for installed GitHub packages.
-4. Use the selected package's source details to open its repository, reveal its
-   installed folder, or inspect a UPM Git dependency's requested revision and
-   installed commit.
+4. Select an installed package and use **Repository** in its links row to open
+   the repository when the link is available.
 5. After changing submodules with Git, let Unity finish importing and refresh
    Package Manager.
 
 Package status and the GitHub source read local installed state. They do not
 browse your GitHub account, contact GitHub, or require GitHub CLI or account
 setup. An empty GitHub list is expected when no installed package uses GitHub.
-Source and revision details reuse the same cached installed state and add no
-remote checks.
+The Repository link uses the same cached installed state and adds no remote
+checks.
 
 ## Editor Overhead
 

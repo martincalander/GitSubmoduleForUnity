@@ -426,6 +426,18 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 info.resolvedPath, info.source, info.packageId, snapshot);
         }
 
+        internal static string GetRepositoryUrl(object version) => GetRepositoryUrl(ProjectRoot, version, snapshot);
+
+        internal static string GetRepositoryUrl(string projectRoot, object version, StatusSnapshot data)
+        {
+            string name = Property(version, "name") as string;
+            if (Property(version, "isInstalled") is not true || string.IsNullOrEmpty(name) ||
+                !data.Packages.TryGetValue(name, out InstalledPackage installed))
+                return string.Empty;
+            return GetSourceDetails(projectRoot, name, Property(version, "localPath") as string,
+                installed.Source, Property(version, "packageId") as string, data).RepositoryUrl;
+        }
+
         internal static PackageSourceDetails GetSourceDetails(string projectRoot, string name, string resolvedPath,
             PackageSource source, string packageId, StatusSnapshot data)
         {

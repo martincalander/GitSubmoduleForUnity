@@ -2,8 +2,6 @@ using System;
 using System.Collections.Generic;
 using UnityEditor;
 using UnityEditor.Callbacks;
-using PackageInfo = UnityEditor.PackageManager.PackageInfo;
-using UnityEditor.PackageManager.UI;
 using UnityEngine;
 using UnityEngine.UIElements;
 
@@ -18,8 +16,6 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         internal const string WindowTypeName = "UnityEditor.PackageManager.UI.PackageManagerWindow";
         private const string RootTypeName = "UnityEditor.PackageManager.UI.Internal.PackageManagerWindowRoot";
         private static readonly Dictionary<VisualElement, Session> Sessions = new();
-        private static readonly StatusDetails Details = new();
-        private static bool registered;
         internal static string LastError { get; private set; } = string.Empty;
         internal static int SessionCount => Sessions.Count;
         internal static int PendingAttachmentCount
@@ -56,6 +52,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             {
                 PackageManagerPackageStatus.Retain();
                 ScheduleAttachment();
+                PackageRepositoryLink.RefreshInRoot(Root);
             }
 
             private void OnDetached(DetachFromPanelEvent evt)
@@ -119,19 +116,14 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         private static void Start()
         {
             PackageManagerPackageStatus.Resume();
-            if (!registered)
-            {
-                PackageManagerExtensions.RegisterExtension(Details);
-                registered = true;
-            }
             AssemblyReloadEvents.beforeAssemblyReload -= BeforeReload;
             AssemblyReloadEvents.beforeAssemblyReload += BeforeReload;
             EditorApplication.quitting -= Stop;
             EditorApplication.quitting += Stop;
             PackageManagerPackageStatus.Changed -= RefreshViews;
             PackageManagerPackageStatus.Changed += RefreshViews;
-            PackageManagerPackageStatus.ReadinessChanged -= Details.Refresh;
-            PackageManagerPackageStatus.ReadinessChanged += Details.Refresh;
+            PackageManagerPackageStatus.ReadinessChanged -= RefreshRepositoryLinks;
+            PackageManagerPackageStatus.ReadinessChanged += RefreshRepositoryLinks;
             PackageManagerSubmoduleHarmonyPatch.Install();
             // A window can already exist when scripts reload. This is a single catch-up pass.
             EditorApplication.delayCall -= AttachExistingWindows;
@@ -174,7 +166,6 @@ namespace MartinCalander.GitSubmoduleManager.Editor
 
         private static void RefreshViews()
         {
-            Details.Refresh();
             foreach (Session session in Sessions.Values)
             {
                 session.ScheduleAttachment();
@@ -186,64 +177,29 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         private static void BeforeReload()
         {
             Stop();
-            // Unity clears the legacy extension registry on code reload, even on CoreCLR.
-            registered = false;
+        }
+
+        private static void RefreshRepositoryLinks()
+        {
+            if (!PackageManagerPackageStatus.IsReady)
+                return;
+            foreach (Session session in Sessions.Values)
+                PackageRepositoryLink.RefreshInRoot(session.Root);
         }
 
         private static void Stop()
         {
             EditorApplication.delayCall -= AttachExistingWindows;
             PackageManagerPackageStatus.Changed -= RefreshViews;
-            PackageManagerPackageStatus.ReadinessChanged -= Details.Refresh;
+            PackageManagerPackageStatus.ReadinessChanged -= RefreshRepositoryLinks;
             foreach (Session session in Sessions.Values)
+            {
+                PackageRepositoryLink.Remove(session.Root);
                 session.Dispose();
+            }
             Sessions.Clear();
-            Details.Clear();
             PackageManagerSubmoduleHarmonyPatch.Uninstall();
         }
 
-        private sealed class StatusDetails : IPackageManagerExtension
-        {
-            private readonly HashSet<PackageStatusDetailsView> views = new();
-            private PackageInfo selected;
-
-            public VisualElement CreateExtensionUI()
-            {
-                var view = new PackageStatusDetailsView();
-                view.RegisterCallback<AttachToPanelEvent>(_ =>
-                {
-                    views.Add(view);
-                    ObserveAncestors(view);
-                    view.Refresh(selected);
-                });
-                view.RegisterCallback<DetachFromPanelEvent>(_ => views.Remove(view));
-                view.Refresh(selected);
-                return view;
-            }
-
-            public void OnPackageSelectionChange(PackageInfo packageInfo)
-            {
-                selected = packageInfo;
-                Refresh();
-            }
-
-            // Registered-package events already provide one coalesced status refresh.
-            public void OnPackageAddedOrUpdated(PackageInfo packageInfo) { }
-            public void OnPackageRemoved(PackageInfo packageInfo) { }
-
-            internal void Refresh()
-            {
-                foreach (PackageStatusDetailsView view in views)
-                    view.Refresh(selected);
-            }
-
-            internal void Clear()
-            {
-                foreach (PackageStatusDetailsView view in views)
-                    view.Refresh(null);
-                views.Clear();
-                selected = null;
-            }
-        }
     }
 }

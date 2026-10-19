@@ -3,17 +3,17 @@
 Git Submodule Manager is a lightweight view of installed packages in Unity's
 native Package Manager. Submodules are labelled **Submodule**, and
 **Sources > GitHub** lists installed GitHub submodules and UPM Git dependencies.
-Selected-package details provide source shortcuts, cached UPM Git revisions, and
-explanations for unverified status. The current implementation is on `main`.
+A **Repository** link appears first in the selected package's native links row
+when a safe repository URL is available. The current implementation is on `main`.
 
 ## Start Here
 
 1. Follow [Installation](installation.md) to load the current implementation.
 2. Open **Window > Package Management > Package Manager**.
-3. Select a package to inspect its installation source and submodule status.
+3. Look for **Submodule** labels on installed package submodules.
 4. Choose **Sources > GitHub** for installed GitHub packages.
-5. Use the selected package's source and folder shortcuts or inspect its UPM Git
-   requested revision and installed commit.
+5. Select an installed package and use **Repository** in its links row when
+   available.
 
 The extension reads local project state and performs no GitHub discovery. Use
 Unity for ordinary packages and Git for submodule installation, updates, and

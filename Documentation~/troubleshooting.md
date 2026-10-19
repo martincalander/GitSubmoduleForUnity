@@ -33,8 +33,8 @@ git submodule status
 
 Use a direct package folder such as `Packages/com.author.package` and confirm
 that Unity resolves that same folder. An incomplete, ambiguous, or unsupported
-registration may remain classified by Unity's normal source. The details
-explain which condition prevented verification:
+registration may remain classified by Unity's normal source. Check these
+conditions:
 
 - A Git index entry without a `.gitmodules` registration: inspect the package
   path and URL in `.gitmodules`.
@@ -42,7 +42,7 @@ explain which condition prevented verification:
   repository's staged changes and submodule entry.
 - A package folder or metadata path that does not match: compare the folder,
   `package.json` name, `.gitmodules` path, and Git index path, including spelling.
-- A failed metadata read: follow the reported error and confirm that Git is
+- A failed metadata read: check the Console and confirm that Git is
   available and the Unity project is the parent repository's root.
 
 Review the existing state before making changes with your Git client. The
@@ -59,24 +59,17 @@ If the package itself is unavailable, fix the Git checkout or package manifest
 first. The extension does not initialize submodules or resolve missing
 submodule files for you.
 
-## Source or Revision Details Are Missing
+## The Repository Link Is Missing
 
-The details apply to the installed version and location. Select that version,
-wait for package resolution, and refresh Package Manager if the selection no
-longer matches Unity's installed record.
+**Repository** appears first in Unity's Documentation, Changelog, and Licenses
+row when a safe browser URL can be derived for the installed selection. Select
+the installed version, wait for package resolution, and refresh Package Manager
+if the selection no longer matches Unity's installed record.
 
-For ordinary UPM Git dependencies, use Unity's **Installed From** field to view
-or copy the source URL. The extension displays a selectable source URL for
-verified submodules.
-**Open repository** is available only when a safe browser URL is known. Relative,
-local, and unknown SSH sources have no guessed browser destination. Credentials
-and unrelated query parameters are omitted from the extension's source URLs.
-
-Requested revision and installed commit details apply to UPM Git dependencies.
-**Default branch** means that no revision was specified; it is not the name or
-current commit of the remote branch. An unavailable installed commit means Unity
-did not provide a valid resolved hash. The extension does not query the network
-or a checkout's `HEAD` to fill missing values.
+Relative, local, and unknown SSH sources have no guessed browser destination.
+Unavailable or unverified source metadata also leaves the link absent. The
+extension does not query the network to find a missing repository URL. Check the
+Console for compatibility diagnostics if a supported URL has no link.
 
 ## Remove Is Blocked for a Submodule
 

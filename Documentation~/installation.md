@@ -68,8 +68,8 @@ installation first. Do not create a second copy with the same package ID.
 
 ### Unity
 
-Local validation passed all 270 Editor tests on Unity `7000.0.0a10` on macOS.
-See the [verification record](../.github/CONTRIBUTING.md#filter-removal-verification-on-2026-10-19)
+Local validation passed all 288 Editor tests on Unity `7000.0.0a10` on macOS.
+See the [verification record](../.github/CONTRIBUTING.md#details-cleanup-verification-on-2026-10-19)
 for the exact checks and remaining untested targets.
 
 The compatibility gate retains exact Unity `6000.3.22f1`, Unity `6000.5.*f1`
@@ -98,7 +98,9 @@ Unity may still require repository access when you install private packages.
 ## First Open
 
 Open **Window > Package Management > Package Manager**. Installed package
-submodules receive **Submodule** labels. Select a package to inspect its source.
+submodules receive **Submodule** labels. Select an installed package to use its
+**Repository** link when available. It appears first beside Unity's Documentation,
+Changelog, and Licenses links.
 Choose **Sources > GitHub** to view installed GitHub submodules and UPM Git
 dependencies. The source is available even when no package is selected.
 

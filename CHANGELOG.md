@@ -15,15 +15,9 @@ been published as a new release; existing `0.8.1` artifacts remain unchanged.
 
 ### Added
 
-- Add source details and shortcuts for installed packages: a selectable source URL
-  for verified submodules, repository links where a browser URL is known, and a
-  shortcut to reveal the resolved package folder. Ordinary UPM Git dependencies
-  keep Unity's native **Installed From** source URL.
-- Show requested Git revisions and installed commits for UPM Git dependencies,
-  with full commit copying, using Unity's cached metadata without remote checks.
-- Explain missing `.gitmodules` registration, missing Git index entries,
-  mismatched paths, and unavailable status, with guidance for inspecting the
-  existing project state.
+- Add **Repository** as the first link in Unity's native Documentation,
+  Changelog, and Licenses row when the installed package has a safe repository
+  URL. The link uses cached installed metadata without remote checks.
 
 - Added exact Unity `7000.0.0a10` alpha compatibility while preserving the
   independently guarded Package Manager contracts and existing Unity targets.
@@ -54,7 +48,7 @@ been published as a new release; existing `0.8.1` artifacts remain unchanged.
 - Limit sidebar icon imports to 64 pixels and remove the unused Newtonsoft
   dependency. Declare the UIElements module used by the native integration.
 - Reduce the manager to installed package status. Label submodules in Package
-  Manager and show the selected package's installation source.
+  Manager and keep Unity's existing package information.
 - Limit **Sources > GitHub** to installed GitHub submodules and UPM Git
   dependencies using Unity's existing package records.
 - Leave installation, updates, conversion, and removal to Unity and Git. Retain
@@ -66,8 +60,12 @@ been published as a new release; existing `0.8.1` artifacts remain unchanged.
 
 ### Removed
 
+- Custom package details text and the **Open repository**, **Reveal package
+  folder**, and **Copy installed commit** buttons. Source URL, location,
+  submodule explanation, and Git revision rows are no longer added below
+  Unity's package information.
 - Custom **Submodules only** filter and the earlier **Project > Submodules**
-  sidebar page. Installed submodules retain their status labels and details;
+  sidebar page. Installed submodules retain their status labels;
   **Sources > GitHub** remains available. A saved selection of the retired
   sidebar page returns to Unity's All Packages list.
 - Remote GitHub catalogue discovery, account checks, and GitHub CLI requirement.
@@ -82,8 +80,8 @@ been published as a new release; existing `0.8.1` artifacts remain unchanged.
   or with several packages selected.
 - Protect Git checkouts in embedded folders whose names differ from their
   package IDs, and recheck local metadata before allowing embedded deletion.
-- Show pending or unavailable package status instead of reporting a package as
-  uninstalled before its registered state has been read successfully.
+- Keep pending or unavailable installed state unverified until its registered
+  metadata has been read successfully.
 - Keep Cecil and its Mdb, Pdb, and Rocks assemblies at 0.11.6 together so Unity 7
   cold startup does not load incompatible symbol-reader interfaces.
 

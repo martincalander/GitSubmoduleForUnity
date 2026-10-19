@@ -47,6 +47,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             MethodInfo sidebarRefresh = PackageManagerSubmoduleNativePage.GetSidebarRefreshTarget();
             Patch(sidebarRefresh, nameof(SidebarRefreshPostfix), false);
             IsSidebarRepairInstalled = IsPatched(sidebarRefresh);
+            Patch(PackageRepositoryLink.GetRefreshTarget(), nameof(RepositoryLinksPostfix), false);
         }
 
         private static void Patch(MethodInfo target, string callback, bool prefix)
@@ -245,6 +246,15 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         {
             if (PackageManagerSubmoduleNativePage.IsOwnedPage(__0))
                 PackageManagerPackageStatus.Refresh();
+        }
+
+        private static void RepositoryLinksPostfix(object __instance, object __0)
+        {
+            if (__instance is VisualElement links)
+            {
+                GitSubmoduleManagerPackageManagerHost.ObserveAncestors(links);
+                PackageRepositoryLink.Refresh(links, __0);
+            }
         }
 
         internal static void RefreshActivePage(VisualElement root)

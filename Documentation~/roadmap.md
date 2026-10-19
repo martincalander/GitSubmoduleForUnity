@@ -11,9 +11,10 @@ workflows are preserved on
 
 - Keep submodules clearly distinguishable from ordinary Unity packages.
 - Keep **Sources > GitHub** limited to installed GitHub packages.
-- Make source URLs, package locations, and cached Git revisions easy to inspect
-  without duplicating Unity's existing controls.
-- Explain uncertain classification without automatic repair or added Git reads.
+- Keep the **Repository** link in Unity's native links row and derive its URL
+  from the installed package's existing metadata.
+- Keep uncertain classification unverified without automatic repair or added
+  Git reads.
 - Preserve a small Editor footprint, with no continuous window scanning or
   background network discovery.
 - Keep classification and embedded-folder deletion protection reliable across

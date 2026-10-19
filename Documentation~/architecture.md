@@ -4,8 +4,8 @@
 
 The `main` branch contains an Editor-only installed-package view. It classifies
 packages, labels submodules, and lists installed GitHub packages in
-Unity's native Package Manager. Selected-package details explain source metadata
-and provide repository, folder, and commit-copy shortcuts. Its scope is status
+Unity's native Package Manager. A Repository link precedes Unity's existing
+package links when a safe repository URL is available. Its scope is status
 and sources, with a small Editor footprint. It does not discover remote repositories, plan dependencies, or
 change installed packages. The former management implementation is preserved
 on [`legacy`](https://github.com/martincalander/GitSubmoduleForUnity/tree/legacy).
@@ -13,13 +13,13 @@ on [`legacy`](https://github.com/martincalander/GitSubmoduleForUnity/tree/legacy
 ```text
 Editor/
 ├── GitSubmoduleManagerPackageManagerHost.cs
-│                               Package Manager lifecycle and details
+│                               Package Manager lifecycle
 ├── PackageManagerPackageStatus.cs
 │                               installed source and submodule classification
 ├── PackageSourceDetails.cs
-│                               source URL and cached revision presentation
-├── PackageStatusDetailsView.cs
-│                               selected-package details and shortcuts
+│                               source URL validation and sanitization
+├── PackageRepositoryLink.cs
+│                               Repository link in Unity's native links row
 ├── PackageManagerSubmoduleNativePage.cs
 │                               Sources > GitHub
 └── PackageManagerSubmoduleHarmonyPatch.cs
@@ -40,47 +40,46 @@ remote catalogue or synthetic uninstalled-package projection. The extension
 never adds display records to the project's manifest or lockfile and performs
 no account lookup or network scan.
 
-The snapshot retains Unity's Git revision and resolved hash with each installed
-package's source, package ID, and resolved path. Source details require that
-identity to match the current selection. A verified submodule's source comes
-from `.gitmodules`; a UPM Git dependency's source and revision come from Unity's
-registered package metadata. These additions reuse existing reads without new
-Git commands, checkout `HEAD` reads, remote requests, or polling.
+The installed snapshot binds each package's source, package ID, and resolved
+path. The Repository link requires that identity to match the current
+selection. A verified submodule's source comes from `.gitmodules`; a UPM Git
+dependency's source comes from Unity's registered package metadata. Link
+resolution reuses existing reads without new Git commands, checkout `HEAD`
+reads, remote requests, or polling.
 
-Source presentation accepts only supported URL forms, removes credentials and
-unrelated query parameters, and preserves the package path and revision where
-applicable. Browser actions allow HTTP and HTTPS links and map recognized public
-SSH hosts to HTTPS. Accepted unknown SSH hosts, relative URLs, and file URLs
-remain selectable text without guessing a browser address. Installed commit
-copying requires a complete hexadecimal commit hash; missing data is displayed
-as unavailable.
+Repository links allow HTTP and HTTPS URLs and map recognized public SSH hosts
+to HTTPS. They omit credentials, unrelated query parameters, package paths, and
+revision suffixes. Relative URLs, file URLs, and unknown SSH hosts have no
+guessed browser address.
 
 ## Package Manager Integration
 
-The host owns extension registration and updates the public package-details
-extension when selection changes. Native page registration and package labels
-use guarded internal contracts. Each reflected seam is checked independently;
+The host owns Package Manager sessions. Native page registration, package
+labels, and the Repository link use guarded internal contracts. Each reflected
+seam is checked independently;
 an unavailable seam disables that feature without replacing unrelated Package
 Manager pages. GitHub remains under Sources, and its membership predicate reads
 cached installed state. The native project package list keeps Unity's existing
-membership, search, and sorting. Submodule labels and selected-package details
-use the same cached classification across Git hosts.
+membership, search, and sorting. Submodule labels use the same cached
+classification across Git hosts.
 
 A saved selection of the retired Submodules page redirects to Unity's All
 Packages page during attachment. This recovery is guarded independently of
 GitHub source registration and leaves other selected pages unchanged.
 
-The details view keeps Unity's existing source URL for ordinary UPM Git
-dependencies and adds a selectable URL display for verified submodules.
-Its shortcuts use the installed selection's source data and resolved
-folder. It does not add package-management actions.
+`PackageRepositoryLink` hooks the native `PackageDetailsLinks.Refresh` method
+to insert Repository first in Unity's existing Documentation, Changelog, and
+Licenses row. It is available only for a matching installed selection with a
+safe repository URL. Unity's existing links and package information remain in
+place. The package does not register a public details extension or add a hidden
+anchor, extra panel, or panel padding.
 
-The native sidebar lifecycle and public details element's panel attachment
-discover the native window root, including when the details panel is absent
-because no package or several packages are selected.
-Each root owns one session, with a detach callback that releases its observer
-and scheduled work. A single delayed scan reconnects windows already present at
-code reload; there is no permanent window polling. Native construction retries
+The native sidebar hook and links refresh discover the Package Manager window
+root. The sidebar hook also works when no package or several packages are
+selected and the details panel is absent. Each root owns one session, with a
+detach callback that releases its observer and scheduled work. One delayed
+catch-up scan reconnects windows and their existing links rows after code
+reload; there is no permanent window polling. Native construction retries
 run at 100 ms intervals for at most 50 attempts, stop after success, and can
 resume on a later attachment observation, sidebar rebuild, or installed-status
 change. A detached row or native sidebar rebuild schedules repair on the next
@@ -89,23 +88,22 @@ source attachment fails closed if the hook could not be installed.
 
 Native-page contracts and reflected members are cached for the current code
 load. Reusing an attachment still checks its manager, page, and hierarchy.
-The compatibility gate and deletion guards remain independent. Reload resets
-the host's registration flag because Unity clears its public extension registry.
+The compatibility gate and deletion guards remain independent.
 
 Only observed Package Manager sessions check `.gitmodules` and the Git index,
 at two-second intervals. Package registration events and explicit refresh also
 request a scan; ordinary project asset changes do not. Status and installed
 identity are published together. A changed metadata stamp during a read causes
-a retry before publication. Readiness notifications update details while
+a retry before publication. Readiness notifications update the Repository link while
 content notifications rebuild views only when the result actually differs.
 Pending or failed reads continue to block unverified embedded-folder deletion.
 The deletion boundary rechecks the published metadata stamp before trusting a
 negative result. Its checkout protection uses the actual direct child path
 under `Packages/`, even when the folder name differs from the package ID;
 submodule classification retains its stricter matching-identity requirement.
-Status explanations distinguish missing registration, missing gitlinks, package
-identity and path mismatches, and metadata-read failures. These explanations do
-not weaken classification or deletion guards and do not offer automatic repair.
+Classification distinguishes missing registration, missing gitlinks, package
+identity and path mismatches, and metadata-read failures. These conditions
+remain unverified and do not weaken deletion guards or trigger automatic repair.
 
 Sidebar icons are imported at a maximum of 64 pixels. The package declares its
 UIElements dependency, which supplies the required engine module dependencies;
@@ -155,8 +153,8 @@ in `.github/scripts/coreclr_harmony_artifacts.json` and
 ## Verification
 
 Focused EditMode tests cover installed-source classification, package paths,
-GitHub source recognition, native page membership, source URL handling, cached
-revision presentation, status explanations, and removal protection. The
+GitHub source recognition, native page membership, safe Repository links,
+classification boundaries, and removal protection. The
 `PackageManagerCompatibility` category checks the internal contracts and Harmony
 ownership needed by the native integration.
 

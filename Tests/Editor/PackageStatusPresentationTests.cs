@@ -8,65 +8,6 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
     public sealed class PackageStatusPresentationTests
     {
         [Test]
-        public void SourceDetails_ClearPreviousGitInformationWhenSelectionChanges()
-        {
-            var view = new PackageStatusDetailsView();
-            var git = PackageSourceDetails.Create("/project/Library/PackageCache/com.example.git",
-                "https://github.com/example/package.git#main", "main", new string('a', 40), true);
-            view.Render("Git package", git, true);
-            Assert.That(view.Q<Label>("git-submodule-git-revision").text, Does.Contain("main → aaaaaaa"));
-            Assert.That(view.Q<Button>("git-submodule-copy-commit").enabledSelf, Is.True);
-            Assert.That(view.Q<Button>("git-submodule-copy-source"), Is.Null);
-
-            view.Render("Registry package", PackageSourceDetails.Create("/cache/registry", "", "", "", false), false);
-            Assert.That(view.Q<Label>("git-submodule-git-revision").text, Is.Empty);
-            Assert.That(view.Q<Label>("git-submodule-git-revision").tooltip, Is.Empty);
-            Assert.That(view.Q<Button>("git-submodule-open-repository").enabledSelf, Is.False);
-            Assert.That(view.Q<Button>("git-submodule-copy-commit").enabledSelf, Is.False);
-            Assert.That(view.Q<Button>("git-submodule-reveal-folder").tooltip, Is.EqualTo("/cache/registry"));
-
-            view.Render("Not installed", PackageSourceDetails.Unavailable, false);
-            Assert.That(view.Q<Button>("git-submodule-reveal-folder").enabledSelf, Is.False);
-            Assert.That(view.Q<Label>("git-submodule-package-location").text, Is.Empty);
-        }
-
-        [Test]
-        public void SubmoduleDetails_SupplyMissingSourceActionsWithoutAnInventedCommit()
-        {
-            var view = new PackageStatusDetailsView();
-            var details = PackageSourceDetails.Create("/project/Packages/com.example.package",
-                "git@github.com:example/package.git", "", "", false);
-            view.Render("Git submodule", details, false);
-            Assert.That(view.Q<Label>("git-submodule-source-url").text,
-                Is.EqualTo("Source: git@github.com:example/package.git"));
-            Assert.That(view.Q<Button>("git-submodule-open-repository").tooltip,
-                Is.EqualTo("https://github.com/example/package"));
-            Assert.That(view.Q<Button>("git-submodule-copy-source"), Is.Null);
-            Assert.That(view.Q<Button>("git-submodule-copy-commit").enabledSelf, Is.False);
-            Assert.That(view.Q<Label>("git-submodule-git-revision").text, Is.Empty);
-        }
-
-        [Test]
-        public void UnknownSshHost_ShowsSourceWithoutGuessingAWebPage()
-        {
-            var view = new PackageStatusDetailsView();
-            view.Render("Git submodule", PackageSourceDetails.Create("/project/Packages/com.example.package",
-                "git@custom.example:team/repo.git", "", "", false), false);
-            Assert.That(view.Q<Button>("git-submodule-open-repository").enabledSelf, Is.False);
-            Assert.That(view.Q<Label>("git-submodule-source-url").text,
-                Is.EqualTo("Source: git@custom.example:team/repo.git"));
-        }
-
-        [Test]
-        public void SourceDetails_DoNotInterpretRepositoryTextAsRichText()
-        {
-            var view = new PackageStatusDetailsView();
-            view.Render("Inspect <b>package</b>", PackageSourceDetails.Unavailable, false);
-            Assert.That(view.Q<Label>("git-submodule-package-status").enableRichText, Is.False);
-            Assert.That(view.Q<Label>("git-submodule-package-status").text, Is.EqualTo("Inspect <b>package</b>"));
-        }
-
-        [Test]
         public void RecycledSubmoduleTag_RestoresTheNativeCustomTag()
         {
             var container = new VisualElement { name = "tagContainer" };
@@ -143,6 +84,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
             Assert.That(PackageManagerSubmoduleHarmonyPatch.IsPatched(
                 PackageManagerSubmoduleHarmonyPatch.FindMethod("PackageOperationDispatcher", "RemoveEmbedded", typeof(void), "IPackage")), Is.True);
             Assert.That(PackageManagerSubmoduleHarmonyPatch.IsPatched(PackageManagerSubmoduleNativePage.GetNativeRefreshTarget()), Is.True);
+            Assert.That(PackageManagerSubmoduleHarmonyPatch.IsPatched(PackageRepositoryLink.GetRefreshTarget()), Is.True);
         }
 
         private sealed class VersionStub

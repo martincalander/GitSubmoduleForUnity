@@ -1,7 +1,7 @@
 # User Guide
 
 Open **Window > Package Management > Package Manager**. Git Submodule Manager
-adds installed-package details and **Sources > GitHub** to Unity's native window.
+adds submodule labels, a native **Repository** link, and **Sources > GitHub**.
 This is the current design on `main`. See
 [compatibility](installation.md#unity) for the exact Editor targets and local
 verification limits.
@@ -9,8 +9,7 @@ verification limits.
 ## Package Status
 
 An installed package recognised as a submodule is labelled **Submodule** in the
-package list. Select a package to see its installation source and submodule
-status in the details area. Other packages retain their Unity installation
+package list. Other packages retain their Unity installation
 source, such as a registry, Git dependency, or local package.
 
 Submodule classification works across Git hosts, including private hosts and
@@ -18,12 +17,10 @@ relative submodule URLs. A package must be installed and resolved by Unity and
 have a verified submodule registration to receive the label. Ordinary UPM Git
 dependencies retain their Git source even when hosted on the same server.
 
-While installed state is loading, the details area reports that the status is
-being checked. A failed read reports unavailable status rather than claiming
-that the package is not installed. An unverified checkout explains what is
-missing or inconsistent, such as a `.gitmodules` registration, a Git index
-entry, or a matching package path. Follow that guidance to inspect the project;
-the extension does not repair registration or change files.
+Missing or inconsistent Git registration remains unverified. The extension
+does not repair registration or change files. See
+[troubleshooting](troubleshooting.md#a-package-is-not-labelled-submodule) to
+check the project's Git metadata and package paths.
 
 Submodule status describes how the package is installed. It does not report
 whether the checkout is clean, up to date, or pushed. Use your Git client for
@@ -45,40 +42,22 @@ Opening this page does not query GitHub, read account credentials, or require
 GitHub CLI. Private installed packages appear from their local source metadata.
 Their visibility does not grant access to teammates or build machines.
 
-## Source Details and Shortcuts
+## Repository Link
 
-Select an installed package to inspect its source and resolved location. A
-verified submodule's registered source URL appears as selectable text. Ordinary
-UPM Git dependencies retain Unity's native **Installed From** field.
-Available actions depend on the metadata for that exact installed version:
+Select an installed package. When a safe repository URL is available,
+**Repository** appears first in Unity's native links row, before Documentation,
+Changelog, and Licenses. It opens the repository in your browser. Unity's other
+links and package information remain available as usual.
 
-- **Open repository** opens a repository URL in your browser when one can be
-  derived safely. HTTP and HTTPS sources can be opened directly; supported
-  public Git hosts also have browser links for SSH sources. Relative, local,
-  and unknown SSH sources have no guessed browser link.
-- **Reveal package folder** opens the resolved package location in your system's
-  file browser. For a UPM Git dependency this is Unity's cached package folder.
+The URL comes from the installed package's cached source metadata. HTTP and
+HTTPS sources can be opened directly; supported public Git hosts also have
+browser links for SSH sources. Relative, local, and unknown SSH sources have no
+guessed browser link.
 
-The extension omits embedded credentials and unrelated query parameters from
-its source URLs. Browser links omit the package subdirectory and revision suffix
-to open the repository itself. A relative submodule URL remains relative in the
-displayed source.
-
-These shortcuts do not edit the package or change its installation source.
-Opening a private repository may require signing in through your browser.
-
-## Git Revision Details
-
-For an ordinary UPM Git dependency, the details show the requested revision next
-to the installed commit, for example `main → 796ca8d`. **Copy installed commit**
-copies the complete commit hash. If the dependency does not specify a revision,
-the requested side says **default branch**; this does not identify the remote
-branch's current name or tip.
-
-Both values come from Unity's registered package metadata. Missing commit data
-is shown as unavailable. The extension does not fetch a repository, check for
-updates, or compare the installed commit with a remote branch. It also does not
-read a submodule's checkout `HEAD` to present it as a UPM resolved revision.
+Repository links omit embedded credentials, unrelated query parameters, the
+package subdirectory, and the revision suffix. Opening a private repository may
+require signing in through your browser. The link does not edit the package or
+change its installation source.
 
 ## Changing Packages
 
@@ -109,9 +88,9 @@ Git metadata every two seconds and responds to package registration changes.
 Ordinary asset edits do not launch Git status reads. An unchanged result keeps
 the existing package view instead of rebuilding it.
 
-The source shortcuts, revision details, and status explanations
-reuse that installed-state snapshot. They add no startup scans, remote requests,
-Git commands, or polling. The extension performs no background network discovery.
+The Repository link reuses that installed-state snapshot. It adds no startup
+scans, remote requests, Git commands, or polling. The extension performs no
+background network discovery.
 Its sidebar icons use small imports, and its native integration checks are
 cached until code reload.
 
