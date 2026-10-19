@@ -15,9 +15,6 @@ been published as a new release; existing `0.8.1` artifacts remain unchanged.
 
 ### Added
 
-- Add **Submodules only** beside search in **Project > All Packages** (called
-  **In Project** in older Editors). It filters verified installed submodules
-  across Git hosts using the existing cached classification.
 - Add source details and shortcuts for installed packages: a selectable source URL
   for verified submodules, repository links where a browser URL is known, and a
   shortcut to reveal the resolved package folder. Ordinary UPM Git dependencies
@@ -48,9 +45,6 @@ been published as a new release; existing `0.8.1` artifacts remain unchanged.
 
 ### Changed
 
-- Replace the separate **Project > Submodules** sidebar page with the
-  **Submodules only** toggle. Native search and sorting continue to apply, and
-  the toggle starts off after closing Package Manager or reloading scripts.
 - Attach through Package Manager UI lifecycle events instead of continuously
   scanning Editor windows. Cache validated native contracts and stop attachment
   retries after success or a bounded construction timeout.
@@ -72,6 +66,10 @@ been published as a new release; existing `0.8.1` artifacts remain unchanged.
 
 ### Removed
 
+- Custom **Submodules only** filter and the earlier **Project > Submodules**
+  sidebar page. Installed submodules retain their status labels and details;
+  **Sources > GitHub** remains available. A saved selection of the retired
+  sidebar page returns to Unity's All Packages list.
 - Remote GitHub catalogue discovery, account checks, and GitHub CLI requirement.
 - Submodule install, conversion, and removal workflows, dependency planning, and
   their persisted operation handoffs.

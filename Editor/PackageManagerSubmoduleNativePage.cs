@@ -189,6 +189,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             {
                 object currentManager = ReadMember(root, "m_PageManager") ??
                                         ReadMember(root, "pageManager");
+                RestoreRetiredPage(currentManager);
                 if (ReferenceEquals(pageManager, currentManager) &&
                     page != null && ReferenceEquals(page, FindRegisteredPage(currentManager)) &&
                     IsAttached)
@@ -250,6 +251,35 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 error = exception.GetBaseException().Message;
                 return false;
             }
+        }
+
+        internal static void RestoreRetiredPage(object manager)
+        {
+            try
+            {
+                if (!string.Equals(ReadMember(ReadMember(manager, "activePage"), "id") as string,
+                    "Extension/git-submodule-manager-submodules", StringComparison.Ordinal))
+                    return;
+                Type managerType = FindType(PageManagerTypeName);
+                Type pageType = FindType(PageInterfaceTypeName);
+                if (manager?.GetType() != managerType || pageType == null)
+                    return;
+                PropertyInfo active = managerType.GetProperty("activePage", Instance);
+                if (active?.PropertyType != pageType || !active.CanWrite)
+                    return;
+                foreach (MethodInfo method in managerType.GetMethods(Instance))
+                {
+                    ParameterInfo[] parameters = method.GetParameters();
+                    if (method.Name != "GetPage" || method.IsGenericMethod || method.ReturnType != pageType ||
+                        parameters.Length != 1 || parameters[0].ParameterType != typeof(string))
+                        continue;
+                    object replacement = method.Invoke(manager, new object[] { "InProject" });
+                    if (string.Equals(ReadMember(replacement, "id") as string, "InProject", StringComparison.Ordinal))
+                        active.SetValue(manager, replacement);
+                    return;
+                }
+            }
+            catch { } // Retired-page recovery must not prevent the GitHub source from attaching.
         }
 
         internal void Refresh()

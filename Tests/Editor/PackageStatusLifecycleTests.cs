@@ -133,10 +133,10 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                         BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic,
                         null, new[] { typeof(string) }, null).Invoke(sidebar, new object[] { "MyAssets" }) as VisualElement)?.parent;
                     Assert.That(rows[0].parent, Is.SameAs(sources));
-                    Assert.That(root.Q<Toggle>(PackageManagerSubmoduleFilter.ToggleElementName), Is.Not.Null,
-                        "The Submodules only filter must survive disabled-domain-reload Play Mode.");
+                    Assert.That(root.Q("git-submodule-manager-submodules-only"), Is.Null,
+                        "Play Mode must not recreate the removed custom filter.");
                     Assert.That(root.Q("git-submodule-manager-submodules-sidebar-row"), Is.Null,
-                        "Submodules filtering must not recreate the former sidebar row.");
+                        "Play Mode must not recreate the former Submodules sidebar row.");
                     Assert.That(PackageSourceDetails.Unavailable, Is.Not.Null);
                     var details = new PackageStatusDetailsView();
                     details.Refresh(null);

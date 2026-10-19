@@ -19,7 +19,7 @@ published `0.8.1` artifacts still contain that implementation.
 - Git for preparing test repositories and managing the checkout.
 - Python 3 and Node.js for repository, Markdown, and packaging checks.
 
-See the [submodule filter verification](#submodule-filter-verification-on-2026-10-19)
+See the [filter removal verification](#filter-removal-verification-on-2026-10-19)
 and the earlier records below for the checks performed on each change.
 Existing version gates do not imply
 that the current design has been retested across all supported targets. GitHub
@@ -350,4 +350,35 @@ Startup and allocation benchmarks were not repeated. No player build was
 needed for this Editor-only change, and no signed release artifact was
 produced. GitHub CI checks repository structure and packaging, not Unity
 execution. Local validation is not release evidence for another Unity version,
+archive, or platform.
+
+## Filter Removal Verification on 2026-10-19
+
+The custom submodule filter was removed in OpenSourceWorkspace using the
+existing Unity `7000.0.0a10` Editor on macOS, CLI `1.0.0-beta.13`, and Pipeline
+`0.8.0-exp.1`.
+
+- Fresh Unity compilation completed without errors.
+- All 102 `PackageManagerCompatibility` tests passed, including checks that
+  ordinary project membership and search have no custom filter hooks.
+- All 270 Editor tests passed after the final source changes, with no failures,
+  skipped, or inconclusive tests. This includes two Play Mode cycles with domain
+  reload disabled, with original settings restored.
+- Seven live assertions passed. Updating with the old filter enabled restored
+  the full native list of 22 packages, removed the custom control and styling,
+  preserved native search, and retained the three installed GitHub packages.
+- Screenshot capture returned blank frames; UI verification used the live
+  native hierarchy and package-list state.
+- Regression tests cover recovery from the retired Submodules sidebar page,
+  preservation of other selected pages, and unreadable native page state.
+- Repository validation, Markdown lint, package dry run, and whitespace checks
+  passed. Package dependencies and audited third-party artifacts are unchanged.
+
+Not retested: Unity `6000.3.22f1`, `6000.5.*f1`, `6000.6.0f1`,
+`6000.6.2f1`, `6000.7.0b1`, `6000.7.0b2`, `7000.0.0a7`,
+`7000.0.0a8`, and `7000.0.0a9`; Windows and Linux Editor execution; the six
+consumer projects; startup and allocation benchmarks; and the unchanged Python
+repository test suite. No player build or signed release artifact was produced.
+GitHub CI checks repository structure and packaging, not Unity execution.
+Local results do not establish release evidence for another Unity version,
 archive, or platform.

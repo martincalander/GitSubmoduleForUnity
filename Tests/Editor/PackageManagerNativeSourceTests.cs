@@ -2,6 +2,7 @@ using System;
 using System.Collections;
 using System.Collections.Generic;
 using System.Reflection;
+using System.Runtime.Serialization;
 using NUnit.Framework;
 using UnityEditor;
 using UnityEngine;
@@ -108,6 +109,35 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
             Assert.That(PackageManagerSubmoduleHarmonyPatch.IsPatched(
                 PackageManagerSubmoduleNativePage.GetSidebarRefreshTarget()), Is.True);
             Assert.That(PackageManagerSubmoduleHarmonyPatch.IsSidebarRepairInstalled, Is.True);
+        }
+
+        [Test]
+        public void NativeProjectList_HasNoCustomSubmoduleFilterOrMembershipHooks()
+        {
+            Assert.That(typeof(PackageManagerSubmoduleNativePage).Assembly.GetType(
+                "MartinCalander.GitSubmoduleManager.Editor.PackageManagerSubmoduleFilter"), Is.Null);
+            MethodInfo membership = PackageManagerSubmoduleHarmonyPatch.FindMethod(
+                "InProjectPage", "ShouldInclude", typeof(bool), "IPackage");
+            MethodInfo activePageChanged = PackageManagerSubmoduleHarmonyPatch.FindMethod(
+                "PackageSearchBar", "OnActivePageChanged", typeof(void), "IPage");
+            Assert.That(membership, Is.Not.Null);
+            Assert.That(activePageChanged, Is.Not.Null);
+            Assert.That(PackageManagerSubmoduleHarmonyPatch.IsPatched(membership), Is.False,
+                "Unity must retain ownership of ordinary project-list membership.");
+            Assert.That(PackageManagerSubmoduleHarmonyPatch.IsPatched(activePageChanged), Is.False,
+                "Native search and page changes must not carry a custom filter hook.");
+        }
+
+        [Test]
+        public void RetiredPageRecovery_DoesNotPropagateAnUnreadableActivePage()
+        {
+            Assert.DoesNotThrow(() => PackageManagerSubmoduleNativePage.RestoreRetiredPage(
+                new UnreadablePageManager()));
+        }
+
+        private sealed class UnreadablePageManager
+        {
+            public object activePage => throw new InvalidOperationException("Page state is unavailable.");
         }
 
         [Test]
@@ -344,7 +374,9 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                 Assert.That(rows[0].parent, Is.SameAs(currentSources));
                 rows.Clear();
                 CollectRows(sidebar, rows, "Extension/git-submodule-manager-submodules");
-                Assert.That(rows, Is.Empty, "Submodules filtering must not create a sidebar page.");
+                Assert.That(rows, Is.Empty, "The former Submodules sidebar page must remain absent.");
+                Assert.That(root.Q("git-submodule-manager-submodules-only"), Is.Null,
+                    "Attaching the GitHub source must not add a custom filter.");
             }
             finally
             {
@@ -404,8 +436,9 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
 
                 for (int selectionCount = 0; selectionCount <= 2; selectionCount += 2)
                 {
-                    searchText.SetValue(inProject, selectionCount == 0 ?
-                        "no-package-matches-" + Guid.NewGuid().ToString("N") : string.Empty);
+                    string search = selectionCount == 0 ?
+                        "no-package-matches-" + Guid.NewGuid().ToString("N") : string.Empty;
+                    searchText.SetValue(inProject, search);
                     var selection = new List<string>();
                     if (selectionCount == 2)
                     {
@@ -440,6 +473,12 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                         BindingFlags.Static | BindingFlags.NonPublic).Invoke(null, new object[] { new VisualElement() });
                     Assert.That(GitSubmoduleManagerPackageManagerHost.SessionCount, Is.EqualTo(sessions),
                         "An unrelated sidebar must not create a session.");
+                    Assert.That(root.Q("git-submodule-manager-submodules-only"), Is.Null,
+                        "Ordinary project pages must not receive a custom filter.");
+                    Assert.That(searchText.GetValue(inProject), Is.EqualTo(search),
+                        "Attaching the GitHub source must preserve the native project search.");
+                    Assert.That(ReadSelection(inProject), Is.EquivalentTo(selection),
+                        "Attaching the GitHub source must preserve native project selection.");
                 }
             }
             finally
@@ -491,6 +530,53 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
             Assert.That(PackageManagerSubmoduleNativePage.IsOwnedPage(page), Is.EqualTo(expected));
             Assert.That(PackageManagerSubmoduleNativePage.IsGitHubPage(null), Is.False);
             Assert.That(PackageManagerSubmoduleNativePage.IsOwnedPage(null), Is.False);
+        }
+
+        [TestCase("git-submodule-manager-submodules", true)]
+        [TestCase("another-extension", false)]
+        public void RetiredPageRecovery_MigratesOnlyTheFormerSubmodulesPage(string extensionName, bool migrates)
+        {
+            const BindingFlags instance = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
+            Type searchType = PackageManagerSubmoduleHarmonyPatch.FindType(
+                "UnityEditor.PackageManager.UI.Internal.PackageSearchBar");
+            object searchBar = Activator.CreateInstance(searchType, true);
+            object liveManager = PackageManagerSubmoduleHarmonyPatch.Read(searchBar, "m_PageManager");
+            object liveActivePage = PackageManagerSubmoduleHarmonyPatch.Read(liveManager, "activePage");
+            MethodInfo getPage = null;
+            foreach (MethodInfo method in liveManager.GetType().GetMethods(instance))
+            {
+                ParameterInfo[] parameters = method.GetParameters();
+                if (method.Name == "GetPage" && !method.IsGenericMethod &&
+                    parameters.Length == 1 && parameters[0].ParameterType == typeof(string))
+                {
+                    getPage = method;
+                    break;
+                }
+            }
+            Assert.That(getPage, Is.Not.Null);
+            object livePage = getPage.Invoke(liveManager, new object[] { "InProject" });
+            object database = PackageManagerSubmoduleHarmonyPatch.Read(livePage, "m_PackageDatabase");
+            object projectPage = Activator.CreateInstance(livePage.GetType(), new[] { database });
+#pragma warning disable SYSLIB0050
+            object manager = FormatterServices.GetUninitializedObject(liveManager.GetType());
+#pragma warning restore SYSLIB0050
+            FieldInfo pagesField = manager.GetType().GetField("m_Pages", instance);
+            var pages = (IDictionary)Activator.CreateInstance(pagesField.FieldType);
+            pages.Add("InProject", projectPage);
+            pagesField.SetValue(manager, pages);
+            object args = PackageManagerSubmoduleNativePage.CreateExtensionPageArgs();
+            args.GetType().GetField("name", instance).SetValue(args, extensionName);
+            Type extensionType = PackageManagerSubmoduleHarmonyPatch.FindType(
+                "UnityEditor.PackageManager.UI.Internal.ExtensionPage");
+            object previousPage = Activator.CreateInstance(extensionType, new[] { database, args });
+            manager.GetType().GetField("m_ActivePage", instance).SetValue(manager, previousPage);
+
+            PackageManagerSubmoduleNativePage.RestoreRetiredPage(manager);
+
+            Assert.That(PackageManagerSubmoduleHarmonyPatch.Read(manager, "activePage"),
+                Is.SameAs(migrates ? projectPage : previousPage));
+            Assert.That(PackageManagerSubmoduleHarmonyPatch.Read(liveManager, "activePage"),
+                Is.SameAs(liveActivePage), "Recovery tests must not navigate the user's Package Manager.");
         }
 
         private static VisualElement FindElement(VisualElement element, string typeName)
