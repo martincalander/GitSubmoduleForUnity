@@ -54,23 +54,22 @@ Their visibility does not grant access to teammates or build machines.
 
 ## Source Details and Shortcuts
 
-Select an installed package to inspect its source and resolved location.
+Select an installed package to inspect its source and resolved location. A
+verified submodule's registered source URL appears as selectable text. Ordinary
+UPM Git dependencies retain Unity's native **Installed From** field.
 Available actions depend on the metadata for that exact installed version:
 
 - **Open repository** opens a repository URL in your browser when one can be
   derived safely. HTTP and HTTPS sources can be opened directly; supported
   public Git hosts also have browser links for SSH sources. Relative, local,
   and unknown SSH sources have no guessed browser link.
-- **Copy source URL** copies the registered URL of a verified submodule. Ordinary
-  UPM Git dependencies already expose their source URL through Unity's native
-  **Installed From** field, so the extension reuses that field.
 - **Reveal package folder** opens the resolved package location in your system's
   file browser. For a UPM Git dependency this is Unity's cached package folder.
 
 The extension omits embedded credentials and unrelated query parameters from
-its source URLs. The copy button's tooltip identifies a sanitized URL. Browser
-links omit the package subdirectory and revision suffix to open the repository itself.
-A relative submodule URL remains relative when copied.
+its source URLs. Browser links omit the package subdirectory and revision suffix
+to open the repository itself. A relative submodule URL remains relative in the
+displayed source.
 
 These shortcuts do not edit the package or change its installation source.
 Opening a private repository may require signing in through your browser.

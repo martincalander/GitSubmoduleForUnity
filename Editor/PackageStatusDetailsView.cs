@@ -16,7 +16,6 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         private readonly Label location = Text("git-submodule-package-location");
         private readonly VisualElement actions = new VisualElement();
         private readonly Button open;
-        private readonly Button copySource;
         private readonly Button copyCommit;
         private readonly Button reveal;
         private PackageInfo selected;
@@ -40,12 +39,6 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 string url = CurrentDetails().RepositoryUrl;
                 if (!string.IsNullOrEmpty(url))
                     Application.OpenURL(url);
-            });
-            copySource = Action("git-submodule-copy-source", "Copy source URL", () =>
-            {
-                string url = CurrentDetails().SourceUrl;
-                if (!string.IsNullOrEmpty(url))
-                    EditorGUIUtility.systemCopyBuffer = url;
             });
             copyCommit = Action("git-submodule-copy-commit", "Copy installed commit", () =>
             {
@@ -84,12 +77,10 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             SetText(location, string.IsNullOrEmpty(details.ResolvedPath) ? string.Empty :
                 "Location: " + details.ResolvedPath);
             SetAction(open, !string.IsNullOrEmpty(details.RepositoryUrl), details.RepositoryUrl);
-            SetAction(copySource, showSource, details.SourceUrlIsSanitized ?
-                "Copy the source URL with credentials and unrelated query parameters removed." : details.SourceUrl);
             SetAction(copyCommit, !string.IsNullOrEmpty(details.InstalledCommit), details.InstalledCommit);
             SetAction(reveal, !string.IsNullOrEmpty(details.ResolvedPath), details.ResolvedPath);
             actions.EnableInClassList(HiddenClass,
-                string.IsNullOrEmpty(details.RepositoryUrl) && !showSource &&
+                string.IsNullOrEmpty(details.RepositoryUrl) &&
                 string.IsNullOrEmpty(details.InstalledCommit) && string.IsNullOrEmpty(details.ResolvedPath));
         }
 

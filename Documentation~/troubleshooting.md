@@ -73,7 +73,8 @@ wait for package resolution, and refresh Package Manager if the selection no
 longer matches Unity's installed record.
 
 For ordinary UPM Git dependencies, use Unity's **Installed From** field to view
-or copy the source URL. The extension adds a source URL for verified submodules.
+or copy the source URL. The extension displays a selectable source URL for
+verified submodules.
 **Open repository** is available only when a safe browser URL is known. Relative,
 local, and unknown SSH sources have no guessed browser destination. Credentials
 and unrelated query parameters are omitted from the extension's source URLs.

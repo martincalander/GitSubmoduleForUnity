@@ -24,7 +24,7 @@ installation, conversion, and removal workflows, is preserved on
 - **Submodule** labels for installed package submodules.
 - Installation source and submodule status in the selected package's details.
 - **Project > Submodules** to filter installed submodules from any Git host.
-- Repository and package-folder shortcuts, plus a copyable source URL for
+- Repository and package-folder shortcuts, plus a selectable source URL for
   verified submodules.
 - Requested Git revision and installed commit for UPM Git dependencies, using
   Unity's existing metadata.
