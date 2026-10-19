@@ -68,8 +68,8 @@ installation first. Do not create a second copy with the same package ID.
 
 ### Unity
 
-Local validation passed all 192 Editor tests on Unity `7000.0.0a10` on macOS.
-See the [verification record](../.github/CONTRIBUTING.md#edge-case-verification-on-2026-10-19)
+Local validation passed all 280 Editor tests on Unity `7000.0.0a10` on macOS.
+See the [verification record](../.github/CONTRIBUTING.md#submodule-filter-verification-on-2026-10-19)
 for the exact checks and remaining untested targets.
 
 The compatibility gate retains exact Unity `6000.3.22f1`, Unity `6000.5.*f1`
@@ -98,8 +98,10 @@ Unity may still require repository access when you install private packages.
 ## First Open
 
 Open **Window > Package Management > Package Manager**. Installed package
-submodules receive **Submodule** labels. Select a package to inspect its source,
-or choose **Sources > GitHub** to view installed GitHub submodules and UPM Git
+submodules receive **Submodule** labels. Select a package to inspect its source.
+Enable **Submodules only** beside search in **Project > All Packages** (called
+**In Project** in older Editors) to filter verified submodules across Git hosts.
+Choose **Sources > GitHub** to view installed GitHub submodules and UPM Git
 dependencies. The source is available even when no package is selected.
 
 There is no Welcome window or Preferences setup. The extension reads local

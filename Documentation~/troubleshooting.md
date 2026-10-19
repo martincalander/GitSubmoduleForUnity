@@ -1,11 +1,14 @@
 # Troubleshooting
 
-## GitHub or Submodules Is Missing
+## GitHub or the Submodules Filter Is Missing
 
 Check the exact Unity version against the
-[compatibility list](installation.md#unity). The native page depends on guarded
-Package Manager internals. GitHub belongs under **Sources** and Submodules
-belongs under **Project**. An unsupported version or a changed contract disables
+[compatibility list](installation.md#unity). The native integration depends on
+guarded Package Manager internals. GitHub belongs under **Sources**. The
+**Submodules only** toggle appears beside search in **Project > All Packages**,
+called **In Project** in older Editors. There is no separate Submodules sidebar
+page, and the toggle does not appear on other pages.
+An unsupported version or a changed contract disables
 the affected integration instead of replacing Unity's normal pages.
 
 Check the Unity Console for compilation or compatibility diagnostics and reopen
@@ -21,12 +24,16 @@ For a submodule, confirm that it is initialized and that Unity recognises its
 root `package.json` as an installed package. GitHub CLI authentication has no
 effect on this view.
 
-## A Package Is Missing from Submodules
+## A Package Is Missing with Submodules Only Enabled
 
-The **Project > Submodules** page uses the same verified classification as the
+The **Submodules only** filter uses the same verified classification as the
 **Submodule** label. It includes submodules across hosts, but excludes ordinary
 UPM Git dependencies. A package must be installed and resolved by Unity before
-it can appear. Select it on another Package Manager page to read its status.
+it can appear. Search still applies, so clear the search field if needed.
+Turn the toggle off and select the package to read its status.
+
+The toggle starts off after closing Package Manager or reloading scripts.
+Enable it again to restrict the project package list to submodules.
 
 ## A Package Is Not Labelled Submodule
 
