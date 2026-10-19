@@ -19,14 +19,13 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
             var details = Read(url);
             Assert.That(details.SourceUrl, Is.EqualTo(url));
             Assert.That(details.RepositoryUrl, Is.EqualTo(browser));
-            Assert.That(details.SourceUrlIsSanitized, Is.False);
         }
 
         [TestCase("git@code.example.invalid:example/package.git")]
         [TestCase("ssh://git@github.com:2222/example/package.git")]
         [TestCase("../sibling.git")]
         [TestCase("file:///tmp/example/package.git")]
-        public void NonWebLocationsCanBeCopiedWithoutInventingABrowserLocation(string url)
+        public void NonWebLocationsAreDisplayedWithoutInventingABrowserLocation(string url)
         {
             var details = Read(url);
             Assert.That(details.SourceUrl, Is.EqualTo(url));
@@ -40,13 +39,12 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
         [TestCase("https://github.com/example/package.git?token=secret#main", "https://github.com/example/package.git#main")]
         [TestCase("https://github.com/example/package.git?path=/Packages/Child&token=secret#main", "https://github.com/example/package.git?path=/Packages/Child#main")]
         [TestCase("git+https://user:secret@github.com/example/package.git?token=secret&path=/Packages/Child#main", "git+https://github.com/example/package.git?path=/Packages/Child#main")]
-        public void SourceDisplayAndClipboardOmitCredentialsAndUnknownQueryParameters(string url, string clean)
+        public void SourceDisplayOmitsCredentialsAndUnknownQueryParameters(string url, string clean)
         {
             var details = Read(url);
             Assert.That(details.SourceUrl, Is.EqualTo(clean));
             Assert.That(details.SourceUrl, Does.Not.Contain("secret"));
             Assert.That(details.RepositoryUrl, Does.Not.Contain("secret"));
-            Assert.That(details.SourceUrlIsSanitized, Is.True);
         }
 
         [TestCase("javascript:alert(1)")]

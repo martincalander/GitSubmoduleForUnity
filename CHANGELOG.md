@@ -17,7 +17,7 @@ been published as a new release; existing `0.8.1` artifacts remain unchanged.
 
 - Add **Project > Submodules**, a native list of verified installed submodules
   across Git hosts, using the existing cached classification.
-- Add source details and shortcuts for installed packages: a copyable source URL
+- Add source details and shortcuts for installed packages: a selectable source URL
   for verified submodules, repository links where a browser URL is known, and a
   shortcut to reveal the resolved package folder. Ordinary UPM Git dependencies
   keep Unity's native **Installed From** source URL.

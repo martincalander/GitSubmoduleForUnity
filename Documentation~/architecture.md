@@ -52,8 +52,9 @@ Source presentation accepts only supported URL forms, removes credentials and
 unrelated query parameters, and preserves the package path and revision where
 applicable. Browser actions allow HTTP and HTTPS links and map recognized public
 SSH hosts to HTTPS. Accepted unknown SSH hosts, relative URLs, and file URLs
-remain copyable without guessing a browser address. Installed commit copying requires
-a complete hexadecimal commit hash; missing data is displayed as unavailable.
+remain selectable text without guessing a browser address. Installed commit
+copying requires a complete hexadecimal commit hash; missing data is displayed
+as unavailable.
 
 ## Package Manager Integration
 
@@ -67,8 +68,8 @@ predicates read cached installed state. A failure to attach one page does not
 remove the other page's independent attachment attempt.
 
 The details view keeps Unity's existing source URL for ordinary UPM Git
-dependencies and adds the missing URL display and copy action for verified
-submodules. Its shortcuts use the installed selection's source data and resolved
+dependencies and adds a selectable URL display for verified submodules.
+Its shortcuts use the installed selection's source data and resolved
 folder. It does not add package-management actions.
 
 The native sidebar lifecycle and public details element's panel attachment

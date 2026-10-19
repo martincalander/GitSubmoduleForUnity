@@ -13,7 +13,6 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         internal string ResolvedPath { get; private set; } = string.Empty;
         internal string SourceUrl { get; private set; } = string.Empty;
         internal string RepositoryUrl { get; private set; } = string.Empty;
-        internal bool SourceUrlIsSanitized { get; private set; }
         internal string RequestedRevision { get; private set; } = string.Empty;
         internal string InstalledCommit { get; private set; } = string.Empty;
         internal string RevisionDescription { get; private set; } = string.Empty;
@@ -24,11 +23,10 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             bool gitDependency)
         {
             var result = new PackageSourceDetails { IsInstalled = true, ResolvedPath = resolvedPath ?? string.Empty };
-            if (TryReadSource(sourceUrl, out string source, out string browser, out bool sanitized))
+            if (TryReadSource(sourceUrl, out string source, out string browser))
             {
                 result.SourceUrl = source;
                 result.RepositoryUrl = browser;
-                result.SourceUrlIsSanitized = sanitized;
             }
             if (gitDependency)
             {
@@ -48,10 +46,10 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             return result;
         }
 
-        private static bool TryReadSource(string value, out string source, out string browser, out bool sanitized)
+        private static bool TryReadSource(string value, out string source, out string browser)
         {
             source = browser = string.Empty;
-            sanitized = false;
+            bool sanitized = false;
             if (!SafeText(value))
                 return false;
             string url = value;

@@ -19,10 +19,11 @@ published `0.8.1` artifacts still contain that implementation.
 - Git for preparing test repositories and managing the checkout.
 - Python 3 and Node.js for repository, Markdown, and packaging checks.
 
-The current implementation passed all 280 Editor tests on Unity `7000.0.0a10`
-on macOS. See the [source feature verification](#source-feature-verification-on-2026-10-19)
-for the final checks. Existing version gates do not imply that the current design
-has been retested across all supported targets. GitHub CLI is not required.
+See the [source feature verification](#source-feature-verification-on-2026-10-19)
+and [source button cleanup verification](#source-button-cleanup-on-2026-10-19)
+for the checks performed on each change. Existing version gates do not imply
+that the current design has been retested across all supported targets. GitHub
+CLI is not required.
 
 ## Set Up a Test Project
 
@@ -294,3 +295,25 @@ were not upgraded or reopened for these subsequent feature changes. No player
 build was needed for this Editor-only change. Signed release archives were not
 produced. Local validation is not release evidence for another commit, Unity
 version, archive, or platform.
+
+## Source Button Cleanup on 2026-10-19
+
+Removed the extension's **Copy source URL** button while retaining selectable
+source text and the other shortcuts. Using the existing OpenSourceWorkspace
+Editor on Unity `7000.0.0a10`, macOS, CLI `1.0.0-beta.13`, and Pipeline
+`0.8.0-exp.1`:
+
+- Fresh Unity compilation passed without errors or warnings.
+- All 11 `PackageStatusPresentationTests` and 39 `PackageSourceDetailsTests`
+  passed, with no skipped or inconclusive tests.
+- Live Package Manager inspection confirmed the removed button, selectable
+  source text, and the remaining repository and folder actions.
+- Repository validation, Markdown lint, package dry run, and whitespace checks
+  passed.
+
+The full assembly and separate compatibility run were not repeated for this
+UI-only removal; reflection, lifecycle, and removal guards did not change.
+Other supported Unity versions, Windows and Linux Editor execution, the six
+consumer projects, player builds, and signed release artifacts were not retested
+or produced. The preceding full-assembly result applies to the earlier source
+feature revision, not this subsequent change.

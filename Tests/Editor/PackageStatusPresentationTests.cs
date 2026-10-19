@@ -16,8 +16,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
             view.Render("Git package", git, true);
             Assert.That(view.Q<Label>("git-submodule-git-revision").text, Does.Contain("main → aaaaaaa"));
             Assert.That(view.Q<Button>("git-submodule-copy-commit").enabledSelf, Is.True);
-            Assert.That(view.Q<Button>("git-submodule-copy-source").enabledSelf, Is.False,
-                "Unity already supplies the Git source URL and its copy action.");
+            Assert.That(view.Q<Button>("git-submodule-copy-source"), Is.Null);
 
             view.Render("Registry package", PackageSourceDetails.Create("/cache/registry", "", "", "", false), false);
             Assert.That(view.Q<Label>("git-submodule-git-revision").text, Is.Empty);
@@ -42,19 +41,20 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                 Is.EqualTo("Source: git@github.com:example/package.git"));
             Assert.That(view.Q<Button>("git-submodule-open-repository").tooltip,
                 Is.EqualTo("https://github.com/example/package"));
-            Assert.That(view.Q<Button>("git-submodule-copy-source").enabledSelf, Is.True);
+            Assert.That(view.Q<Button>("git-submodule-copy-source"), Is.Null);
             Assert.That(view.Q<Button>("git-submodule-copy-commit").enabledSelf, Is.False);
             Assert.That(view.Q<Label>("git-submodule-git-revision").text, Is.Empty);
         }
 
         [Test]
-        public void UnknownSshHost_CanCopySourceWithoutGuessingAWebPage()
+        public void UnknownSshHost_ShowsSourceWithoutGuessingAWebPage()
         {
             var view = new PackageStatusDetailsView();
             view.Render("Git submodule", PackageSourceDetails.Create("/project/Packages/com.example.package",
                 "git@custom.example:team/repo.git", "", "", false), false);
             Assert.That(view.Q<Button>("git-submodule-open-repository").enabledSelf, Is.False);
-            Assert.That(view.Q<Button>("git-submodule-copy-source").enabledSelf, Is.True);
+            Assert.That(view.Q<Label>("git-submodule-source-url").text,
+                Is.EqualTo("Source: git@custom.example:team/repo.git"));
         }
 
         [Test]
