@@ -346,7 +346,7 @@ The exact Git proof sequences and recovery boundaries are documented in the
   namespaces, and `GitPackageManagerWindow` references. Serialized editor types
   carry migration metadata, while legacy preferences and interrupted-operation
   state remain recoverable across the rename.
-- Renamed the UPM package from `com.essentials.gitpackagemanager` to
+- Moved the UPM package to the `com.martincalander` scope as
   `com.martincalander.gitpackagemanager` and aligned its assembly, namespace,
   and Unity submodule path.
 - Renamed the GitHub repository to `GitPackageManager` while keeping the UPM

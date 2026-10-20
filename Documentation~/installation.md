@@ -168,11 +168,11 @@ The existing installed packages remain in place.
 
 ### Migrating from Git Package Manager
 
-Earlier development revisions used `com.essentials.gitpackagemanager`, then
-`com.martincalander.gitpackagemanager`. The current package name is
-`com.martincalander.gitsubmodulemanager`. For a UPM dependency, replace the earlier
-manifest key and let Unity resolve the package. For a submodule, coordinate its
-`.gitmodules` entry and parent gitlink with the package path.
+The current package name is `com.martincalander.gitsubmodulemanager`.
+For a UPM dependency, replace any earlier Git Package Manager dependency key in
+`Packages/manifest.json` with this name and let Unity resolve the package.
+For a submodule, coordinate its `.gitmodules` entry and parent gitlink with the
+package path.
 
 Downstream assembly definitions should reference
 `MartinCalander.GitSubmoduleManager.Editor`; the matching source namespace is
