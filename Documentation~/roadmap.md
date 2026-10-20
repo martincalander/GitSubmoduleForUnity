@@ -23,10 +23,12 @@ workflows are preserved on
 
 The compatibility gate retains exact Unity `6000.3.22f1`, `6000.5.*f1` final
 releases, exact `6000.6.0f1` and `6000.6.2f1`, exact `6000.7.0b1` and
-`6000.7.0b2` betas, and exact `7000.0.0a7`, `7000.0.0a8`, `7000.0.0a9`, and
-`7000.0.0a10` alphas. Each retained target and platform needs verification
-against the implementation being released before a release claim. See the
-[verification records](../.github/CONTRIBUTING.md) for exact local coverage.
+`6000.7.0b2` betas. All canonical `7000.0.0a*` alpha revisions with a positive
+integer suffix are eligible for the existing runtime API checks. Keep these
+per-feature checks independent as Unity evolves. Each exact target and platform
+still needs verification against the implementation being released before a
+release claim. See the [verification records](../.github/CONTRIBUTING.md) for exact
+local coverage.
 
 ## Product Boundary
 

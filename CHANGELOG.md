@@ -15,20 +15,16 @@ been published as a new release; existing `0.8.1` artifacts remain unchanged.
 
 ### Added
 
+- Admit all canonical Unity `7000.0.0a*` alpha revisions with a positive integer
+  suffix, retaining the existing Unity 6 targets and independent runtime checks
+  for each native feature. New alpha numbers no longer need an explicit package
+  update. Exact tested revisions and platforms remain recorded separately in
+  the contribution guide. Unity 7 requires a current Git dependency or local
+  checkout; published `0.8.1` artifacts retain their earlier version gate.
+
 - Add **Repository** as the first link in Unity's native Documentation,
   Changelog, and Licenses row when the installed package has a safe repository
   URL. The link uses cached installed metadata without remote checks.
-
-- Added exact Unity `7000.0.0a10` alpha compatibility while preserving the
-  independently guarded Package Manager contracts and existing Unity targets.
-
-- Added exact Unity `7000.0.0a9` alpha compatibility while preserving the
-  independently guarded Package Manager contracts and existing Unity targets.
-
-- Added exact Unity `7000.0.0a7` and `7000.0.0a8` alpha compatibility. Other Unity 7
-  builds remain rejected by the runtime gate. Unity 7 requires a Git dependency
-  or local checkout containing these changes; the legacy bootstrap retains its
-  validated Unity 6 targets.
 
 - Added exact Unity `6000.7.0b1` and `6000.7.0b2` beta compatibility. Other 6.7
   builds remain rejected by the runtime gate. The legacy installer retains its
@@ -39,6 +35,18 @@ been published as a new release; existing `0.8.1` artifacts remain unchanged.
   versions remain unvalidated.
 
 ### Changed
+
+- Share cached inherited-member lookup across badges and source pages. Keep
+  direct property lookup for status, read current values on each access, and
+  recover when a previously failing getter becomes available.
+- Reuse submodule GitHub classification and sanitized browser URLs within each
+  installed snapshot, bounded by its registration count and retaining all
+  identity and metadata checks.
+- Remove unused readiness forwarding and duplicate page and reflection helpers.
+
+- Use Unity's code initialization and unloading callbacks on Unity 6.5 and
+  newer, retaining the Unity 6.3 fallback. Keep Editor package status and native
+  hooks across Play mode cycles with domain reload and scene reload disabled.
 
 - Refresh rendered submodule labels and Repository links when status changes,
   without rebuilding unrelated native package lists or repeating readiness work.

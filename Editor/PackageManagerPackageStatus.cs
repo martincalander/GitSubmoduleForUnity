@@ -2,7 +2,6 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
-using System.Reflection;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.RegularExpressions;
@@ -12,6 +11,7 @@ using UnityEditor;
 using UnityEditor.PackageManager;
 using PackageInfo = UnityEditor.PackageManager.PackageInfo;
 using UnityEngine;
+using static MartinCalander.GitSubmoduleManager.Editor.PackageManagerSubmoduleHarmonyPatch;
 
 namespace MartinCalander.GitSubmoduleManager.Editor
 {
@@ -27,11 +27,13 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         }
     }
 
-    [InitializeOnLoad]
 #if UNITY_6000_5_OR_NEWER
+    // These observations describe installed Editor packages, not a Play mode session.
     [Unity.Scripting.LifecycleManagement.NoAutoStaticsCleanup]
+#else
+    [InitializeOnLoad]
 #endif
-    internal static class PackageManagerPackageStatus
+    internal static partial class PackageManagerPackageStatus
     {
         private const int MaximumOutput = 2 * 1024 * 1024;
         private const int CommandTimeoutMilliseconds = 5000;
@@ -67,6 +69,22 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             internal bool HasSharedIndex;
             internal string FilesStamp;
             internal string Error = string.Empty;
+            private Dictionary<string, RepositorySource> repositorySources;
+
+            internal RepositorySource GetRepositorySource(string url)
+            {
+                if (url == null)
+                    return new RepositorySource(null);
+                repositorySources ??= new Dictionary<string, RepositorySource>(StringComparer.Ordinal);
+                if (repositorySources.TryGetValue(url, out RepositorySource source))
+                    return source;
+                // Accepted snapshots are immutable; bound retention if a caller edits a fixture snapshot.
+                if (repositorySources.Count >= Math.Max(1, Repositories.Count))
+                    repositorySources.Clear();
+                source = new RepositorySource(url);
+                repositorySources.Add(url, source);
+                return source;
+            }
 
             internal bool HasSameContents(StatusSnapshot other)
             {
@@ -80,6 +98,18 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                     if (!other.Repositories.TryGetValue(repository.Key, out string url) || repository.Value != url)
                         return false;
                 return true;
+            }
+        }
+
+        internal readonly struct RepositorySource
+        {
+            internal readonly bool IsGitHub;
+            internal readonly string RepositoryUrl;
+
+            internal RepositorySource(string url)
+            {
+                IsGitHub = IsGitHubUrl(url);
+                RepositoryUrl = PackageSourceDetails.GetRepositoryUrl(url);
             }
         }
 
@@ -201,22 +231,27 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             add => State.Changed += value;
             remove => State.Changed -= value;
         }
-        internal static event Action ReadinessChanged
-        {
-            add => State.ReadinessChanged += value;
-            remove => State.ReadinessChanged -= value;
-        }
         internal static bool IsReady => State.IsReady;
         internal static string Error => snapshot.Error;
 
-        static PackageManagerPackageStatus()
+#if UNITY_6000_5_OR_NEWER
+        [Unity.Scripting.LifecycleManagement.OnCodeInitializing]
+#else
+        static PackageManagerPackageStatus() => Initialize();
+#endif
+        private static void Initialize()
         {
+#if !UNITY_6000_5_OR_NEWER
+            AssemblyReloadEvents.beforeAssemblyReload -= Shutdown;
             AssemblyReloadEvents.beforeAssemblyReload += Shutdown;
+#endif
+            EditorApplication.quitting -= Shutdown;
             EditorApplication.quitting += Shutdown;
         }
 
         internal static void Resume()
         {
+            Initialize();
             if (!shuttingDown)
                 return;
             shuttingDown = false;
@@ -361,12 +396,22 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             catch (Exception) { return "unavailable"; }
         }
 
+#if UNITY_6000_5_OR_NEWER
+        [Unity.Scripting.LifecycleManagement.OnCodeUnloading]
+#endif
         private static void Shutdown()
         {
             shuttingDown = true;
+            generation++;
+            refreshPending = false;
             cancellation?.Cancel();
             Events.registeredPackages -= OnRegisteredPackages;
             EditorApplication.update -= Update;
+            listening = false;
+#if !UNITY_6000_5_OR_NEWER
+            AssemblyReloadEvents.beforeAssemblyReload -= Shutdown;
+#endif
+            EditorApplication.quitting -= Shutdown;
             try { worker?.Wait(1500); }
             catch (Exception) { }
         }
@@ -387,7 +432,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             if (!TryGetSubmoduleRepository(name, data, out string url) ||
                 !IsDirectPackage(projectRoot, name, resolvedPath))
                 return false;
-            status = new PackageSubmoduleStatus(url, IsGitHubUrl(url));
+            status = new PackageSubmoduleStatus(url, data.GetRepositorySource(url).IsGitHub);
             return true;
         }
 
@@ -397,7 +442,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             status = default;
             if (!TryGetInstalledSubmoduleRepository(projectRoot, name, installed, data, out string url))
                 return false;
-            status = new PackageSubmoduleStatus(url, IsGitHubUrl(url));
+            status = new PackageSubmoduleStatus(url, data.GetRepositorySource(url).IsGitHub);
             return true;
         }
 
@@ -490,27 +535,27 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         private static bool TryGetNativeInstalledPackage(object nativePackage, StatusSnapshot data,
             out string name, out InstalledPackage info)
         {
-            object version = Property(Property(nativePackage, "versions"), "primary");
-            name = Property(version, "name") as string;
+            object version = ReadProperty(ReadProperty(nativePackage, "versions"), "primary");
+            name = ReadProperty(version, "name") as string;
             info = default;
-            return Property(version, "isInstalled") is bool installed && installed &&
+            return ReadProperty(version, "isInstalled") is bool installed && installed &&
                    !string.IsNullOrEmpty(name) && data.Packages.TryGetValue(name, out info) &&
-                   info.MatchesPath(Property(version, "localPath") as string) &&
-                   (Property(version, "packageId") as string) == info.PackageId;
+                   info.MatchesPath(ReadProperty(version, "localPath") as string) &&
+                   (ReadProperty(version, "packageId") as string) == info.PackageId;
         }
 
         internal static string GetRepositoryUrl(object version) => GetRepositoryUrl(ProjectRoot, version, snapshot);
 
         internal static string GetRepositoryUrl(string projectRoot, object version, StatusSnapshot data)
         {
-            string name = Property(version, "name") as string;
-            if (Property(version, "isInstalled") is not true || string.IsNullOrEmpty(name) ||
+            string name = ReadProperty(version, "name") as string;
+            if (ReadProperty(version, "isInstalled") is not true || string.IsNullOrEmpty(name) ||
                 !data.Packages.TryGetValue(name, out InstalledPackage installed) ||
-                !installed.MatchesPath(Property(version, "localPath") as string) ||
-                (Property(version, "packageId") as string) != installed.PackageId)
+                !installed.MatchesPath(ReadProperty(version, "localPath") as string) ||
+                (ReadProperty(version, "packageId") as string) != installed.PackageId)
                 return string.Empty;
             return TryGetInstalledSubmoduleRepository(projectRoot, name, installed, data, out string url)
-                ? PackageSourceDetails.GetRepositoryUrl(url) : installed.GetRepositoryUrl(name);
+                ? data.GetRepositorySource(url).RepositoryUrl : installed.GetRepositoryUrl(name);
         }
 
         private static string PackageUrl(string name, string packageId)
@@ -521,12 +566,6 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         private static bool HasPackagePrefix(string name, string packageId) =>
             !string.IsNullOrEmpty(name) && packageId != null && packageId.Length > name.Length &&
             packageId[name.Length] == '@' && packageId.StartsWith(name, StringComparison.Ordinal);
-
-        private static object Property(object value, string name)
-        {
-            try { return value?.GetType().GetProperty(name, BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance)?.GetValue(value); }
-            catch (Exception) { return null; }
-        }
 
         internal static bool IsGitHubUrl(string url)
         {

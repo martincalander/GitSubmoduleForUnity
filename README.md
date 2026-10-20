@@ -94,10 +94,12 @@ prior status-view validation from subsequent feature changes.
 
 The compatibility gate retains exact Unity `6000.3.22f1`, `6000.5.*f1` final
 releases, exact `6000.6.0f1` and `6000.6.2f1`, exact `6000.7.0b1` and
-`6000.7.0b2` betas, and exact `7000.0.0a7`, `7000.0.0a8`, `7000.0.0a9`, and
-`7000.0.0a10` alphas. Other versions remain unsupported. Consult the verification
-records for targets not yet retested with these changes. The package is
-Editor-only.
+`6000.7.0b2` betas. All `7000.0.0a*` alpha revisions are eligible when `*` is
+a positive integer without leading zeros. Each native feature still checks its
+required Package Manager APIs at runtime and stays disabled if they have changed.
+This avoids a package update solely to recognize the next alpha number; it does
+not establish that every alpha has been tested. Other version families remain
+unsupported. The package is Editor-only.
 
 ## Moving from the Earlier Manager
 

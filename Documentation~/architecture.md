@@ -96,7 +96,10 @@ UI tick. The sidebar hook notifies only the session owning that sidebar, and
 source attachment fails closed if the hook could not be installed.
 
 Native-page contracts and reflected members are cached for the current code
-load. A complete hook installation is reused until teardown; incomplete seams
+load. Badges and native pages share cached field-first member lookup. Status
+keeps direct property-only lookup through the runtime's reflection cache. Each
+access reads the current value; getter failures are not retained. A complete hook
+installation is reused until teardown; incomplete seams
 remain eligible for another attempt. Unchanged submodule badges retain their
 state and callback, and release owned width overrides when reparented. Reusing an attachment still checks its manager, page, and hierarchy.
 The compatibility gate and deletion guards remain independent.
@@ -131,6 +134,13 @@ observed window invalidates and cancels an active scan. Its result cannot publis
 and each Git command checks cancellation before starting. Reopening queues a
 fresh generation after that worker drains.
 
+Submodule GitHub membership and browser URLs are derived once per distinct raw
+source in the current snapshot. This cache is bounded by the registration count
+and is discarded with that snapshot. Identity, resolved path, registration,
+gitlink, and metadata-error checks still run before the cached result is used.
+Changing a raw URL in a snapshot cannot reuse its previous source details.
+Derived entries do not participate in snapshot equality or change notifications.
+
 Classification distinguishes missing registration, missing gitlinks, package
 identity and path mismatches, and metadata-read failures. These conditions
 remain unverified and do not weaken deletion guards or trigger automatic repair.
@@ -150,18 +160,40 @@ has no installation transaction, dependency plan, pending mutation handoff,
 remote discovery cache, or persisted confirmation to resume. Existing recovery
 files from the earlier implementation remain outside this view's ownership.
 
+The host and status service use `OnCodeInitializing` and `OnCodeUnloading` on
+Unity 6.5 and newer, with the older load and assembly-reload callbacks retained
+for Unity 6.3. Initialization is idempotent. Unloading releases sessions, native
+patches, event subscriptions, and pending work before the code is discarded.
+Package Manager state belongs to the Editor, so its static caches and hooks are
+excluded from automatic static cleanup and survive Play mode without a domain
+reload. Entering or exiting Play mode does not reinstall hooks or reset installed
+status. This also applies when scene reload is disabled.
+
+This lifetime follows Unity's
+[code lifecycle guidance](https://docs.unity.com/en-us/engine/7000.0/manual/programming-environment/code-reload-serialization/code-reload/code-lifecycle).
+The package has no gameplay statics to reset at Play mode entry.
+
 ## Compatibility Boundary
 
-The existing gate retains exact Unity `6000.3.22f1`, Unity `6000.5.*f1` final
+The version gate retains exact Unity `6000.3.22f1`, Unity `6000.5.*f1` final
 releases, exact `6000.6.0f1` and `6000.6.2f1`, exact `6000.7.0b1` and
-`6000.7.0b2` betas, and exact `7000.0.0a7`, `7000.0.0a8`, `7000.0.0a9`, and
-`7000.0.0a10` alphas. Unity `6000.4`, other `6000.6` releases, and other Unity 7
-builds remain unsupported. The manifest's `6000.3.22f1` minimum cannot encode
-this complete matrix.
+`6000.7.0b2` betas. It also admits canonical `7000.0.0a*` alpha revisions with
+a positive integer suffix without leading zeros. Empty, zero, overflowing,
+non-ASCII, or otherwise malformed suffixes are rejected. Other Unity 7 release
+channels, minor versions, and patch versions remain outside this gate, as do
+Unity `6000.4` and other `6000.6` releases. The manifest's `6000.3.22f1` minimum
+cannot encode this complete policy.
+
+Passing the version gate allows the independently guarded native features to
+check their required runtime contracts. It does not bypass reflection, Harmony,
+installed-identity, or deletion safeguards. A missing or changed contract still
+disables its affected feature. Runtime contract checks establish the expected
+API shape, not behavioral compatibility with every alpha revision.
 
 See the [verification records](../.github/CONTRIBUTING.md) for the exact tested
-commits, Unity versions, platforms, and checks. Existing version gates and prior
-validation of the legacy implementation do not establish a new release claim for the current design.
+commits, Unity versions, platforms, and checks. Alpha eligibility, existing
+version gates, and prior validation of the legacy implementation do not establish
+a new release claim for the current design.
 
 Mono retains the byte-identical Harmony 2.4.1 `net472` DLL under
 `!ENABLE_CORECLR`. CoreCLR retains eleven original upstream DLLs under

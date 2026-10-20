@@ -155,6 +155,60 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
             Assert.That(PackageManagerPackageStatus.TryClassify(root, Name, packagePath, data, out _), Is.False);
         }
 
+        [TestCase("https://user:secret@github.com/example/replacement.git?path=/Package#main",
+            "https://github.com/example/replacement", true)]
+        [TestCase("https://gitlab.com/example/replacement.git", "https://gitlab.com/example/replacement", false)]
+        [TestCase("file:///private/package.git", "", false)]
+        [TestCase(null, "", false)]
+        public void CachedSubmoduleSourceTracksExactRawUrlAndRetainsIdentityGuards(
+            string changedUrl, string expectedUrl, bool github)
+        {
+            var data = InstalledSnapshot();
+            object version = NativeVersion();
+            object native = new { versions = new { primary = version } };
+            string first = PackageManagerPackageStatus.GetRepositoryUrl(root, version, data);
+            Assert.That(PackageManagerPackageStatus.GetRepositoryUrl(root, version, data), Is.SameAs(first));
+
+            data.Repositories[RelativePath] = changedUrl;
+            Assert.That(PackageManagerPackageStatus.IsGitHubPackage(root, native, data), Is.EqualTo(github));
+            Assert.That(PackageManagerPackageStatus.GetRepositoryUrl(root, version, data), Is.EqualTo(expectedUrl));
+            Assert.That(PackageManagerPackageStatus.GetRepositoryUrl(root, NativeVersion(packageId: "different"), data), Is.Empty);
+            Assert.That(PackageManagerPackageStatus.GetRepositoryUrl(root, NativeVersion(path: packagePath + "-other"), data), Is.Empty);
+            data.Gitlinks.Clear();
+            Assert.That(PackageManagerPackageStatus.GetRepositoryUrl(root, version, data), Is.Empty);
+            Assert.That(PackageManagerPackageStatus.IsGitHubPackage(root, native, data), Is.False);
+        }
+
+        [Test]
+        public void SubmoduleSourceCacheStaysBoundedWhenFixtureRegistrationsChange()
+        {
+            var data = InstalledSnapshot();
+            for (int revision = 0; revision < 50; revision++)
+            {
+                string url = "https://github.com/example/package" + revision;
+                data.Repositories[RelativePath] = url;
+                Assert.That(PackageManagerPackageStatus.GetRepositoryUrl(root, NativeVersion(), data), Is.EqualTo(url));
+                var cached = (System.Collections.IDictionary)PackageManagerSubmoduleHarmonyPatch.Read(data, "repositorySources");
+                Assert.That(cached.Count, Is.LessThanOrEqualTo(data.Repositories.Count));
+            }
+        }
+
+        [Test]
+        public void DerivedSubmoduleSourceCacheDoesNotChangeSnapshotContentsOrNotifications()
+        {
+            var data = InstalledSnapshot();
+            var state = new PackageManagerPackageStatus.StatusState();
+            state.CompleteRefresh(data);
+            int changes = 0;
+            state.Changed += () => changes++;
+            PackageManagerPackageStatus.GetRepositoryUrl(root, NativeVersion(), data);
+            var next = InstalledSnapshot();
+            Assert.That(data.HasSameContents(next), Is.True);
+            Assert.That(next.HasSameContents(data), Is.True);
+            state.CompleteRefresh(next);
+            Assert.That(changes, Is.Zero);
+        }
+
         [TestCase("com.example.other", "Packages/com.example.package")]
         [TestCase("com.example.package", "Packages/com.example.other")]
         [TestCase("com.example.package", "Library/PackageCache/com.example.package")]

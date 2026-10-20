@@ -1,3 +1,4 @@
+using System;
 using System.Collections;
 using System.Linq;
 using System.Reflection;
@@ -9,6 +10,53 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
     [Category("PackageSourceFeatures")]
     public sealed class PackageStatusPresentationTests
     {
+        [Test]
+        public void CachedMemberReadsPreserveLookupModesAndInheritedMembers()
+        {
+            var value = new DerivedMemberStub();
+            for (int read = 0; read < 2; read++)
+            {
+                Assert.That(PackageManagerSubmoduleHarmonyPatch.Read(value, "shadowed"), Is.EqualTo("derived property"));
+                Assert.That(PackageManagerSubmoduleHarmonyPatch.ReadProperty(value, "shadowed"), Is.EqualTo("derived property"));
+                Assert.That(PackageManagerSubmoduleHarmonyPatch.ReadProperty(value, "field"), Is.Null);
+                Assert.That(PackageManagerSubmoduleHarmonyPatch.Read(value, "field"), Is.EqualTo("field value"));
+                Assert.That(PackageManagerSubmoduleHarmonyPatch.ReadProperty(value, "privateBase"), Is.Null);
+                Assert.That(PackageManagerSubmoduleHarmonyPatch.Read(value, "privateBase"), Is.EqualTo("base value"));
+                Assert.That(PackageManagerSubmoduleHarmonyPatch.Read(value, "missing"), Is.Null);
+                Assert.That(PackageManagerSubmoduleHarmonyPatch.ReadProperty(value, "missing"), Is.Null);
+                Assert.That(PackageManagerSubmoduleHarmonyPatch.Read(value, "Item"), Is.Null);
+                Assert.That(PackageManagerSubmoduleHarmonyPatch.ReadProperty(value, "Item"), Is.Null);
+                Assert.That(PackageManagerSubmoduleHarmonyPatch.Read(new BaseMemberStub(), "shadowed"), Is.EqualTo("base field"));
+            }
+        }
+
+        [TestCase(false)]
+        [TestCase(true)]
+        public void CachedMemberMetadataStillReadsCurrentValuesAndRecoversAfterGetterFailure(bool propertyOnly)
+        {
+            var value = new DerivedMemberStub { Fails = true };
+            Func<object, string, object> read = propertyOnly
+                ? PackageManagerSubmoduleHarmonyPatch.ReadProperty : PackageManagerSubmoduleHarmonyPatch.Read;
+            Assert.That(read(value, "current"), Is.Null);
+            value.Fails = false;
+            Assert.That(read(value, "current"), Is.EqualTo("first"));
+            value.Value = "second";
+            Assert.That(read(value, "current"), Is.EqualTo("second"));
+            value.Fails = true;
+            Assert.That(read(value, "current"), Is.Null);
+            Assert.That(read(null, "current"), Is.Null);
+        }
+
+        [Test]
+        public void NativePageMemberReadsKeepGetterFailuresVisibleToTheirGuard()
+        {
+            var value = new DerivedMemberStub { Fails = true };
+            Assert.That(PackageManagerSubmoduleHarmonyPatch.Read(value, "current"), Is.Null);
+            Assert.Throws<TargetInvocationException>(() => PackageManagerSubmoduleHarmonyPatch.ReadMember(value, "current"));
+            value.Fails = false;
+            Assert.That(PackageManagerSubmoduleHarmonyPatch.ReadMember(value, "current"), Is.EqualTo("first"));
+        }
+
         [Test]
         public void RecycledSubmoduleTag_RestoresTheNativeCustomTag()
         {
@@ -289,6 +337,24 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
             public string name { get; set; }
             public string localPath { get; set; }
             public bool isInstalled { get; set; }
+        }
+
+        private class BaseMemberStub
+        {
+#pragma warning disable CS0414
+            private readonly string privateBase = "base value";
+#pragma warning restore CS0414
+            public string shadowed = "base field";
+        }
+
+        private sealed class DerivedMemberStub : BaseMemberStub
+        {
+            public new string shadowed => "derived property";
+            public string field = "field value";
+            internal bool Fails;
+            internal string Value = "first";
+            public string current => Fails ? throw new InvalidOperationException("Getter is temporarily unavailable.") : Value;
+            public string this[int index] => index.ToString();
         }
 
         private static void ObserveTag(TextElement label, object version) =>

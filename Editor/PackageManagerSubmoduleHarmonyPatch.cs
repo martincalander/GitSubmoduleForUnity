@@ -22,6 +22,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         private const BindingFlags Static = BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic;
         private static readonly ConditionalWeakTable<TextElement, TagState> Tags = new();
         private static readonly ConditionalWeakTable<VisualElement, ObservedVersion> Versions = new();
+        private static readonly Dictionary<(Type Type, string Name), MemberInfo> Members = new();
         private static readonly Lazy<MethodInfo> SourceRefresh = new(() =>
             FindMethod("SourceInfoCard", "Refresh", typeof(void), "IPackageVersion"));
         private static Harmony harmony;
@@ -140,24 +141,41 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             return typeof(UnityEditor.PackageManager.UI.IPackageManagerExtension).Assembly.GetType(name, false);
         }
 
+        internal static object ReadProperty(object instance, string name)
+        {
+            // The runtime already caches direct property lookup; another dictionary adds overhead here.
+            try { return instance?.GetType().GetProperty(name, Instance)?.GetValue(instance); }
+            catch { return null; }
+        }
+
         internal static object Read(object instance, string name)
+        {
+            try { return ReadMember(instance, name); }
+            catch { return null; }
+        }
+
+        internal static object ReadMember(object instance, string name)
         {
             if (instance == null)
                 return null;
-            try
+            var key = (instance.GetType(), name);
+            if (!Members.TryGetValue(key, out MemberInfo member))
             {
-                for (Type type = instance.GetType(); type != null; type = type.BaseType)
+                for (Type type = key.Item1; type != null && member == null; type = type.BaseType)
                 {
-                    FieldInfo field = type.GetField(name, Instance | BindingFlags.DeclaredOnly);
-                    if (field != null)
-                        return field.GetValue(instance);
-                    PropertyInfo property = type.GetProperty(name, Instance | BindingFlags.DeclaredOnly);
-                    if (property != null && property.GetIndexParameters().Length == 0)
-                        return property.GetValue(instance);
+                    member = type.GetField(name, Instance | BindingFlags.DeclaredOnly);
+                    if (member == null)
+                    {
+                        PropertyInfo property = type.GetProperty(name, Instance | BindingFlags.DeclaredOnly);
+                        if (property != null && property.GetIndexParameters().Length == 0)
+                            member = property;
+                    }
                 }
+                Members.Add(key, member);
             }
-            catch { }
-            return null;
+            // Cache the contract, never the value or a failed getter invocation.
+            return member is FieldInfo field ? field.GetValue(instance) :
+                (member as PropertyInfo)?.GetValue(instance);
         }
 
         private static bool TryGetStatus(object version, out PackageSubmoduleStatus status)
@@ -300,7 +318,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
 
         private static void RefreshPostfix(object __0)
         {
-            if (PackageManagerSubmoduleNativePage.IsOwnedPage(__0))
+            if (PackageManagerSubmoduleNativePage.IsGitHubPage(__0))
                 PackageManagerPackageStatus.Refresh();
         }
 
@@ -338,7 +356,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             {
                 object manager = Read(root, "m_PageManager") ?? Read(root, "pageManager");
                 object page = Read(manager, "activePage");
-                if (page == null || PackageManagerSubmoduleNativePage.IsOwnedPage(page))
+                if (page == null || PackageManagerSubmoduleNativePage.IsGitHubPage(page))
                     return false;
                 MethodInfo rebuild = page.GetType().GetMethod("Rebuild", Instance, null, new[] { typeof(bool) }, null);
                 if (rebuild != null && rebuild.ReturnType == typeof(void))

@@ -4,14 +4,14 @@ using System.Collections.Generic;
 using System.Reflection;
 using UnityEngine;
 using UnityEngine.UIElements;
+using static MartinCalander.GitSubmoduleManager.Editor.PackageManagerSubmoduleHarmonyPatch;
 
 namespace MartinCalander.GitSubmoduleManager.Editor
 {
     /// <summary>
-    /// Exact runtime gate for the Package Manager reflection contract. UPM can
-    /// express only the minimum package version, so every native integration
-    /// entry point must independently reject Editors outside the validated,
-    /// non-contiguous support set.
+    /// Version eligibility for the Package Manager reflection contracts. UPM
+    /// expresses only a minimum version. Eligible Editors, including the
+    /// 7000.0.0 alpha series, still require each feature's native contract checks.
     /// </summary>
     internal static class PackageManagerUnityVersionSupport
     {
@@ -20,16 +20,23 @@ namespace MartinCalander.GitSubmoduleManager.Editor
 
         internal static bool IsSupported(string unityVersion)
         {
-            if (string.Equals(unityVersion, "6000.7.0b1", StringComparison.Ordinal) ||
-                string.Equals(unityVersion, "6000.7.0b2", StringComparison.Ordinal) ||
-                string.Equals(unityVersion, "7000.0.0a7", StringComparison.Ordinal) ||
-                string.Equals(unityVersion, "7000.0.0a8", StringComparison.Ordinal) ||
-                string.Equals(unityVersion, "7000.0.0a9", StringComparison.Ordinal) ||
-                string.Equals(unityVersion, "7000.0.0a10", StringComparison.Ordinal))
-                return true;
-
             if (string.IsNullOrEmpty(unityVersion))
                 return false;
+
+            const string alphaPrefix = "7000.0.0a";
+            if (unityVersion.StartsWith(alphaPrefix, StringComparison.Ordinal))
+            {
+                return TryParseDigits(
+                           unityVersion,
+                           alphaPrefix.Length,
+                           unityVersion.Length - alphaPrefix.Length,
+                           out int alphaRevision) &&
+                       alphaRevision > 0;
+            }
+
+            if (string.Equals(unityVersion, "6000.7.0b1", StringComparison.Ordinal) ||
+                string.Equals(unityVersion, "6000.7.0b2", StringComparison.Ordinal))
+                return true;
 
             int finalMarker = unityVersion.IndexOf('f');
             if (finalMarker <= 0 ||
@@ -89,7 +96,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
 
                 try
                 {
-                    parsed = checked(parsed * 10 + character - '0');
+                    parsed = checked(parsed * 10 + (character - '0'));
                 }
                 catch (OverflowException)
                 {
@@ -129,7 +136,6 @@ namespace MartinCalander.GitSubmoduleManager.Editor
 
         private const BindingFlags Instance =
             BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
-        private static readonly Dictionary<(Type, string), MemberInfo> Members = new();
         private static readonly Lazy<NativeContract> Contract = new(ResolveContract);
         private static readonly Lazy<MethodInfo> NativeRefresh = new(() =>
             GetVoidMethod(FindType("UnityEditor.PackageManager.UI.Internal.PageRefreshHandler"),
@@ -368,7 +374,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             var contract = new NativeContract();
             if (!PackageManagerUnityVersionSupport.IsCurrentVersionSupported)
             {
-                contract.Error = "This Unity version has not been validated for the installed-package views.";
+                contract.Error = "This Unity version is outside the eligible versions for the installed-package views.";
                 return contract;
             }
             try
@@ -441,11 +447,6 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 ExtensionPageId, StringComparison.Ordinal);
         }
 
-        internal static bool IsOwnedPage(object candidate)
-        {
-            return IsGitHubPage(candidate);
-        }
-
         internal static MethodInfo GetNativeRefreshTarget() => NativeRefresh.Value;
 
         internal static MethodInfo GetSidebarRefreshTarget() => SidebarRefresh.Value;
@@ -481,35 +482,6 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                     return found;
             }
             return null;
-        }
-
-        private static Type FindType(string name)
-        {
-            // Public extensions and the guarded native contracts share Unity's UI assembly.
-            return typeof(UnityEditor.PackageManager.UI.IPackageManagerExtension).Assembly.GetType(name, false);
-        }
-
-        private static object ReadMember(object instance, string name)
-        {
-            if (instance == null)
-                return null;
-            var key = (instance.GetType(), name);
-            if (!Members.TryGetValue(key, out MemberInfo member))
-            {
-                for (Type type = key.Item1; type != null && member == null; type = type.BaseType)
-                {
-                    member = type.GetField(name, Instance | BindingFlags.DeclaredOnly);
-                    if (member == null)
-                    {
-                        PropertyInfo property = type.GetProperty(name, Instance | BindingFlags.DeclaredOnly);
-                        if (property != null && property.GetIndexParameters().Length == 0)
-                            member = property;
-                    }
-                }
-                Members.Add(key, member);
-            }
-            return member is FieldInfo field ? field.GetValue(instance) :
-                (member as PropertyInfo)?.GetValue(instance);
         }
 
         private static MethodInfo GetAddPageMethod(Type managerType, Type argsType)

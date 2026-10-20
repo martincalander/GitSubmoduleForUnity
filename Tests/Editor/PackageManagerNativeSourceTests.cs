@@ -49,12 +49,35 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
         [TestCase(" 6000.7.0b1", false)]
         [TestCase("6000.7.0b1 ", false)]
         [TestCase("6000.7.0f1", false)]
+        [TestCase("7000.0.0a1", true)]
+        [TestCase("7000.0.0a6", true)]
         [TestCase("7000.0.0a7", true)]
-        [TestCase("7000.0.0a6", false)]
         [TestCase("7000.0.0a8", true)]
         [TestCase("7000.0.0a9", true)]
         [TestCase("7000.0.0a10", true)]
-        [TestCase("7000.0.0a11", false)]
+        [TestCase("7000.0.0a11", true)]
+        [TestCase("7000.0.0a12", true)]
+        [TestCase("7000.0.0a100", true)]
+        [TestCase("7000.0.0a2147483647", true)]
+        [TestCase("7000.0.0a2147483648", false)]
+        [TestCase("7000.0.0a99999999999999999999", false)]
+        [TestCase("7000.0.0a0", false)]
+        [TestCase("7000.0.0a01", false)]
+        [TestCase("7000.0.0a", false)]
+        [TestCase("7000.0.0a-1", false)]
+        [TestCase("7000.0.0a+1", false)]
+        [TestCase("7000.0.0a１", false)]
+        [TestCase("7000.0.0a١", false)]
+        [TestCase("7000.0.0a12\n", false)]
+        [TestCase("7000.0.0a12.1", false)]
+        [TestCase("7000.0.0a12f1", false)]
+        [TestCase("7000.0.0a12c1", false)]
+        [TestCase("7000.0.0a12a1", false)]
+        [TestCase("8000.0.0a1", false)]
+        [TestCase("7000.0.0a011", false)]
+        [TestCase("7000.0.0a11c1", false)]
+        [TestCase(" 7000.0.0a11", false)]
+        [TestCase("7000.0.0a11 ", false)]
         [TestCase("7000.0.0a010", false)]
         [TestCase("7000.0.0a10c1", false)]
         [TestCase(" 7000.0.0a10", false)]
@@ -88,7 +111,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
         [TestCase("6000.5f1", false)]
         [TestCase("", false)]
         [TestCase(null, false)]
-        public void RuntimeSupportGate_AcceptsOnlyValidatedEditors(
+        public void RuntimeSupportGate_AcceptsOnlyEligibleEditors(
             string unityVersion,
             bool expected)
         {
@@ -574,9 +597,9 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
         {
             var page = new NativePageStub(id);
             Assert.That(PackageManagerSubmoduleNativePage.IsGitHubPage(page), Is.EqualTo(expected));
-            Assert.That(PackageManagerSubmoduleNativePage.IsOwnedPage(page), Is.EqualTo(expected));
+            Assert.That(PackageManagerSubmoduleNativePage.IsGitHubPage(page), Is.EqualTo(expected));
             Assert.That(PackageManagerSubmoduleNativePage.IsGitHubPage(null), Is.False);
-            Assert.That(PackageManagerSubmoduleNativePage.IsOwnedPage(null), Is.False);
+            Assert.That(PackageManagerSubmoduleNativePage.IsGitHubPage(null), Is.False);
         }
 
         [TestCase("git-submodule-manager-submodules", true)]

@@ -7,11 +7,13 @@ using UnityEngine.UIElements;
 
 namespace MartinCalander.GitSubmoduleManager.Editor
 {
-    [InitializeOnLoad]
 #if UNITY_6000_5_OR_NEWER
+    // Package Manager sessions belong to the Editor, including while Play mode is active.
     [Unity.Scripting.LifecycleManagement.NoAutoStaticsCleanup]
+#else
+    [InitializeOnLoad]
 #endif
-    internal static class GitSubmoduleManagerPackageManagerHost
+    internal static partial class GitSubmoduleManagerPackageManagerHost
     {
         internal const string WindowTypeName = "UnityEditor.PackageManager.UI.PackageManagerWindow";
         private const string RootTypeName = "UnityEditor.PackageManager.UI.Internal.PackageManagerWindowRoot";
@@ -129,14 +131,19 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             }
         }
 
+#if UNITY_6000_5_OR_NEWER
+        [Unity.Scripting.LifecycleManagement.OnCodeInitializing]
+#else
         static GitSubmoduleManagerPackageManagerHost() => Start();
-
         [DidReloadScripts]
+#endif
         private static void Start()
         {
             PackageManagerPackageStatus.Resume();
-            AssemblyReloadEvents.beforeAssemblyReload -= BeforeReload;
-            AssemblyReloadEvents.beforeAssemblyReload += BeforeReload;
+#if !UNITY_6000_5_OR_NEWER
+            AssemblyReloadEvents.beforeAssemblyReload -= Stop;
+            AssemblyReloadEvents.beforeAssemblyReload += Stop;
+#endif
             EditorApplication.quitting -= Stop;
             EditorApplication.quitting += Stop;
             PackageManagerPackageStatus.Changed -= RefreshViews;
@@ -187,13 +194,15 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 session.RefreshViews();
         }
 
-        private static void BeforeReload()
-        {
-            Stop();
-        }
-
+#if UNITY_6000_5_OR_NEWER
+        [Unity.Scripting.LifecycleManagement.OnCodeUnloading]
+#endif
         private static void Stop()
         {
+#if !UNITY_6000_5_OR_NEWER
+            AssemblyReloadEvents.beforeAssemblyReload -= Stop;
+#endif
+            EditorApplication.quitting -= Stop;
             EditorApplication.delayCall -= AttachExistingWindows;
             PackageManagerPackageStatus.Changed -= RefreshViews;
             foreach (Session session in Sessions.Values)

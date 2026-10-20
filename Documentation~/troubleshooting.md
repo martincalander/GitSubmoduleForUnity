@@ -8,6 +8,11 @@ guarded Package Manager internals. GitHub belongs under **Sources**. An
 unsupported version or a changed contract disables the affected integration
 instead of replacing Unity's normal pages.
 
+Current source accepts all canonical `7000.0.0a*` alpha revisions with a positive
+integer suffix. If a newer alpha is rejected by number alone, check that the
+installed package contains this policy; older revisions use an exact alpha list.
+Passing the version gate still requires the native API checks to succeed.
+
 Check the Unity Console for compilation or compatibility diagnostics and reopen
 Package Manager after scripts finish compiling.
 

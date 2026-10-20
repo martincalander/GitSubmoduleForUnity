@@ -14,16 +14,16 @@ published `0.8.1` artifacts still contain that implementation.
 ## Development Prerequisites
 
 - Exact Unity `6000.3.22f1`, a Unity `6000.5.*f1` final release, exact
-  `6000.6.0f1` or `6000.6.2f1`, exact `6000.7.0b1` or `6000.7.0b2` beta, or exact
-  `7000.0.0a7`, `7000.0.0a8`, `7000.0.0a9`, or `7000.0.0a10` alpha.
+  `6000.6.0f1` or `6000.6.2f1`, exact `6000.7.0b1` or `6000.7.0b2` beta, or a
+  canonical `7000.0.0a*` alpha with a positive integer suffix. Alpha revisions
+  pass the version gate but still require each feature's runtime API checks.
 - Git for preparing test repositories and managing the checkout.
 - Python 3 and Node.js for repository, Markdown, and packaging checks.
 
 See the [lean cleanup verification](#lean-cleanup-verification-on-2026-10-19)
 and the earlier records below for the checks performed on each change.
-Existing version gates do not imply
-that the current design has been retested across all supported targets. GitHub
-CLI is not required.
+Version eligibility does not imply that the current design has been tested
+across every admitted alpha or other target. GitHub CLI is not required.
 
 ## Set Up a Test Project
 
@@ -793,3 +793,99 @@ consumer projects. No supplemental `dotnet build`, player build, signed release
 artifact, push, or GitHub CI run was performed. These local results do not
 establish release evidence for another commit, archive, Unity version, or
 platform.
+
+## Unity 7000.0.0a11 verification on 2026-10-20
+
+The exact alpha support update was verified in OpenSourceWorkspace with Unity
+`7000.0.0a11` (`fac09b31727f`), macOS ARM64, CLI `1.0.0-beta.13`, and Pipeline
+`0.8.0-exp.1`.
+
+- The installed a10 and a11 Package Manager UI assembly inventories retained
+  all 8,948 existing declarations. The four additions are the `trustDisabled`
+  properties and getters on `IProjectSettingsProxy` and
+  `PackageManagerProjectSettingsProxy`; the package does not use them.
+- The initial import compiled successfully, and a fresh `recompile` returned
+  `up_to_date` with no compilation errors.
+- All 112 `PackageManagerCompatibility` tests passed with no failures, skips,
+  or inconclusive results. This covers exact a11 acceptance, rejection of a12
+  and malformed a11 strings, native sidebar recovery, and Repository links.
+- Repository validation, Markdown lint, package dry run, and whitespace
+  checks passed. Bundled dependencies and their import settings were unchanged.
+
+The first category run passed 110 of 112 tests. The two native UI tests ran
+before Package Manager had loaded its installed-package database, so their
+multi-selection and Git-source prerequisites were absent. Opening Package
+Manager and confirming its populated database resolved the setup issue; the
+complete category then passed without source or test changes.
+
+The final Console had zero errors and four dependency warnings: the existing
+PlayerPrefs Editor `UAC0005`, two Pipeline obsolete lightmapper API warnings,
+and a render-pipeline shader warning. The verification Editor was closed after
+testing, and preexisting project settings were preserved.
+
+The full assembly was not run for this narrow version-gate change. Other
+supported Unity versions, Windows, Linux, player builds, and release artifacts
+were not retested. Results and the API comparison are saved in the workspace
+under `Logs/unity-7000.0.0a11-*`.
+
+## Alpha series eligibility verification on 2026-10-20
+
+The version gate now admits canonical `7000.0.0a*` revisions with a positive
+integer suffix. Each native feature still checks its required Package Manager
+contracts independently. This policy was checked in the local working tree on
+Unity `7000.0.0a11` (`fac09b31727f`), macOS ARM64, CLI `1.0.0-beta.13`, and
+Pipeline `0.8.0-exp.1`.
+
+- Unity compiled the updated source. A fresh final `recompile` returned
+  `up_to_date` with no compilation errors.
+- All 130 `PackageManagerCompatibility` tests passed with no failures, skips,
+  or inconclusive results. The 95 version-gate cases include earlier and later
+  alpha numbers, integer bounds, malformed suffixes, other Unity 7 release
+  lines, and the existing Unity 6 policy.
+- Native source, Repository link, label, and removal-guard checks passed on
+  the actual a11 Editor. The Package Manager database was populated before
+  running the category.
+- The final Console had zero errors and warnings. Repository validation,
+  Markdown lint, package dry run, and whitespace checks passed.
+
+The initial shared Editor session closed during verification. Final checks
+used a separate headless session for this project. Results are saved under
+`Logs/unity-alpha-*` in the workspace.
+
+Tests of version strings do not establish runtime compatibility on those
+Editors. No other alpha was run for this change, including a1 through a10 or
+a12 and later. Unity `6000.3.22f1`, `6000.5.*f1`, `6000.6.0f1`,
+`6000.6.2f1`, `6000.7.0b1`, and `6000.7.0b2`, Windows, and Linux were not
+retested. The full assembly was not rerun for this narrow gate change.
+No player build, supplemental `dotnet build`, or release artifact verification
+was performed. These results do not establish release evidence for another
+commit, archive, Editor version, or platform.
+
+## Combined source verification on 2026-10-20
+
+Before publishing the lifecycle, reflection-cache, and alpha eligibility
+changes together, OpenSourceWorkspace was checked again on Unity `7000.0.0a11`
+(`fac09b31727f`), macOS ARM64, CLI `1.0.0-beta.13`, and Pipeline `0.8.0-exp.1`.
+Fresh compilation returned `up_to_date` without errors. The earlier focused
+lifecycle selection passed all eight tests. After the alpha gate update, all
+398 tests in `MartinCalander.GitSubmoduleManager.Editor.Tests` passed in
+14.64 seconds, with no failures, skips, or inconclusive results. The full run
+includes native compatibility, status and reflection-cache regressions, unload
+cancellation, and repeated Play Mode transitions with domain reload disabled.
+
+The first combined run passed 397 of 398 tests. The native sidebar
+multi-selection test ran before Package Manager populated its installed list.
+After confirming 177 packages in the native database, the full assembly passed
+without source or test changes.
+
+Repository validation, all eight Python repository tests, Markdown lint,
+package dry run, and whitespace checks passed. Source, test, assembly, metadata,
+and bundled binary hashes remained unchanged through verification and staging.
+The final Editor Console reported zero errors and warnings. The owned Editor
+was closed. Test changes to Editor settings were restored from the pre-test
+snapshot, and the original seven Project Auditor thresholds were preserved.
+Logs and structured results are under `Logs/unity-commit-combined-*` in the
+workspace.
+
+Other Unity versions, Windows, Linux, player builds, and signed release
+artifacts were not verified in this pass.

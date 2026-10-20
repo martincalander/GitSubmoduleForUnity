@@ -98,7 +98,22 @@ The Repository link reuses that installed-state snapshot. It adds no startup
 scans, remote requests, Git commands, or polling. The extension performs no
 background network discovery.
 Its sidebar icons use small imports, and its native integration checks are
-cached until code reload.
+cached until code reload. Repeated membership and Repository-link checks reuse
+derived source URLs within the accepted snapshot. A changed source or installed
+identity still requires current matching metadata.
+
+## Play Mode Without Domain Reload
+
+Git Submodule Manager supports entering Play mode with domain reload disabled,
+including when scene reload is disabled. Package Manager status, native hooks,
+and removal protection belong to the Editor and remain active across Play mode
+cycles. The extension does not reinstall its hooks or restart status observation
+just because Play mode changes.
+
+Script recompilation still rebuilds the integration from current installed state.
+On Unity 6.5 and newer this uses Unity's code lifecycle callbacks; Unity 6.3 uses
+the compatible assembly-reload callbacks. This package adds no gameplay state
+and does not change the project's Enter Play Mode settings.
 
 ## Moving from Legacy to Main
 

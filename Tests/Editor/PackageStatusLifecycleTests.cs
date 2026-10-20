@@ -15,10 +15,31 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
 {
     public sealed class PackageStatusLifecycleTests
     {
-        [TestCase(1)]
-        [TestCase(2)]
+        private Action restorePlayModeState;
+
+        [UnityTearDown]
+        public IEnumerator ExitPlayModeBeforeRestoringTestState()
+        {
+            if (restorePlayModeState == null)
+                yield break;
+            if (EditorApplication.isPlayingOrWillChangePlaymode)
+                yield return new ExitPlayMode();
+            RestorePlayModeState();
+        }
+
+        private void RestorePlayModeState()
+        {
+            Action restore = restorePlayModeState;
+            restorePlayModeState = null;
+            restore?.Invoke();
+        }
+
+        [TestCase(1, false)]
+        [TestCase(2, false)]
+        [TestCase(1, true)]
         [Category("PackageSourceFeatures")]
-        public void FinalReleaseCancelsStaleWorkAndRapidReopenQueuesAFreshGeneration(int observerCount)
+        public void FinalReleaseCancelsStaleWorkAndRapidReopenQueuesAFreshGeneration(
+            int observerCount, bool unloadBeforeRelease)
         {
             const BindingFlags flags = BindingFlags.Static | BindingFlags.NonPublic;
             Type statusType = typeof(PackageManagerPackageStatus);
@@ -42,6 +63,8 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                 statusType.GetMethod("Update", flags));
             var registered = (Action<PackageRegistrationEventArgs>)Delegate.CreateDelegate(typeof(Action<PackageRegistrationEventArgs>),
                 statusType.GetMethod("OnRegisteredPackages", flags));
+            var shutdown = (Action)Delegate.CreateDelegate(typeof(Action),
+                statusType.GetMethod("Shutdown", flags));
             object Get(string name) => statusType.GetField(name, flags).GetValue(null);
             void Set(string name, object value) => statusType.GetField(name, flags).SetValue(null, value);
 
@@ -57,6 +80,18 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                 Set("listening", true);
                 Set("shuttingDown", false);
 
+                int expectedGeneration = 100;
+                if (unloadBeforeRelease)
+                {
+                    using (cancellation.Token.Register(() => pending.TrySetResult(
+                               new PackageManagerPackageStatus.StatusSnapshot { Error = "Discard this unloaded generation." })))
+                        shutdown();
+                    expectedGeneration++;
+                    Assert.That(Get("shuttingDown"), Is.True);
+                    Assert.That(Get("generation"), Is.EqualTo(expectedGeneration));
+                    Assert.That(Get("refreshPending"), Is.False);
+                    Assert.That(Get("listening"), Is.False, "Code unload must remove the Editor update callback.");
+                }
                 PackageManagerPackageStatus.Release();
                 if (observerCount == 2)
                 {
@@ -68,18 +103,23 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                 }
                 Assert.That(Get("observers"), Is.EqualTo(0));
                 Assert.That(cancellation.IsCancellationRequested, Is.True);
-                Assert.That(Get("generation"), Is.EqualTo(101));
+                Assert.That(Get("generation"), Is.EqualTo(++expectedGeneration));
                 Assert.That(Get("refreshPending"), Is.False);
 
+                if (unloadBeforeRelease)
+                {
+                    PackageManagerPackageStatus.Resume();
+                    expectedGeneration++;
+                }
                 PackageManagerPackageStatus.Retain();
                 Assert.That(Get("observers"), Is.EqualTo(1));
-                Assert.That(Get("generation"), Is.EqualTo(102));
+                Assert.That(Get("generation"), Is.EqualTo(++expectedGeneration));
                 Assert.That(Get("refreshPending"), Is.True);
                 Assert.That(Get("worker"), Is.SameAs(pending.Task), "Reopening must not overlap two Git scans.");
                 Assert.That(state.IsReady, Is.False);
 
                 PackageManagerPackageStatus.Release();
-                pending.SetResult(new PackageManagerPackageStatus.StatusSnapshot { Error = "Discard this cancelled generation." });
+                pending.TrySetResult(new PackageManagerPackageStatus.StatusSnapshot { Error = "Discard this cancelled generation." });
                 update();
 
                 Assert.That(state.Snapshot, Is.SameAs(published), "A cancelled worker must not publish stale status.");
@@ -104,6 +144,8 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                 Events.registeredPackages -= registered;
                 if ((int)Get("observers") > 0 && !(bool)Get("shuttingDown"))
                     Events.registeredPackages += registered;
+                if (!(bool)Get("shuttingDown"))
+                    statusType.GetMethod("Initialize", flags).Invoke(null, null);
             }
         }
 
@@ -189,7 +231,15 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
 
         [UnityTest]
         [Category("PlayModeLifecycle")]
-        public IEnumerator StatusAndRemovalGuardsSurviveTwoPlayModeCycles()
+        public IEnumerator StatusAndRemovalGuardsSurviveTwoPlayModeCycles() =>
+            CheckPlayModeCycles(EnterPlayModeOptions.DisableDomainReload);
+
+        [UnityTest]
+        [Category("PlayModeLifecycle")]
+        public IEnumerator StatusAndRemovalGuardsSurviveTwoPlayModeCyclesWithoutSceneReload() =>
+            CheckPlayModeCycles(EnterPlayModeOptions.DisableDomainReload | EnterPlayModeOptions.DisableSceneReload);
+
+        private IEnumerator CheckPlayModeCycles(EnterPlayModeOptions playModeOptions)
         {
             bool enabled = EditorSettings.enterPlayModeOptionsEnabled;
             EnterPlayModeOptions options = EditorSettings.enterPlayModeOptions;
@@ -202,21 +252,41 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
             bool ownsWindow = window == null;
             window = window != null ? window : EditorWindow.GetWindow(windowType);
             PackageManagerPackageStatus.Retain();
+            restorePlayModeState = () =>
+            {
+                EditorSettings.enterPlayModeOptionsEnabled = enabled;
+                EditorSettings.enterPlayModeOptions = options;
+                PackageManagerPackageStatus.Release();
+                if (ownsWindow && window != null)
+                    window.Close();
+            };
             try
             {
                 EditorSettings.enterPlayModeOptionsEnabled = true;
-                EditorSettings.enterPlayModeOptions = EnterPlayModeOptions.DisableDomainReload;
+                EditorSettings.enterPlayModeOptions = playModeOptions;
                 yield return null;
                 var initialRoot = PackageManagerSubmoduleHarmonyPatch.Read(window, "m_Root") as VisualElement;
                 Assert.That(initialRoot, Is.Not.Null);
                 GitSubmoduleManagerPackageManagerHost.ObserveRoot(initialRoot);
+                const BindingFlags fields = BindingFlags.Static | BindingFlags.NonPublic;
+                FieldInfo stateField = typeof(PackageManagerPackageStatus).GetField("State", fields);
+                FieldInfo harmonyField = typeof(PackageManagerSubmoduleHarmonyPatch).GetField("harmony", fields);
+                object initialState = stateField.GetValue(null);
+                object initialHarmony = harmonyField.GetValue(null);
+                Assert.That(initialHarmony, Is.Not.Null);
                 for (int cycle = 0; cycle < 2; cycle++)
                 {
                     yield return new EnterPlayMode();
+                    Assert.That(stateField.GetValue(null), Is.SameAs(initialState),
+                        "Editor package observations must survive a Play mode transition without a fresh code load.");
+                    Assert.That(harmonyField.GetValue(null), Is.SameAs(initialHarmony),
+                        "Play mode must retain native hooks without a second installation.");
                     Assert.That(PackageManagerSubmoduleNativePage.IsSupportedContract(out string error), Is.True, error);
                     Assert.That(PackageManagerSubmoduleHarmonyPatch.IsPatched(
                         PackageManagerSubmoduleHarmonyPatch.FindMethod("PackageOperationDispatcher", "RemoveEmbedded", typeof(void), "IPackage")), Is.True);
                     yield return new ExitPlayMode();
+                    Assert.That(stateField.GetValue(null), Is.SameAs(initialState));
+                    Assert.That(harmonyField.GetValue(null), Is.SameAs(initialHarmony));
                     Assert.That(PackageManagerSubmoduleNativePage.IsSupportedContract(out error), Is.True, error);
                     Assert.That(PackageManagerSubmoduleHarmonyPatch.IsSidebarRepairInstalled, Is.True);
                     var root = PackageManagerSubmoduleHarmonyPatch.Read(window, "m_Root") as VisualElement;
@@ -260,11 +330,9 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
             }
             finally
             {
-                EditorSettings.enterPlayModeOptionsEnabled = enabled;
-                EditorSettings.enterPlayModeOptions = options;
-                PackageManagerPackageStatus.Release();
-                if (ownsWindow && window != null)
-                    window.Close();
+                // A failed assertion in Play mode leaves cleanup to the yielding teardown.
+                if (!EditorApplication.isPlayingOrWillChangePlaymode)
+                    RestorePlayModeState();
             }
         }
 

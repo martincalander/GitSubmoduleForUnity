@@ -68,17 +68,21 @@ installation first. Do not create a second copy with the same package ID.
 
 ### Unity
 
-The latest focused validation passed 141 status tests and 105 native
-compatibility tests on Unity `7000.0.0a10` on macOS, plus live metadata checks.
-See the [edge case verification record](../.github/CONTRIBUTING.md#additional-edge-case-verification-on-2026-10-19)
-for exact coverage, the earlier full-suite result, and untested targets.
+See the [verification records](../.github/CONTRIBUTING.md) for the exact tested
+commits, Unity versions, platforms, checks, and untested targets.
 
 The compatibility gate retains exact Unity `6000.3.22f1`, Unity `6000.5.*f1`
 final releases, exact `6000.6.0f1` and `6000.6.2f1`, exact `6000.7.0b1` and
-`6000.7.0b2` betas, and exact `7000.0.0a7`, `7000.0.0a8`, `7000.0.0a9`, and
-`7000.0.0a10` alphas. Other Unity 7 builds, Unity `6000.4`, and other `6000.6`
-releases remain unsupported. The remaining targets have not been retested with
-the simplified implementation.
+`6000.7.0b2` betas. All `7000.0.0a*` alpha revisions are eligible when `*` is
+a positive integer without leading zeros. For example, `7000.0.0a11` and
+`7000.0.0a12` pass the version gate, while `7000.0.0a0`, `7000.0.0a011`, and
+`7000.1.0a1` do not.
+
+Each native feature independently checks its required Package Manager APIs at
+runtime. A changed or missing API disables the affected feature. Alpha eligibility
+does not mean every revision has been tested, and these API checks cannot prove
+that a future Editor behaves identically. Unity 7 betas, finals, other minor or
+patch versions, Unity `6000.4`, and other `6000.6` releases remain unsupported.
 
 The manifest uses `unity: 6000.3` with `unityRelease: 22f1` because it can express
 only a minimum eligibility version. All package assemblies are Editor-only.
