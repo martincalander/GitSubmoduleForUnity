@@ -20,7 +20,7 @@ published `0.8.1` artifacts still contain that implementation.
 - Git for preparing test repositories and managing the checkout.
 - Python 3 and Node.js for repository, Markdown, and packaging checks.
 
-See the [lean cleanup verification](#lean-cleanup-verification-on-2026-10-19)
+See the [package audit verification](#package-audit-verification-on-2026-10-20)
 and the earlier records below for the checks performed on each change.
 Version eligibility does not imply that the current design has been tested
 across every admitted alpha or other target. GitHub CLI is not required.
@@ -889,3 +889,68 @@ workspace.
 
 Other Unity versions, Windows, Linux, player builds, and signed release
 artifacts were not verified in this pass.
+
+## Package audit verification on 2026-10-20
+
+The local working tree based on `c89cc8f` was audited across all 117 tracked
+paths: Editor source, tests, bundled dependencies, import metadata,
+documentation, and packaging workflows. The changes limit index discovery to
+direct package entries, reuse installed-package comparisons, share native
+package identity checks, reject stale page managers, and guard unreadable page
+IDs and zero-length metadata fingerprints.
+
+A synthetic repository with 12,000 nested tracked package files measured the
+index query on macOS ARM64 with Git `2.54.0`. After three warmups per variant,
+11 measured invocations gave these results:
+
+| Query | Output bytes | Records | Median duration |
+| --- | ---: | ---: | ---: |
+| Recursive `Packages/` | 2,676,969 | 12,001 | 13.59 ms |
+| Direct `:(top,glob)Packages/*` | 79 | 1 | 10.34 ms |
+
+The direct query avoids exceeding the existing 2 MiB output limit because of
+irrelevant nested files. It retained a direct package conflict, and the index
+remained byte-identical. This measures the Git query, not overall Editor
+startup or refresh duration. Raw measurements are saved in the workspace at
+`Logs/package-status-discovery-audit.json`.
+
+Verification used Unity CLI `1.0.0-beta.13` and Test Framework `1.9.0` on
+macOS ARM64:
+
+| Editor | Revision | Full assembly passed | Skipped | Failed |
+| --- | --- | ---: | ---: | ---: |
+| `7000.0.0a11` | `fac09b31727f` | 406 | 0 | 0 |
+| `6000.7.0b2` | `d6546dc2b3a9` | 402 | 0 | 0 |
+| `6000.5.5f1` | `d16e074b49fd` | 402 | 0 | 0 |
+
+All three Editors compiled the package without C# warnings or errors. The
+Unity 7 run used Pipeline `0.8.0-exp.1`; the isolated Unity 6 projects used
+one-shot CLI tests. Every Editor launch used `-automated`. The four additional
+Unity 7 tests cover CoreCLR and are conditionally excluded on Mono.
+
+The final full runs followed focused checks of status discovery and native
+integration. They include `PackageManagerCompatibility`, direct and nested
+index conflicts, large index output, zero-length pipe metadata, immutable
+snapshot reuse, replaced page managers, unreadable native page IDs, disposal,
+and repeated Play Mode transitions with domain reload disabled.
+
+Initial verification exposed two test setup requirements. Native window tests
+need a graphics device, so final runs used graphical Editors. Unity 6.5 also
+needs the search bar's UXML factory and completion of its initial package fetch
+before multi-selection assertions. A controlled cold-fetch reproduction
+confirmed that Unity's loading UI clears selection during root reattachment.
+The fixture now waits on `IsInitialFetchingDone`, within a 20-second deadline,
+and retains its original search, selection, and session assertions.
+
+Repository validation, all eight Python repository tests, Markdown lint,
+GitHub Actions syntax checks, package dry run, and whitespace checks passed.
+All twelve bundled DLLs and their import metadata remained byte-identical.
+Working-source inventories, structured test results, and failure investigation
+logs are saved in the workspace under `Logs/package-audit/`.
+
+Not tested: Unity `6000.3.22f1`, other `6000.5.*f1` releases,
+`6000.6.0f1`, `6000.6.2f1`, `6000.7.0b1`, other Unity 7 alphas,
+Windows, Linux, signed release artifacts, and hosted CI. No player build was
+needed for this Editor-only package, and no supplemental `dotnet build` was
+run after clean Unity compilation. These local working-tree results do not
+establish release evidence for another commit, archive, Editor, or platform.

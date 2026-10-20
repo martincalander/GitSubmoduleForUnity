@@ -295,7 +295,10 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             try
             {
                 // Unity rebuilds inactive pages when they are activated.
-                if (!ReferenceEquals(page, ReadMember(pageManager, "activePage")) ||
+                object currentManager = ReadMember(root, "m_PageManager") ??
+                                        ReadMember(root, "pageManager");
+                if (!ReferenceEquals(pageManager, currentManager) ||
+                    !ReferenceEquals(page, ReadMember(pageManager, "activePage")) ||
                     !ReferenceEquals(page, FindRegisteredPage(pageManager)))
                     return false;
                 rebuild?.Invoke(page, rebuildHasForceArgument ? new object[] { true } : null);
@@ -443,7 +446,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
 
         internal static bool IsGitHubPage(object candidate)
         {
-            return string.Equals(ReadMember(candidate, "id") as string,
+            return string.Equals(Read(candidate, "id") as string,
                 ExtensionPageId, StringComparison.Ordinal);
         }
 

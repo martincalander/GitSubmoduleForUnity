@@ -93,6 +93,9 @@ Ordinary asset edits do not launch Git status reads. Git-only changes reuse
 Unity's installed-package snapshot; registration changes, reopening, and explicit
 refresh capture it again. Unchanged Git metadata can reuse validated local
 results. An unchanged status keeps the existing package view.
+Index reads examine direct package entries rather than every tracked file inside
+embedded packages, so large embedded source trees do not consume the status
+output limit.
 
 The Repository link reuses that installed-state snapshot. It adds no startup
 scans, remote requests, Git commands, or polling. The extension performs no

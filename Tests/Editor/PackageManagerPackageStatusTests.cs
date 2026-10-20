@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Diagnostics;
+using System.Text;
 using System.Threading;
 using NUnit.Framework;
 using UnityEditor.PackageManager;
@@ -503,6 +504,48 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
         }
 
         [Test]
+        public void LargeEmbeddedPackageContentsDoNotOverflowSubmoduleDiscovery()
+        {
+            RunGit("init --quiet");
+            WriteRegistration();
+            var entries = new StringBuilder("160000 " + Commit + " 0\t" + RelativePath + "\n");
+            string nestedPath = "Packages/com.example.embedded/Editor/" + new string('x', 128);
+            for (int index = 0; index < 12000; index++)
+                entries.Append("100644 ").Append(Commit).Append(" 0\t").Append(nestedPath).Append(index).Append(".cs\n");
+            Assert.That(entries.Length, Is.GreaterThan(2 * 1024 * 1024),
+                "Reading all descendants would exceed the status output limit.");
+            RunGit("update-index --index-info", input: entries.ToString());
+            byte[] beforeIndex = File.ReadAllBytes(Path.Combine(root, ".git", "index"));
+
+            var data = PackageManagerPackageStatus.ReadStatus(root, CancellationToken.None);
+
+            Assert.That(data.Error, Is.Empty);
+            Assert.That(data.Gitlinks, Is.EquivalentTo(new[] { RelativePath }));
+            Assert.That(PackageManagerPackageStatus.TryClassify(root, Name, packagePath, data, out _), Is.True);
+            Assert.That(File.ReadAllBytes(Path.Combine(root, ".git", "index")), Is.EqualTo(beforeIndex));
+        }
+
+        [TestCase("Packages/manifest.json", true)]
+        [TestCase("Packages/com.example.embedded/Editor/Conflicted.cs", false)]
+        public void IndexConflictValidationRemainsScopedToDirectPackageEntries(string conflictPath, bool fails)
+        {
+            RunGit("init --quiet");
+            WriteRegistration();
+            RunGit("update-index --index-info", input:
+                "160000 " + Commit + " 0\t" + RelativePath + "\n" +
+                "100644 " + Commit + " 1\t" + conflictPath + "\n" +
+                "100644 " + new string('a', 40) + " 2\t" + conflictPath + "\n");
+            byte[] beforeIndex = File.ReadAllBytes(Path.Combine(root, ".git", "index"));
+
+            var data = PackageManagerPackageStatus.ReadStatus(root, CancellationToken.None);
+
+            Assert.That(string.IsNullOrEmpty(data.Error), Is.EqualTo(!fails));
+            Assert.That(PackageManagerPackageStatus.TryClassify(root, Name, packagePath, data, out _), Is.EqualTo(!fails));
+            Assert.That(Block(data), Is.True);
+            Assert.That(File.ReadAllBytes(Path.Combine(root, ".git", "index")), Is.EqualTo(beforeIndex));
+        }
+
+        [Test]
         public void ReadsLinkedWorktreeMetadataFromItsExternalIndex()
         {
             RunGit("init --quiet");
@@ -886,6 +929,30 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
             Assert.That(reads, Is.EqualTo(2), "A metadata refresh must not erase a pending package invalidation.");
         }
 
+        [Test]
+        public void ReusedRegisteredPackagesStillDetectChangedGitMetadata()
+        {
+            var initial = InstalledSnapshot();
+            var refreshed = InstalledSnapshot();
+            refreshed.Packages = initial.Packages;
+            var state = new PackageManagerPackageStatus.StatusState();
+            state.CompleteRefresh(initial);
+            int changes = 0;
+            state.Changed += () => changes++;
+
+            state.CompleteRefresh(refreshed);
+            Assert.That(changes, Is.Zero);
+            var changed = InstalledSnapshot();
+            changed.Packages = initial.Packages;
+            changed.Repositories[RelativePath] = "https://gitlab.com/example/package.git";
+            state.CompleteRefresh(changed);
+
+            Assert.That(changes, Is.EqualTo(1));
+            Assert.That(PackageManagerPackageStatus.IsGitHubPackage(root,
+                new { versions = new { primary = NativeVersion() } }, state.Snapshot), Is.False);
+            Assert.That(state.Snapshot.Packages, Is.SameAs(initial.Packages));
+        }
+
         [TestCase(false)]
         [TestCase(true)]
         public void UnacceptedOrFailedPackageCaptureCannotBeReused(bool failed)
@@ -1231,6 +1298,38 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
             Assert.That(commands[1], Does.StartWith("ls-files"));
         }
 
+        [TestCase("index")]
+        [TestCase("modules")]
+        public void ZeroLengthPipeMetadataDoesNotEnterFingerprintStreams(string metadata)
+        {
+            if (Path.DirectorySeparatorChar == '\\')
+                Assert.Ignore("This fixture uses the Unix mkfifo command to create a real pipe.");
+            CreateMetadataFixture();
+            string path = metadata == "index" ? Path.Combine(root, ".git", "index") : Path.Combine(root, ".gitmodules");
+            File.Delete(path);
+            using (var process = Process.Start(new ProcessStartInfo("mkfifo", "\"" + path + "\"")
+            {
+                UseShellExecute = false, CreateNoWindow = true,
+                RedirectStandardOutput = true, RedirectStandardError = true
+            }))
+            {
+                Assert.That(process.WaitForExit(5000), Is.True);
+                Assert.That(process.ExitCode, Is.Zero, process.StandardError.ReadToEnd());
+            }
+            // Keep both pipe ends open so a regression fails instead of leaving a blocked reader.
+            using (var pipe = new FileStream(path, FileMode.Open, FileAccess.ReadWrite, FileShare.ReadWrite | FileShare.Delete))
+            {
+                Assert.That(new FileInfo(path).Length, Is.Zero);
+                var commands = new List<string>();
+                var data = ReadMetadataFixture(null, commands,
+                    indexOutput: "160000 " + Commit + " 0\t" + RelativePath + "\0", modulesOutput: string.Empty);
+
+                Assert.That(data.Error, Is.Empty);
+                Assert.That(metadata == "index" ? data.IndexFingerprint : data.ModulesFingerprint, Is.Null);
+                Assert.That(commands.Count, Is.EqualTo(3), "Unfingerprinted metadata must still be read through Git.");
+            }
+        }
+
         [Test]
         public void MetadataCacheStillRejectsOversizedModulesAndCancellation()
         {
@@ -1347,7 +1446,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
 
         private PackageManagerPackageStatus.StatusSnapshot ReadMetadataFixture(PackageManagerPackageStatus.StatusSnapshot previous,
             List<string> commands, bool splitIndex = false, string gitDirectory = null, Action<string> beforeCommand = null,
-            string indexOutput = null, CancellationToken token = default)
+            string indexOutput = null, CancellationToken token = default, string modulesOutput = null)
         {
             return PackageManagerPackageStatus.ReadStatus(root, token, previous, (arguments, allowNoMatch) =>
             {
@@ -1360,7 +1459,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                     return indexOutput ?? (File.Exists(Path.Combine(root, ".git", "index")) ?
                         File.ReadAllText(Path.Combine(root, ".git", "index")) : string.Empty);
                 Assert.That(allowNoMatch, Is.True);
-                return File.ReadAllText(Path.Combine(root, ".gitmodules"));
+                return modulesOutput ?? File.ReadAllText(Path.Combine(root, ".gitmodules"));
             });
         }
 

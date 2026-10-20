@@ -36,6 +36,11 @@ been published as a new release; existing `0.8.1` artifacts remain unchanged.
 
 ### Changed
 
+- Limit Git index output to direct `Packages/` children, avoiding unnecessary
+  reads of tracked files inside embedded packages. Reuse the installed-package
+  dictionary when comparing Git-only snapshots and share installed-selection
+  validation between GitHub membership and Repository links.
+
 - Share cached inherited-member lookup across badges and source pages. Keep
   direct property lookup for status, read current values on each access, and
   recover when a previously failing getter becomes available.
@@ -116,6 +121,13 @@ been published as a new release; existing `0.8.1` artifacts remain unchanged.
   catalogue filters and caches.
 
 ### Fixed
+
+- Keep native refresh callbacks isolated from failing page identity getters,
+  and stop refreshing an old page after its Package Manager has been replaced.
+- Keep large embedded packages from exhausting the Git status output limit
+  while preserving checks for unresolved direct package entries.
+- Skip fingerprint streams for zero-length metadata, including Unix pipes, and
+  leave those reads to the bounded Git command.
 
 - Require the current installed package identity to match cached GitHub source
   membership, so a changed source cannot inherit the previous GitHub listing

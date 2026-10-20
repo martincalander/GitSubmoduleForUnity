@@ -101,14 +101,18 @@ keeps direct property-only lookup through the runtime's reflection cache. Each
 access reads the current value; getter failures are not retained. A complete hook
 installation is reused until teardown; incomplete seams
 remain eligible for another attempt. Unchanged submodule badges retain their
-state and callback, and release owned width overrides when reparented. Reusing an attachment still checks its manager, page, and hierarchy.
+state and callback, and release owned width overrides when reparented. Reusing an
+attachment still checks its manager, page, and hierarchy. Refresh also verifies
+that the root still owns that manager. An unreadable page identity disables the
+extension's refresh handling without interrupting Unity's callback.
 The compatibility gate and deletion guards remain independent.
 
 Only observed Package Manager sessions check `.gitmodules` and the Git index,
 at two-second intervals. Package registration events and explicit refresh also
 request a scan; ordinary project asset changes do not. Status and installed
 identity are published together. Git-only refreshes reuse the accepted installed
-package dictionary. Package registration, reopening, and explicit refresh
+package dictionary, skipping repeated entry comparisons when both snapshots
+share it. Package registration, reopening, and explicit refresh
 invalidate its revision; retries cannot erase that invalidation. Failed or
 superseded captures are never used as a new accepted snapshot. A changed metadata
 stamp during a read causes a retry before publication. Content notifications update rendered labels and Repository links only when the
@@ -122,11 +126,15 @@ negative result. Its checkout protection uses the actual direct child path
 under `Packages/`, even when the folder name differs from the package ID;
 submodule classification retains its stricter matching-identity requirement.
 Every local scan validates the repository root, resolved Git directory, and index
-location with Git. The background worker can reuse index and `.gitmodules`
+location with Git. Index enumeration includes only direct `Packages/` children,
+including unresolved entries; tracked files inside embedded packages do not
+consume the bounded Git output allowance. The background worker can reuse index and `.gitmodules`
 results independently when bounded content fingerprints and repository identity
 still match a successful snapshot. Timestamp and size alone cannot authorize
 reuse. Linked or oversized `.gitmodules` still fails closed. Split indexes and
-indexes too large to fingerprint retain full Git reads. A changed fingerprint
+indexes too large to fingerprint retain full Git reads. Zero-length metadata
+does not open a fingerprint stream or authorize reuse; this avoids blocking on a
+Unix pipe before Git's command timeout applies. A changed fingerprint
 during a scan rejects publication and queues a fresh read.
 A cold scan uses three Git commands when `.gitmodules` exists; a fully unchanged
 scan uses one, and a change to either metadata file normally uses two. Closing the last

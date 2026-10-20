@@ -304,6 +304,27 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
             }
         }
 
+        [Test]
+        public void ReplacedPageManager_DoesNotRefreshThePreviousManagersPage()
+        {
+            var fixture = new AttachmentFixture();
+            using (fixture.Page)
+            {
+                NativeManagerStub previousManager = fixture.Root.pageManager;
+                NativePageStub previousPage = previousManager.orderedExtensionPages[0];
+                previousManager.activePage = previousPage;
+                fixture.Root.pageManager = new NativeManagerStub();
+                NativePageStub currentPage = fixture.Root.pageManager.orderedExtensionPages[0];
+                fixture.Root.pageManager.activePage = currentPage;
+
+                Assert.That(fixture.Page.Refresh(), Is.False);
+                Assert.That(previousPage.Rebuilds, Is.Zero);
+                Assert.That(previousPage.SelectionChanges, Is.Zero);
+                Assert.That(currentPage.Rebuilds, Is.Zero);
+                Assert.That(currentPage.SelectionChanges, Is.Zero);
+            }
+        }
+
         [UnityTest]
         public IEnumerator DetachedNativeRow_RequestsRepairAndDisposalRemovesTheCallback()
         {
@@ -512,15 +533,33 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                     var selection = new List<string>();
                     if (selectionCount == 2)
                     {
-                        foreach (object state in (IEnumerable)PackageManagerSubmoduleHarmonyPatch.Read(inProject, "visualStates"))
+                        object refreshHandler = PackageManagerSubmoduleHarmonyPatch.Read(root, "m_PageRefreshHandler");
+                        Assert.That(refreshHandler, Is.Not.Null);
+                        MethodInfo initialFetchDone = refreshHandler.GetType().GetMethod("IsInitialFetchingDone",
+                            instance, null, new[] { PackageManagerSubmoduleHarmonyPatch.FindType(
+                                "UnityEditor.PackageManager.UI.Internal.IPage") }, null);
+                        Assert.That(initialFetchDone, Is.Not.Null);
+                        double deadline = EditorApplication.timeSinceStartup + 20;
+                        bool fetchingDone = false;
+                        while (selection.Count < 2 || !fetchingDone)
                         {
-                            string id = PackageManagerSubmoduleHarmonyPatch.Read(state, "itemUniqueId") as string ??
-                                        PackageManagerSubmoduleHarmonyPatch.Read(state, "packageUniqueId") as string;
-                            if (!string.IsNullOrEmpty(id))
-                                selection.Add(id);
-                            if (selection.Count == 2)
+                            // Native loading UI clears selection even after local package records appear.
+                            fetchingDone = (bool)initialFetchDone.Invoke(refreshHandler, new[] { inProject });
+                            selection.Clear();
+                            foreach (object state in (IEnumerable)PackageManagerSubmoduleHarmonyPatch.Read(inProject, "visualStates"))
+                            {
+                                string id = PackageManagerSubmoduleHarmonyPatch.Read(state, "itemUniqueId") as string ??
+                                            PackageManagerSubmoduleHarmonyPatch.Read(state, "packageUniqueId") as string;
+                                if (!string.IsNullOrEmpty(id))
+                                    selection.Add(id);
+                                if (selection.Count == 2)
+                                    break;
+                            }
+                            if (selection.Count == 2 && fetchingDone || EditorApplication.timeSinceStartup >= deadline)
                                 break;
+                            yield return null;
                         }
+                        Assert.That(fetchingDone, Is.True, "Unity's initial package fetch must finish before multi-selection coverage.");
                         Assert.That(selection, Has.Count.EqualTo(2), "The project needs two installed packages for multi-selection coverage.");
                     }
                     SetSelection(inProject, selection.ToArray());
@@ -602,6 +641,21 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
             Assert.That(PackageManagerSubmoduleNativePage.IsGitHubPage(null), Is.False);
         }
 
+        [Test]
+        public void GitHubPageIdentity_FailsClosedAndRecoversAfterAnUnreadableId()
+        {
+            var page = new UnreadablePageStub();
+            Assert.That(PackageManagerSubmoduleNativePage.IsGitHubPage(page), Is.False);
+            MethodInfo refresh = typeof(PackageManagerSubmoduleHarmonyPatch).GetMethod(
+                "RefreshPostfix", BindingFlags.Static | BindingFlags.NonPublic);
+            Assert.DoesNotThrow(() => refresh.Invoke(null, new object[] { page }),
+                "An unreadable page identity must not interrupt Unity's native refresh.");
+
+            page.Fails = false;
+            Assert.That(PackageManagerSubmoduleNativePage.IsGitHubPage(page), Is.True,
+                "A failed getter invocation must not become a cached identity.");
+        }
+
         [TestCase("git-submodule-manager-submodules", true)]
         [TestCase("another-extension", false)]
         public void RetiredPageRecovery_MigratesOnlyTheFormerSubmodulesPage(string extensionName, bool migrates)
@@ -609,7 +663,18 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
             const BindingFlags instance = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
             Type searchType = PackageManagerSubmoduleHarmonyPatch.FindType(
                 "UnityEditor.PackageManager.UI.Internal.PackageSearchBar");
-            object searchBar = Activator.CreateInstance(searchType, true);
+            ConstructorInfo constructor = searchType.GetConstructor(instance, null, Type.EmptyTypes, null);
+            object searchBar;
+            if (constructor != null)
+                searchBar = constructor.Invoke(null);
+            else
+            {
+                Type serializedType = searchType.GetNestedType("UxmlSerializedData",
+                    BindingFlags.Public | BindingFlags.NonPublic);
+                Assert.That(serializedType, Is.Not.Null, "The native search bar needs its UXML construction factory.");
+                var serialized = (VisualElement.UxmlSerializedData)Activator.CreateInstance(serializedType, true);
+                searchBar = serialized.CreateInstance();
+            }
             object liveManager = PackageManagerSubmoduleHarmonyPatch.Read(searchBar, "m_PageManager");
             object liveActivePage = PackageManagerSubmoduleHarmonyPatch.Read(liveManager, "activePage");
             MethodInfo getPage = null;
@@ -738,6 +803,13 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
             internal NativePageStub(string id) { this.id = id; }
             public void Rebuild(bool force) => Rebuilds++;
             public void TriggerOnSelectionChanged(bool direct) => SelectionChanges++;
+        }
+
+        private sealed class UnreadablePageStub
+        {
+            internal bool Fails = true;
+            public string id => Fails ? throw new InvalidOperationException("Page identity is unavailable.") :
+                PackageManagerSubmoduleNativePage.ExtensionPageId;
         }
     }
 }

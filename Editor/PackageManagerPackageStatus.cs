@@ -91,9 +91,10 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 if (Error != other.Error || Packages.Count != other.Packages.Count ||
                     Repositories.Count != other.Repositories.Count || !Gitlinks.SetEquals(other.Gitlinks))
                     return false;
-                foreach (KeyValuePair<string, InstalledPackage> package in Packages)
-                    if (!other.Packages.TryGetValue(package.Key, out InstalledPackage value) || !package.Value.Equals(value))
-                        return false;
+                if (!ReferenceEquals(Packages, other.Packages))
+                    foreach (KeyValuePair<string, InstalledPackage> package in Packages)
+                        if (!other.Packages.TryGetValue(package.Key, out InstalledPackage value) || !package.Value.Equals(value))
+                            return false;
                 foreach (KeyValuePair<string, string> repository in Repositories)
                     if (!other.Repositories.TryGetValue(repository.Key, out string url) || repository.Value != url)
                         return false;
@@ -525,17 +526,17 @@ namespace MartinCalander.GitSubmoduleManager.Editor
 
         internal static bool IsGitHubPackage(string projectRoot, object nativePackage, StatusSnapshot data)
         {
-            if (!TryGetNativeInstalledPackage(nativePackage, data, out string name, out InstalledPackage info))
+            object version = ReadProperty(ReadProperty(nativePackage, "versions"), "primary");
+            if (!TryGetInstalledVersion(version, data, out string name, out InstalledPackage info))
                 return false;
             if (TryClassifyInstalled(projectRoot, name, info, data, out PackageSubmoduleStatus status))
                 return status.IsGitHub;
             return info.IsGitHubSource(name);
         }
 
-        private static bool TryGetNativeInstalledPackage(object nativePackage, StatusSnapshot data,
+        private static bool TryGetInstalledVersion(object version, StatusSnapshot data,
             out string name, out InstalledPackage info)
         {
-            object version = ReadProperty(ReadProperty(nativePackage, "versions"), "primary");
             name = ReadProperty(version, "name") as string;
             info = default;
             return ReadProperty(version, "isInstalled") is bool installed && installed &&
@@ -548,11 +549,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
 
         internal static string GetRepositoryUrl(string projectRoot, object version, StatusSnapshot data)
         {
-            string name = ReadProperty(version, "name") as string;
-            if (ReadProperty(version, "isInstalled") is not true || string.IsNullOrEmpty(name) ||
-                !data.Packages.TryGetValue(name, out InstalledPackage installed) ||
-                !installed.MatchesPath(ReadProperty(version, "localPath") as string) ||
-                (ReadProperty(version, "packageId") as string) != installed.PackageId)
+            if (!TryGetInstalledVersion(version, data, out string name, out InstalledPackage installed))
                 return string.Empty;
             return TryGetInstalledSubmoduleRepository(projectRoot, name, installed, data, out string url)
                 ? data.GetRepositorySource(url).RepositoryUrl : installed.GetRepositoryUrl(name);
@@ -643,7 +640,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 if (canReuse && !previous.HasSharedIndex && result.IndexFingerprint != null && result.IndexFingerprint == previous.IndexFingerprint)
                     result.Gitlinks.UnionWith(previous.Gitlinks);
                 else
-                    ParseIndex(ReadGit("ls-files --stage -z -- Packages/"), result);
+                    ParseIndex(ReadGit("ls-files --stage -z -- :(top,glob)Packages/*"), result);
                 if (hasModules)
                 {
                     if (canReuse && result.ModulesFingerprint != null && result.ModulesFingerprint == previous.ModulesFingerprint)
@@ -683,6 +680,10 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             try
             {
                 if ((File.GetAttributes(path) & (FileAttributes.ReparsePoint | FileAttributes.Directory)) != 0)
+                    return null;
+                long length = new FileInfo(path).Length;
+                // A zero-length path may be a Unix pipe. Leave its read to the bounded Git process.
+                if (length == 0 || length > maximumBytes)
                     return null;
                 using (var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete))
                 using (var hash = SHA256.Create())
