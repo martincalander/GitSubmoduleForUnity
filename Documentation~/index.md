@@ -15,9 +15,14 @@ when a safe repository URL is available. The current implementation is on `main`
 5. Select an installed package and use **Repository** in its links row when
    available.
 
-The extension reads local project state and performs no GitHub discovery. Use
-Unity for ordinary packages and Git for submodule installation, updates, and
-removal. No GitHub CLI or account setup is required for this view.
+Use **+ > Install package as Git submodule...** with a Git URL to add a root UPM
+package. **Remove** removes the selected submodule package and its Git
+registration together. See the [user guide](user-guide.md#changing-packages) for
+requirements and local-work protection.
+
+The status view reads local project state and performs no GitHub discovery.
+Only explicit package operations contact the supplied Git remote. Use Git to
+update submodules. GitHub CLI is not required.
 
 See the [verification records](../.github/CONTRIBUTING.md) for the exact commits,
 Unity versions, platforms, and checks exercised locally.

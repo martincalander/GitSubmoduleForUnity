@@ -5,9 +5,10 @@ the [Code of Conduct](CODE_OF_CONDUCT.md).
 
 The `main` branch develops installed-package status and a native GitHub source
 page with a small Editor footprint. Changes should make that view clearer, more
-reliable, or less expensive to run. Installation, conversion, dependency
-planning, remote discovery, and removal workflows are outside the current
-product scope. The former implementation is preserved on
+reliable, or less expensive to run. Direct link installation and safe submodule
+package removal also live in the native Package Manager. Conversion, dependency
+planning, and remote catalogue discovery remain outside the current product
+scope. The former implementation is preserved on
 [`legacy`](https://github.com/martincalander/GitSubmoduleForUnity/tree/legacy);
 published `0.8.1` artifacts still contain that implementation.
 
@@ -20,7 +21,7 @@ published `0.8.1` artifacts still contain that implementation.
 - Git for preparing test repositories and managing the checkout.
 - Python 3 and Node.js for repository, Markdown, and packaging checks.
 
-See the [package audit verification](#package-audit-verification-on-2026-10-20)
+See the [package actions edge-case audit](#package-actions-edge-case-audit-on-2026-10-21)
 and the earlier records below for the checks performed on each change.
 Version eligibility does not imply that the current design has been tested
 across every admitted alpha or other target. GitHub CLI is not required.
@@ -45,8 +46,8 @@ changing classification, reflection, Harmony hooks, or lifecycle behavior.
 - Keep all product code under `Editor/` and tests under `Tests/Editor/`.
 - Avoid permanent window polling, background network discovery, and rebuilding
   unchanged views. Measure performance claims against a stated baseline.
-- Read local installed state without modifying repositories, manifests, or
-  lockfiles.
+- Keep status discovery read-only. Only explicit install or removal actions may
+  modify package checkouts, Git registration, or the project manifest.
 - Preserve native Package Manager pages and ordinary package actions.
 - Keep the guard against raw embedded-folder deletion of submodules.
 - Validate reflection seams independently and fail closed when contracts change.
@@ -954,3 +955,169 @@ Windows, Linux, signed release artifacts, and hosted CI. No player build was
 needed for this Editor-only package, and no supplemental `dotnet build` was
 run after clean Unity compilation. These local working-tree results do not
 establish release evidence for another commit, archive, Editor, or platform.
+
+## Test suite cleanup verification on 2026-10-20
+
+Test source decreased from 3,592 to 3,447 lines, and the Unity 7 suite from
+406 to 379 cases. Removed cases repeated malformed alpha inputs, patch
+installation checks, and installed-source identity or repository checks.
+Their distinct assertions remain in the parameterized version, reinstall,
+classification, and Repository link tests. Shared helpers replace repeated
+native page lookup and Git, symlink, and pipe setup. Lifecycle, cancellation,
+metadata freshness, removal protection, and CoreCLR coverage remain intact.
+
+Focused checks passed before the final full runs: 379 cases on `7000.0.0a11`
+and 375 on each of `6000.5.5f1` and `6000.7.0b2`, all without failures or skips.
+The four-case difference is the CoreCLR-only fixture. All three used one-shot
+CLI tests with `-automated`, compiled without C# warnings or errors, and ran
+on macOS ARM64 with CLI `1.0.0-beta.13` and Test Framework `1.9.0`.
+Repository validation, eight Python tests, Markdown lint, package dry run,
+and whitespace checks passed. Product source and metadata were unchanged.
+Cleanup evidence is under `Logs/test-cleanup/` in the workspace.
+
+Other Editor versions, Windows, Linux, player builds, and release or hosted CI
+were not rerun; the exact untested version families in the package audit above
+still apply. These are local working-tree results, not release verification.
+
+## Submodule package actions verification on 2026-10-21
+
+Direct installation uses the native plus menu and URL input popup. Removal now
+cleans up the installed package, parent gitlink, submodule registration, and any
+same-name manifest dependency. It supports staged installations and published
+revision changes before a parent commit, while retaining a quarantined checkout
+and Git history for recovery. Status discovery remains read-only.
+
+The new regression fixtures cover root package metadata, branch selection,
+occupied destinations, source validation, dirty and ignored files, unpublished
+work, nested and linked repositories, partial failures, reinstalling, staged
+removal, sibling submodules, and manifest dependency edits. Native tests cover
+the menu hook, ownership and cleanup, the URL popup, and installed dependents.
+
+An isolated Unity `6000.5.5f1` project also exercised the native operation lifetime:
+install a package, resolve it through Unity, add a fallback manifest dependency,
+and remove both the package and submodule before committing the parent. Unity
+then no longer listed the package, and reload and auto-refresh locks were
+released. The focused run passed 54 cases, including this integration check.
+
+Initial verification corrected a PackageInfo type ambiguity, an unavailable
+NUnit attribute, the older native menu constructor, and test Git-history queries
+after checkout removal. The first connected Unity 7 run stalled in the test
+helper's asynchronous output reads; cancellation timed out. With user approval,
+the workspace Editor was restarted. The helper now drains output on worker
+threads with a deadline. An initial isolated full run lacked an installed Git
+package fixture and encountered a registry authentication error. These attempts
+are retained separately from final results.
+
+Final verification used Unity CLI `1.0.0-beta.14`, Git `2.54.0`, and macOS ARM64:
+
+| Editor | Revision | Test Framework | Full assembly passed | Failed | Skipped |
+| --- | --- | --- | ---: | ---: | ---: |
+| `7000.0.0a11` | `fac09b31727f` | `1.9.0` | 432 | 0 | 0 |
+| `6000.5.5f1` | `d16e074b49fd` | `1.7.0` | 428 | 0 | 0 |
+
+Both full runs include all six `PackageManagerCompatibility` cases and compiled
+without C# warnings or errors. Unity 7's final focused run passed 53 cases.
+The four-case full-suite difference is the CoreCLR-only fixture. Source hashes
+remained unchanged through final verification. Full runs used one-shot CLI tests
+with `-automated`; Unity 6.5 used an isolated project. These results describe the
+working tree, not a different commit, release archive, or platform.
+
+Repository validation, eight Python repository tests, Markdown lint, package dry
+run, and whitespace checks passed. Bundled patching artifacts and their metadata
+were unchanged. The workspace's Editor settings and Project Auditor settings were restored
+from the pre-test snapshot. Evidence is in `Logs/submodule-actions/` and
+`Logs/submodule-package-actions/mono-6000.5.5f1/` in the private workspace.
+
+Not tested: Unity `6000.3.22f1`, other `6000.5.*f1` releases,
+`6000.6.0f1`, `6000.6.2f1`, `6000.7.0b1`, `6000.7.0b2`, other Unity 7 alphas,
+Windows, Linux, player builds, release archives, and hosted CI. No supplemental
+`dotnet build` was needed after Unity compilation.
+
+## Package Actions Edge-Case Audit on 2026-10-21
+
+The follow-up audit added 58 regression cases. It corrected hidden-index and
+shared-worktree handling, checks around concurrent metadata changes, strict
+manifest decoding and byte-preserving edits, bounded Git output and child
+cleanup, native menu reattachment, operation resource cleanup, and resolved
+package identity checks. Toolbar lookup now reuses the owning window's cached
+toolbar. Test assemblies are disabled when Test Framework is absent, fixing a
+cold embedded installation failure. Local test sources and Git path assertions
+also normalize Windows separators without relaxing production URL validation.
+
+The 87 backend cases cover installation, branch selection, duplicate and occupied
+destinations, invalid or oversized package metadata, dirty and ignored files,
+hidden index flags, unpublished commits and refs, worktrees, symlinks, sibling
+registrations, cancellation, external file changes, rollback, and recovery.
+The 24 native action cases cover reflected contracts, repeated menu attachment,
+detachment and replacement, failure during resource acquisition or release,
+cancelled and failed tasks, dependency checks, and Unity resolution mismatches.
+The existing status, native page, compatibility, and reload-disabled Play Mode
+fixtures remain part of full verification.
+
+Focused runs stabilized these changes before full verification. An isolated
+install/remove flow confirmed that Unity registers the embedded submodule and
+then removes it together with a same-name fallback dependency. A detached Git
+helper initially exposed a CoreCLR output-reader disposal hang. The final
+regression completes within its deadline and reports unverified helper cleanup;
+readers are disposed when the detached helper closes its inherited pipes.
+Normal owned-child cancellation and exact manifest backup bytes also passed.
+
+Warm native toolbar lookup allocated zero bytes across 100 observations on both
+Mono Editors. CoreCLR allocated 11,200 bytes for the same 100 observations.
+Both measurements stayed identical with either the compact hierarchy or 2,000
+additional elements. This measures the repeated lookup path, not all Package
+Manager activity.
+
+Cold projects without Test Framework exercised removal of this package itself
+on all three checked Editors. Git and UPM removal, recovery retention, assembly
+unload, and release of reload and refresh locks passed. Unity `7000.0.0a11`
+completed cleanly. Unity `6000.5.5f1` import workers crashed with the signature of
+[UUM-119732](https://issuetracker.unity.com/issues/21204/asset-import-workers-crash-when-asmdef-is-deleted),
+while `6000.7.0b2` logged recoverable worker restarts. The main Editors completed
+and exited successfully. Native deletion and main-thread move controls were
+clean in their checked runs; coordinator timing remains an unresolved factor.
+Refresh-order experiments did not resolve the worker issue and were not adopted.
+
+The connected Unity 7 suite passed all 490 cases in 499.94 seconds, then the
+Editor exited with code 6 after an FMOD audio-mixer diagnostic following Play
+Mode cycles. Its completed structured results were preserved separately from
+that stability failure. The workspace Editor was reopened, freshly compiled,
+and confirmed ready. Final isolated runs provide separate full-suite evidence.
+
+Final full-assembly runs used macOS ARM64, Unity CLI `1.0.0-beta.14`, and
+one-shot graphical Editors with `-automated`:
+
+| Editor | Revision | Runtime | Test Framework | Passed | Failed | Skipped |
+| --- | --- | --- | --- | ---: | ---: | ---: |
+| `7000.0.0a11` | `fac09b31727f` | CoreCLR 10.0.10 | `1.9.0` | 490 | 0 | 0 |
+| `6000.5.5f1` | `d16e074b49fd` | Mono | `1.7.0` | 486 | 0 | 0 |
+| `6000.7.0b2` | `d6546dc2b3a9` | Mono | `1.9.0` | 486 | 0 | 0 |
+
+Each includes all nine `PackageManagerCompatibility` cases. The four-case
+difference is the CoreCLR-only fixture. Source and dependency hashes remained
+unchanged through these runs. Initial import in the isolated Unity 7 project
+generated its settings and Editor revision metadata. The workspace's original
+project settings, parent manifest, and submodule registrations were preserved.
+All twelve bundled DLLs and their import metadata remained byte-identical,
+and existing asset GUIDs were preserved.
+
+Repository validation, all eight Python repository tests, Markdown lint,
+package dry run, and whitespace checks passed. A local npm archive was checked
+byte-for-byte against its source contents; it was not used for a separate Unity
+run or published. No workflow files changed, so workflow syntax checks were not
+repeated. All isolated test Editors exited; the workspace Editor remains ready.
+
+Self-removal evidence, the connected run, compile results, source inventories,
+and package checks are under `Logs/submodule-edge-audit/` in the private
+workspace. Mono suite evidence is under
+`Logs/submodule-package-actions/audit-mono-6000.5.5f1/` and
+`Logs/submodule-package-actions/audit-beta-6000.7.0b2/`.
+
+These are local working-tree checks, not release or hosted CI evidence.
+Not tested: Unity `6000.3.22f1`, other `6000.5.*f1` releases,
+`6000.6.0f1`, `6000.6.2f1`, `6000.7.0b1`, other Unity 7 alphas,
+Windows, Linux, and signed release artifacts. No player build or supplemental
+`dotnet build` was needed for this Editor-only change. Git deadlines apply per
+command, recovery storage is retained, and independent Git clients remain
+outside the operation lock. This coverage does not establish every possible
+filesystem, remote server, or Editor timing combination.

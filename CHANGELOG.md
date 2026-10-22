@@ -7,13 +7,22 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-`main` now focuses on installed package status and sources. The former `main`
+`main` now provides installed package status, sources, direct submodule
+installation, and safe removal. The former `main`
 with discovery and package-management workflows is preserved on
 [`legacy`](https://github.com/martincalander/GitSubmoduleForUnity/tree/legacy).
 Local validation is recorded in the contribution guide. These changes have not
 been published as a new release; existing `0.8.1` artifacts remain unchanged.
 
 ### Added
+
+- Add **Install package as Git submodule...** to Package Manager's plus menu. A
+  repository link is enough for a root UPM package; the action validates its
+  manifest and installs it under its declared package name.
+- Remove verified submodule packages through Package Manager, cleaning up the
+  package folder, Git registration, gitlink, and same-name manifest dependency.
+  Support removal before the parent commit and retain checkout recovery data.
+  Refuse removal of local changes, unpublished work, and ambiguous checkouts.
 
 - Admit all canonical Unity `7000.0.0a*` alpha revisions with a positive integer
   suffix, retaining the existing Unity 6 targets and independent runtime checks
@@ -35,6 +44,14 @@ been published as a new release; existing `0.8.1` artifacts remain unchanged.
   versions remain unvalidated.
 
 ### Changed
+
+- Reuse native toolbar lookups and restore the install action after menu
+  reattachment. Release operation resources after partial setup failures.
+- Refuse hidden index changes and shared or mismatched submodule storage during
+  removal. Preserve concurrent manifest edits and bound aborted Git helper
+  cleanup.
+- Compile package tests only when Unity Test Framework is installed, so an
+  embedded installation does not require test dependencies in ordinary projects.
 
 - Limit Git index output to direct `Packages/` children, avoiding unnecessary
   reads of tracked files inside embedded packages. Reuse the installed-package
@@ -89,8 +106,9 @@ been published as a new release; existing `0.8.1` artifacts remain unchanged.
   Manager and keep Unity's existing package information.
 - Limit **Sources > GitHub** to installed GitHub submodules and UPM Git
   dependencies using Unity's existing package records.
-- Leave installation, updates, conversion, and removal to Unity and Git. Retain
-  a guard against Unity deleting submodule folders as ordinary embedded packages.
+- Keep updates and conversion with Unity and Git. Retain a guard against Unity
+  deleting submodule folders as ordinary embedded packages; verified submodules
+  use the dedicated removal action.
 - Select patching libraries by Editor runtime. Mono preserves the original
   Harmony 2.4.1 binary; CoreCLR uses eleven original upstream HarmonyX 2.16.1,
   MonoMod, and Mono.Cecil 0.11.6 DLLs with pinned provenance. Imports remain
@@ -115,8 +133,9 @@ been published as a new release; existing `0.8.1` artifacts remain unchanged.
   **Sources > GitHub** remains available. A saved selection of the retired
   sidebar page returns to Unity's All Packages list.
 - Remote GitHub catalogue discovery, account checks, and GitHub CLI requirement.
-- Submodule install, conversion, and removal workflows, dependency planning, and
-  their persisted operation handoffs.
+- Legacy catalogue-driven install, conversion, and removal workflows, dependency
+  planning, and their persisted operation handoffs. Direct URL installation and
+  safe removal now use the native Package Manager actions described above.
 - Welcome and Preferences surfaces, repository branch selection, and remote
   catalogue filters and caches.
 

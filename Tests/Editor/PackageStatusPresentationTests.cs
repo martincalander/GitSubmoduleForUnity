@@ -57,8 +57,9 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
             Assert.That(PackageManagerSubmoduleHarmonyPatch.ReadMember(value, "current"), Is.EqualTo("first"));
         }
 
-        [Test]
-        public void RecycledSubmoduleTag_RestoresTheNativeCustomTag()
+        [TestCase(0)]
+        [TestCase(1)]
+        public void RecycledSubmoduleTag_RestoresTheNativeCustomTag(int repeatedRefreshes)
         {
             var container = new VisualElement { name = "tagContainer" };
             var label = new Label("Custom") { tooltip = "Native tooltip" };
@@ -66,6 +67,8 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
             PackageManagerSubmoduleHarmonyPatch.ApplyTag(label, true);
             Assert.That(label.text, Is.EqualTo("Submodule"));
             Assert.That(container.style.maxWidth.keyword, Is.EqualTo(StyleKeyword.None));
+            for (int refresh = 0; refresh < repeatedRefreshes; refresh++)
+                PackageManagerSubmoduleHarmonyPatch.ApplyTag(label, true);
             PackageManagerSubmoduleHarmonyPatch.ApplyTag(label, false);
             Assert.That(label.text, Is.EqualTo("Custom"));
             Assert.That(label.tooltip, Is.EqualTo("Native tooltip"));
@@ -73,45 +76,20 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
             Assert.That(container.style.maxWidth.keyword, Is.EqualTo(StyleKeyword.Null));
         }
 
-        [Test]
-        public void RecycledTag_PreservesANewNativePresentation()
-        {
-            var label = new Label("Custom");
-            PackageManagerSubmoduleHarmonyPatch.ApplyTag(label, true);
-            label.text = "Git";
-            label.tooltip = "From Unity";
-            label.AddToClassList("disable-ellipsis");
-            PackageManagerSubmoduleHarmonyPatch.ApplyTag(label, false);
-            Assert.That(label.text, Is.EqualTo("Git"));
-            Assert.That(label.tooltip, Is.EqualTo("From Unity"));
-            Assert.That(label.ClassListContains("disable-ellipsis"), Is.True);
-        }
-
-        [Test]
-        public void RepeatedTagRefresh_DoesNotLoseTheOriginalLabel()
-        {
-            var label = new Label("Custom");
-            PackageManagerSubmoduleHarmonyPatch.ApplyTag(label, true);
-            PackageManagerSubmoduleHarmonyPatch.ApplyTag(label, true);
-            PackageManagerSubmoduleHarmonyPatch.ApplyTag(label, false);
-            Assert.That(label.text, Is.EqualTo("Custom"));
-        }
-
-        [Test]
-        public void RepeatedTagRefresh_PreservesTheLatestNativePresentation()
+        [TestCase(0)]
+        [TestCase(2)]
+        public void RecycledTag_PreservesANewNativePresentation(int repeatedRefreshes)
         {
             var label = new Label("Custom") { tooltip = "Original tooltip" };
             PackageManagerSubmoduleHarmonyPatch.ApplyTag(label, true);
             label.text = "Git";
-            label.tooltip = "Updated native tooltip";
+            label.tooltip = "From Unity";
             label.AddToClassList("disable-ellipsis");
-
-            PackageManagerSubmoduleHarmonyPatch.ApplyTag(label, true);
-            PackageManagerSubmoduleHarmonyPatch.ApplyTag(label, true);
+            for (int refresh = 0; refresh < repeatedRefreshes; refresh++)
+                PackageManagerSubmoduleHarmonyPatch.ApplyTag(label, true);
             PackageManagerSubmoduleHarmonyPatch.ApplyTag(label, false);
-
             Assert.That(label.text, Is.EqualTo("Git"));
-            Assert.That(label.tooltip, Is.EqualTo("Updated native tooltip"));
+            Assert.That(label.tooltip, Is.EqualTo("From Unity"));
             Assert.That(label.ClassListContains("disable-ellipsis"), Is.True);
         }
 
@@ -264,30 +242,13 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
 
         [Test]
         [Category("PackageManagerCompatibility")]
-        public void NativeStatusAndRemovalContracts_ArePatchedOnThisEditor()
-        {
-            PackageManagerSubmoduleHarmonyPatch.Install();
-            Assert.That(PackageManagerSubmoduleHarmonyPatch.LastError, Is.Empty);
-            var tags = PackageManagerSubmoduleHarmonyPatch.TagTargets().ToArray();
-            Assert.That(tags, Is.Not.Empty);
-            foreach (var method in tags)
-                Assert.That(PackageManagerSubmoduleHarmonyPatch.IsPatched(method), Is.True, method.ToString());
-            Assert.That(PackageManagerSubmoduleHarmonyPatch.IsPatched(
-                PackageManagerSubmoduleHarmonyPatch.FindMethod("SourceInfoCard", "Refresh", typeof(void), "IPackageVersion")), Is.True);
-            Assert.That(PackageManagerSubmoduleHarmonyPatch.IsPatched(
-                PackageManagerSubmoduleHarmonyPatch.FindMethod("RemoveCustomAction", "TriggerActionImplementation", typeof(bool), "IPackageVersion")), Is.True);
-            Assert.That(PackageManagerSubmoduleHarmonyPatch.IsPatched(
-                PackageManagerSubmoduleHarmonyPatch.FindMethod("PackageOperationDispatcher", "RemoveEmbedded", typeof(void), "IPackage")), Is.True);
-            Assert.That(PackageManagerSubmoduleHarmonyPatch.IsPatched(PackageManagerSubmoduleNativePage.GetNativeRefreshTarget()), Is.True);
-            Assert.That(PackageManagerSubmoduleHarmonyPatch.IsPatched(PackageRepositoryLink.GetRefreshTarget()), Is.True);
-        }
-
-        [Test]
-        [Category("PackageManagerCompatibility")]
         public void RepeatedInstallationAndReinstallation_KeepOneCopyOfEachOwnedPatch()
         {
             PackageManagerSubmoduleHarmonyPatch.Install();
-            MethodInfo[] targets = PackageManagerSubmoduleHarmonyPatch.TagTargets().Concat(new[]
+            Assert.That(PackageManagerSubmoduleHarmonyPatch.LastError, Is.Empty);
+            MethodInfo[] tags = PackageManagerSubmoduleHarmonyPatch.TagTargets().ToArray();
+            Assert.That(tags, Is.Not.Empty);
+            MethodInfo[] targets = tags.Concat(new[]
             {
                 PackageManagerSubmoduleHarmonyPatch.FindMethod("SourceInfoCard", "Refresh", typeof(void), "IPackageVersion"),
                 PackageManagerSubmoduleHarmonyPatch.FindMethod("RemoveCustomAction", "TriggerActionImplementation", typeof(bool), "IPackageVersion"),

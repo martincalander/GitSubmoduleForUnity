@@ -1,7 +1,7 @@
 # Installation and Compatibility
 
-`main` contains the simplified status-and-sources version of Git Submodule
-Manager. The former management workflow is preserved on
+`main` contains package status, sources, link-based submodule installation, and
+safe submodule package removal. The former management workflow is preserved on
 [`legacy`](https://github.com/martincalander/GitSubmoduleForUnity/tree/legacy).
 
 ## Install from Git
@@ -24,9 +24,9 @@ The equivalent entry in `Packages/manifest.json` is:
 ```
 
 Merge this entry into the existing manifest rather than replacing unrelated
-dependencies. Git must be available to the Unity Editor process. `main` is a
-moving branch; for a reproducible installation, replace it with a tested commit.
-Unity records the resolved revision in `Packages/packages-lock.json`.
+dependencies. Git must be available to the Unity Editor process. `main` follows
+the current upstream branch. Keep `enableLockFile` set to `false` in this
+workspace and leave `Packages/packages-lock.json` untracked.
 
 The simplified version has not been published as a new package release yet.
 Existing `0.8.1` OpenUPM packages, release tarballs, and bootstrap downloads
@@ -50,6 +50,10 @@ machine-specific local dependency path into a shared project manifest.
 
 ## Install as a Submodule
 
+If the manager is already available, use **+ > Install package as Git submodule...**
+and enter a repository URL. See the [user guide](user-guide.md#add-from-a-git-link).
+To install the manager itself initially, use Git:
+
 From the root of a Git-tracked Unity project, run:
 
 ```bash
@@ -59,7 +63,7 @@ git submodule add -b main https://github.com/martincalander/GitSubmoduleForUnity
 This creates an editable embedded package. Review and commit the `.gitmodules`
 entry and package gitlink in the parent project. The parent gitlink pins the
 actual commit; the branch setting does not update it automatically. Use Git to
-update the checkout or remove it later.
+update the checkout later. Once installed, Package Manager can remove it safely.
 
 If the package is already installed, use Unity or Git to change that existing
 installation first. Do not create a second copy with the same package ID.
@@ -109,8 +113,8 @@ Changelog, and Licenses links.
 Choose **Sources > GitHub** to view installed GitHub submodules and UPM Git
 dependencies. The source is available even when no package is selected.
 
-There is no Welcome window or Preferences setup. The extension reads local
-installed state; package changes remain with Unity and Git. See the
+There is no Welcome window or Preferences setup. The status view reads local
+installed state. Explicit install and removal actions use Git. See the
 [user guide](user-guide.md) for details.
 
 ## Team Clone Setup
@@ -134,24 +138,25 @@ let Unity finish importing and refresh Package Manager.
 ## Update or Remove
 
 Use Package Manager to update or remove an ordinary UPM installation of this
-package. If installed as a submodule, use Git to change its revision or remove
-it, then review and commit the parent gitlink or `.gitmodules` changes.
+package. If installed as a submodule, use Git to change its revision. Use
+Package Manager **Remove** to remove the submodule package and Git registration
+together, then review and commit the parent changes.
 
-The extension blocks Unity's raw embedded-folder deletion for submodules and
-unverified Git checkouts. It supplies no replacement removal workflow.
+The extension still blocks Unity's raw embedded-folder deletion for unverified
+Git checkouts. Its submodule removal action requires clean, published work.
 Review [CHANGELOG.md](../CHANGELOG.md) before changing versions.
 
 ## Earlier Workflow and Published Releases
 
 Use [`legacy`](https://github.com/martincalander/GitSubmoduleForUnity/tree/legacy)
-if you need the previous remote discovery, install, conversion, or removal
+if you need the previous remote discovery, conversion, or dependency planning
 workflows. It preserves the former `main`; the existing `v0.8.1` release is an
 older tagged snapshot of that product direction. Their installation instructions
 are in the [legacy installation guide](https://github.com/martincalander/GitSubmoduleForUnity/blob/legacy/Documentation~/installation.md).
 
 | Source | Contents |
 | --- | --- |
-| Git URL ending in `#main` or a current checkout | Simplified status and sources |
+| Git URL ending in `#main` or a current checkout | Status, sources, direct install and removal |
 | Git URL ending in `#legacy` | Former `main` with the fuller management workflow |
 | `v0.8.1` Git tag, OpenUPM `0.8.1`, or signed release `.tgz` | Published earlier workflow |
 | `GitSubmoduleManagerInstaller-0.8.1.unitypackage` | Bootstrap for the earlier OpenUPM release |
@@ -181,4 +186,4 @@ package path.
 Downstream assembly definitions should reference
 `MartinCalander.GitSubmoduleManager.Editor`; the matching source namespace is
 `MartinCalander.GitSubmoduleManager.Editor`. The former management window,
-Preferences, and mutation recovery services are not present on `main`.
+Preferences, and legacy mutation recovery services are not present on `main`.

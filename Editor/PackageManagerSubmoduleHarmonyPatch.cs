@@ -66,6 +66,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             if (!hasTagTarget)
                 LastError += "Missing native contract for submodule labels. ";
             Patch(SourceRefresh.Value, nameof(SourcePostfix), false);
+            Patch(PackageManagerSubmoduleActions.GetAddMenuTarget(), nameof(AddMenuPostfix), false);
             Patch(FindMethod("RemoveCustomAction", "TriggerActionImplementation", typeof(bool), "IPackageVersion"), nameof(RemovePrefix), true);
             Patch(FindMethod("PackageOperationDispatcher", "RemoveEmbedded", typeof(void), "IPackage"), nameof(RemoveEmbeddedPrefix), true);
             Patch(PackageManagerSubmoduleNativePage.GetNativeRefreshTarget(), nameof(RefreshPostfix), false);
@@ -295,6 +296,8 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             if (!MustBlockRemoval(__0, PackageManagerPackageStatus.ShouldBlockEmbeddedRemoval))
                 return true;
             __result = false;
+            if (PackageManagerSubmoduleActions.RequestRemoval(__0))
+                return false;
             EditorUtility.DisplayDialog("Manage this checkout with Git",
                 "This package is a Git checkout, or its submodule status could not be verified. " +
                 "Remove it with Git after reviewing your local work. Package Manager cannot safely delete it as an embedded folder.", "OK");
@@ -306,6 +309,8 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             object installed = Read(Read(__0, "versions"), "installed");
             return !MustBlockRemoval(installed, PackageManagerPackageStatus.ShouldBlockEmbeddedRemoval);
         }
+
+        private static void AddMenuPostfix(object __instance) => PackageManagerSubmoduleActions.AttachToolbar(__instance);
 
         private static void SidebarRefreshPostfix(object __instance)
         {
@@ -373,6 +378,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         {
             installed = false;
             IsSidebarRepairInstalled = false;
+            PackageManagerSubmoduleActions.RemoveMenus();
             if (harmony == null)
                 return;
 #if ENABLE_CORECLR

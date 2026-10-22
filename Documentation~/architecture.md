@@ -2,12 +2,14 @@
 
 ## Scope
 
-The `main` branch contains an Editor-only installed-package view. It classifies
+The `main` branch contains an Editor-only installed-package view and explicit
+submodule package install and removal actions. It classifies
 packages, labels submodules, and lists installed GitHub packages in
 Unity's native Package Manager. A Repository link precedes Unity's existing
 package links when a safe repository URL is available. Its scope is status
-and sources, with a small Editor footprint. It does not discover remote repositories, plan dependencies, or
-change installed packages. The former management implementation is preserved
+and sources, with a small Editor footprint. The native plus menu accepts a
+repository link, and the native removal action removes a verified submodule
+package. It does not discover remote repositories or plan dependencies. The former management implementation is preserved
 on [`legacy`](https://github.com/martincalander/GitSubmoduleForUnity/tree/legacy).
 
 ```text
@@ -22,6 +24,12 @@ Editor/
 │                               Repository link in Unity's native links row
 ├── PackageManagerSubmoduleNativePage.cs
 │                               Sources > GitHub
+├── PackageManagerSubmoduleActions.cs
+│                               native add menu and operation lifetime
+├── SubmodulePackageOperations.cs
+│                               explicit Git install and removal
+├── PackageManifestDocument.cs
+│                               manifest validation and dependency edits
 └── PackageManagerSubmoduleHarmonyPatch.cs
                                 native labels and embedded-removal protection
 ```
@@ -158,15 +166,17 @@ UIElements dependency, which supplies the required engine module dependencies;
 it no longer declares or references Newtonsoft. The runtime-specific patching
 libraries and their explicit Editor imports remain unchanged.
 
-Ordinary package actions remain Unity-owned. A small Harmony guard prevents
-Unity's raw embedded-package removal from deleting a submodule folder. It
-performs no Git or filesystem mutation and supplies no replacement removal
-workflow. Users manage submodule changes through Git.
+Ordinary package actions remain Unity-owned. A Harmony guard prevents Unity's
+raw embedded-package removal from deleting a submodule folder. An explicit
+submodule removal action performs independent, fresh repository and checkout
+validation before modifying Git registration or package files. Cached status
+is never removal authorization.
 
-Script reload must rebuild the view from current installed state. The package
-has no installation transaction, dependency plan, pending mutation handoff,
-remote discovery cache, or persisted confirmation to resume. Existing recovery
-files from the earlier implementation remain outside this view's ownership.
+Script reload rebuilds the view from current installed state. Explicit mutations
+finish their filesystem work before import and code reload are released. The
+package has no dependency plan, remote discovery cache, or persisted confirmation
+to resume. Existing recovery files from the earlier implementation remain
+outside the new actions' ownership.
 
 The host and status service use `OnCodeInitializing` and `OnCodeUnloading` on
 Unity 6.5 and newer, with the older load and assembly-reload callbacks retained
@@ -180,6 +190,49 @@ status. This also applies when scene reload is disabled.
 This lifetime follows Unity's
 [code lifecycle guidance](https://docs.unity.com/en-us/engine/7000.0/manual/programming-environment/code-reload-serialization/code-reload/code-lifecycle).
 The package has no gameplay statics to reset at Play mode entry.
+
+## Explicit Package Operations
+
+Installation starts only from **+ > Install package as Git submodule...**. The native
+input popup accepts one repository link. A separate backend validates a root
+`package.json` and uses its name as a direct `Packages/` child. The default
+upstream branch or an explicit branch is used. Existing installations and
+occupied paths are rejected. Git processes receive argument arrays without a
+shell, have bounded output and timeouts, and do not prompt interactively.
+Aborted commands stop verified child processes where supported. A detached
+helper that outlives Git cannot be safely identified by parentage. In that case
+the operation reports unverified cleanup and retains recovery evidence; reader
+resources are disposed when the helper releases its pipes, without blocking
+the Editor operation.
+
+Removal starts from the selected installed package, but independently verifies
+its path, package manifest, parent gitlink, registration, Git directory, local
+state, and publication before changing anything. It removes a same-name direct
+dependency from `Packages/manifest.json` as well as the submodule, preventing a
+shadowed dependency from reinstalling the package. Local work and ambiguous
+ownership block removal. The verified checkout is moved into a unique
+`Library/SubmodulePackageOperations` recovery folder before removing its gitlink
+from the index. Forced removal applies only to that index entry and cannot
+delete working files. This also handles staged installations and published
+revision updates before a parent commit. The selected gitlink and `.gitmodules`
+content are rechecked before their mutation; unrelated staged entries remain
+unchanged. Checkout backups, manifest and registration backups, an operation
+record, and Git object storage are retained after success as well as failure.
+Hidden index flags and repositories with additional worktrees are refused.
+Manifest edits use an atomic replacement with a backup of the actual previous
+file, preserving concurrent edits for recovery. The operation lock coordinates
+this service, but cannot prevent an independent Git client from changing files.
+
+The UI owns the operation lifetime, runs Git work off the main thread, and
+requests Unity package resolution after mutation. A missing native add-menu
+contract disables that entry independently of labels, sources, and deletion
+protection. No remote work is started by opening Package Manager or refreshing
+status.
+
+Toolbar lookup is cached per window with ancestry checks for replacement.
+Detached menus release their active item and repair it on reattachment; unload
+removes owned callbacks. Operation resource cleanup remains independent of
+package resolution, including when setup or another cleanup action fails.
 
 ## Compatibility Boundary
 
@@ -213,7 +266,8 @@ in `.github/scripts/coreclr_harmony_artifacts.json` and
 
 ## Safety Boundaries
 
-- Read installed state without changing repositories, manifests, or lockfiles.
+- Keep installed-state discovery read-only. Only explicit package actions may
+  change repositories or the project manifest.
 - Do not treat an arbitrary `.git` marker as proof of a parent submodule.
 - Keep classification bounded to the selected project's package paths.
 - Preserve ordinary Unity package behavior when no submodule is involved.
@@ -224,7 +278,8 @@ in `.github/scripts/coreclr_harmony_artifacts.json` and
 
 Focused EditMode tests cover installed-source classification, package paths,
 GitHub source recognition, native page membership, safe Repository links,
-classification boundaries, and removal protection. The
+classification boundaries, removal protection, and isolated install/removal
+operations against temporary Git repositories. The
 `PackageManagerCompatibility` category checks the internal contracts and Harmony
 ownership needed by the native integration.
 

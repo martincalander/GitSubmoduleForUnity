@@ -78,12 +78,59 @@ Console for compatibility diagnostics if a supported URL has no link.
 
 ## Remove Is Blocked for a Submodule
 
-Use Git to remove that submodule. The extension prevents Unity's embedded-folder
-removal from deleting a submodule directory. It does not remove Git registration,
-convert package sources, or discard local changes.
+Package Manager **Remove** handles verified submodules through a Git-aware
+removal action. Commit and push local work, remove untracked files only after
+reviewing them, and resolve any Git registration mismatch before retrying.
+An unavailable remote or nested submodule also blocks removal.
+
+Git's `assume-unchanged` and `skip-worktree` flags can hide modified files.
+Clear those flags and review the actual changes before removing the package.
+Stage or restore `.gitmodules` changes before starting an operation. Shared or
+misdirected Git storage must be reviewed with Git rather than removed through
+Package Manager.
+
+If native integration is unavailable, the extension continues to block raw
+embedded-folder deletion. Use Git after reviewing the checkout in that case.
+The action never converts sources or discards local changes.
 
 Review the submodule's work and the parent repository's resulting changes in
 your Git client before committing.
+
+## An Install or Removal Did Not Finish
+
+Read the error's recovery path before retrying. Current operations retain files
+under `Library/SubmodulePackageOperations`. A removal keeps `operation.txt`,
+manifest and `.gitmodules` backups, and the moved checkout. The Git object
+storage remains in the parent repository. Successful removal retains these
+backups too, but the checkout is no longer installed or registered.
+
+Inspect `git status`, `.gitmodules`, `Packages/manifest.json`, and the recovery
+record together. Do not delete recovery evidence or overwrite an occupied
+package path to force a retry. Review any partial changes with your Git tools.
+
+For install failures, verify that the supplied repository has `package.json`
+at its root, with a lowercase reverse-domain name, a semantic version, and valid
+package dependencies. Use the repository URL and optionally `#branch`; package
+subfolder URLs and tag or commit pins are not supported by this action.
+
+## Import Worker Errors When Removing This Package
+
+Cold-project self-removal on Unity `6000.5.5f1` reproduced import-worker crashes
+while reading a removed assembly definition. The main Editor completed removal,
+unloaded the package, released its locks, and retained recovery files. The error
+matches Unity's documented
+[UUM-119732](https://issuetracker.unity.com/issues/21204/asset-import-workers-crash-when-asmdef-is-deleted).
+Unity `6000.7.0b2` instead reported recoverable worker restarts, and
+`7000.0.0a11` completed the same check without worker errors.
+
+Native deletion and a main-thread move control did not reproduce the error in
+their checked runs. The operation's timing may contribute; it has not been
+isolated, and changing refresh order did not resolve it. These results do not
+establish clean self-removal on every supported Editor.
+
+If this occurs, let Unity finish resolving and importing, then check Package
+Manager and Git state before retrying. Preserve the recovery folder if removal
+did not finish.
 
 ## Recovery Files from an Earlier Version
 

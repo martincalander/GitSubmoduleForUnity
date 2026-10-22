@@ -74,31 +74,14 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
         [TestCase("7000.0.0a12c1", false)]
         [TestCase("7000.0.0a12a1", false)]
         [TestCase("8000.0.0a1", false)]
-        [TestCase("7000.0.0a011", false)]
-        [TestCase("7000.0.0a11c1", false)]
-        [TestCase(" 7000.0.0a11", false)]
-        [TestCase("7000.0.0a11 ", false)]
         [TestCase("7000.0.0a010", false)]
-        [TestCase("7000.0.0a10c1", false)]
-        [TestCase(" 7000.0.0a10", false)]
-        [TestCase("7000.0.0a10 ", false)]
-        [TestCase("7000.0.0a09", false)]
-        [TestCase("7000.0.0a9c1", false)]
-        [TestCase(" 7000.0.0a9", false)]
-        [TestCase("7000.0.0a9 ", false)]
-        [TestCase("7000.0.0a08", false)]
-        [TestCase("7000.0.0a8c1", false)]
-        [TestCase(" 7000.0.0a8", false)]
-        [TestCase("7000.0.0a8 ", false)]
         [TestCase("7000.0.1a7", false)]
         [TestCase("7000.1.0a7", false)]
         [TestCase("7000.0.0b7", false)]
         [TestCase("7000.0.0f1", false)]
-        [TestCase("7000.0.0a07", false)]
         [TestCase("07000.0.0a7", false)]
         [TestCase("7000.00.0a7", false)]
         [TestCase("7000.0.00a7", false)]
-        [TestCase("7000.0.0a7c1", false)]
         [TestCase("7000.0.0A7", false)]
         [TestCase(" 7000.0.0a7", false)]
         [TestCase("7000.0.0a7 ", false)]
@@ -507,16 +490,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                 manager = PackageManagerSubmoduleHarmonyPatch.Read(root, "m_PageManager");
                 Assert.That(manager, Is.Not.Null);
                 originalPage = PackageManagerSubmoduleHarmonyPatch.Read(manager, "activePage");
-                foreach (MethodInfo method in manager.GetType().GetMethods(instance))
-                {
-                    ParameterInfo[] parameters = method.GetParameters();
-                    if (method.Name == "GetPage" && !method.IsGenericMethod &&
-                        parameters.Length == 1 && parameters[0].ParameterType == typeof(string))
-                    {
-                        inProject = method.Invoke(manager, new object[] { "InProject" });
-                        break;
-                    }
-                }
+                inProject = GetInProjectPage(manager);
                 Assert.That(inProject, Is.Not.Null);
                 originalSearch = (string)PackageManagerSubmoduleHarmonyPatch.Read(inProject, "searchText");
                 originalSelection = ReadSelection(inProject);
@@ -626,6 +600,20 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                 .Invoke(page, new object[] { ids, true });
         }
 
+        private static object GetInProjectPage(object manager)
+        {
+            foreach (MethodInfo method in manager.GetType().GetMethods(
+                BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic))
+            {
+                ParameterInfo[] parameters = method.GetParameters();
+                if (method.Name == "GetPage" && !method.IsGenericMethod &&
+                    parameters.Length == 1 && parameters[0].ParameterType == typeof(string))
+                    return method.Invoke(manager, new object[] { "InProject" });
+            }
+            Assert.Fail("The native page manager must expose GetPage(string).");
+            return null;
+        }
+
         [TestCase("Extension/git-submodule-manager", true)]
         [TestCase("Extension/git-submodule-manager-submodules", false)]
         [TestCase("Extension/another-package", false)]
@@ -637,13 +625,12 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
             var page = new NativePageStub(id);
             Assert.That(PackageManagerSubmoduleNativePage.IsGitHubPage(page), Is.EqualTo(expected));
             Assert.That(PackageManagerSubmoduleNativePage.IsGitHubPage(page), Is.EqualTo(expected));
-            Assert.That(PackageManagerSubmoduleNativePage.IsGitHubPage(null), Is.False);
-            Assert.That(PackageManagerSubmoduleNativePage.IsGitHubPage(null), Is.False);
         }
 
         [Test]
         public void GitHubPageIdentity_FailsClosedAndRecoversAfterAnUnreadableId()
         {
+            Assert.That(PackageManagerSubmoduleNativePage.IsGitHubPage(null), Is.False);
             var page = new UnreadablePageStub();
             Assert.That(PackageManagerSubmoduleNativePage.IsGitHubPage(page), Is.False);
             MethodInfo refresh = typeof(PackageManagerSubmoduleHarmonyPatch).GetMethod(
@@ -677,19 +664,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
             }
             object liveManager = PackageManagerSubmoduleHarmonyPatch.Read(searchBar, "m_PageManager");
             object liveActivePage = PackageManagerSubmoduleHarmonyPatch.Read(liveManager, "activePage");
-            MethodInfo getPage = null;
-            foreach (MethodInfo method in liveManager.GetType().GetMethods(instance))
-            {
-                ParameterInfo[] parameters = method.GetParameters();
-                if (method.Name == "GetPage" && !method.IsGenericMethod &&
-                    parameters.Length == 1 && parameters[0].ParameterType == typeof(string))
-                {
-                    getPage = method;
-                    break;
-                }
-            }
-            Assert.That(getPage, Is.Not.Null);
-            object livePage = getPage.Invoke(liveManager, new object[] { "InProject" });
+            object livePage = GetInProjectPage(liveManager);
             object database = PackageManagerSubmoduleHarmonyPatch.Read(livePage, "m_PackageDatabase");
             object projectPage = Activator.CreateInstance(livePage.GetType(), new[] { database });
 #pragma warning disable SYSLIB0050

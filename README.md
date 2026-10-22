@@ -14,9 +14,9 @@ come from, directly in Unity's Package Manager.
   <a href="LICENSE.md"><img alt="MIT License" src="https://img.shields.io/badge/license-MIT-blue"></a>
 </p>
 
-The focus is small: **installed package status and sources**. `main` contains
-this simplified version. The previous manager, including remote discovery,
-installation, conversion, and removal workflows, is preserved on
+`main` provides **installed package status and sources**, plus direct submodule
+installation and removal in Package Manager. The previous manager, including
+remote discovery and conversion workflows, is preserved on
 [`legacy`](https://github.com/martincalander/GitSubmoduleForUnity/tree/legacy).
 
 ## What You Get
@@ -26,10 +26,11 @@ installation, conversion, and removal workflows, is preserved on
   Licenses links when a safe repository URL is available.
 - **Sources > GitHub** for the project's installed GitHub submodules and UPM Git
   dependencies, using Unity's native package list, search, and selection.
-- Protection against Unity deleting a Git checkout as an ordinary embedded
-  package folder.
+- **+ > Install package as Git submodule...** to install from a Git repository URL.
+- Submodule removal that removes the package and its Git registration together,
+  while protecting local changes and unpublished commits.
 
-Use Unity to manage ordinary packages and Git to manage submodules. Status
+Use Git to update submodules and review the resulting project changes. Status
 shows how a package is installed; it does not indicate whether local changes
 are committed, pushed, or up to date.
 
@@ -42,8 +43,8 @@ package from git URL...** and enter:
 https://github.com/martincalander/GitSubmoduleForUnity.git#main
 ```
 
-For a reproducible project, replace `main` with the commit you have tested.
-Local checkouts and submodule installations are covered in the
+The Git URL follows the current `main` branch. Local checkouts and submodule
+installations are covered in the
 [installation guide](Documentation~/installation.md).
 
 The simplified version on `main` has not been published as a new release yet.
@@ -61,8 +62,9 @@ standard UPM installation and no longer builds a separate installer.
 3. Choose **Sources > GitHub** for installed GitHub packages.
 4. Select an installed package and use **Repository** in its links row to open
    the repository when the link is available.
-5. After changing submodules with Git, let Unity finish importing and refresh
-   Package Manager.
+5. Use **+ > Install package as Git submodule...** with a repository URL to add a
+   package, or select an installed submodule and use **Remove**.
+6. Review the resulting `.gitmodules` and gitlink changes in your Git client.
 
 Package status and the GitHub source read local installed state. They do not
 browse your GitHub account, contact GitHub, or require GitHub CLI or account

@@ -138,24 +138,6 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                 Is.EqualTo("https://gitlab.com/example/replacement"));
         }
 
-        [Test]
-        public void InstalledSubmoduleReadsCurrentRepositoryAndGitlinkEntries()
-        {
-            var data = InstalledSnapshot();
-            object version = NativeVersion();
-            object native = new { versions = new { primary = version } };
-            Assert.That(PackageManagerPackageStatus.IsGitHubPackage(root, native, data), Is.True);
-
-            data.Repositories[RelativePath] = "https://gitlab.com/example/replacement.git";
-            Assert.That(PackageManagerPackageStatus.IsGitHubPackage(root, native, data), Is.False);
-            Assert.That(PackageManagerPackageStatus.GetRepositoryUrl(root, version, data),
-                Is.EqualTo("https://gitlab.com/example/replacement"));
-
-            data.Gitlinks.Clear();
-            Assert.That(PackageManagerPackageStatus.GetRepositoryUrl(root, version, data), Is.Empty);
-            Assert.That(PackageManagerPackageStatus.TryClassify(root, Name, packagePath, data, out _), Is.False);
-        }
-
         [TestCase("https://user:secret@github.com/example/replacement.git?path=/Package#main",
             "https://github.com/example/replacement", true)]
         [TestCase("https://gitlab.com/example/replacement.git", "https://gitlab.com/example/replacement", false)]
@@ -178,6 +160,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
             data.Gitlinks.Clear();
             Assert.That(PackageManagerPackageStatus.GetRepositoryUrl(root, version, data), Is.Empty);
             Assert.That(PackageManagerPackageStatus.IsGitHubPackage(root, native, data), Is.False);
+            Assert.That(PackageManagerPackageStatus.TryClassify(root, Name, packagePath, data, out _), Is.False);
         }
 
         [Test]
@@ -237,16 +220,6 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
             data.Repositories.Clear();
             Assert.That(PackageManagerPackageStatus.TryClassify(root, Name, packagePath, data, out _), Is.False);
             Assert.That(Block(data), Is.True);
-        }
-
-        [TestCase("https://gitlab.com/example/package.git")]
-        [TestCase("ssh://git@example.invalid/example/package.git")]
-        public void NonGitHubSubmodulesRemainSubmodules(string url)
-        {
-            var data = Snapshot();
-            data.Repositories[RelativePath] = url;
-            Assert.That(PackageManagerPackageStatus.TryClassify(root, Name, packagePath, data, out PackageSubmoduleStatus status), Is.True);
-            Assert.That(status.IsGitHub, Is.False);
         }
 
         [TestCase("https://github.com/example/package.git", true)]
@@ -582,15 +555,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
             string contents = "[submodule \"example\"]\npath = " + RelativePath +
                 "\nurl = https://github.com/example/package.git\n";
             File.WriteAllText(target, contents);
-            using (var process = Process.Start(new ProcessStartInfo("ln", "-s \"" + target + "\" \"" + modules + "\"")
-            {
-                UseShellExecute = false, CreateNoWindow = true,
-                RedirectStandardOutput = true, RedirectStandardError = true
-            }))
-            {
-                Assert.That(process.WaitForExit(5000), Is.True);
-                Assert.That(process.ExitCode, Is.Zero, process.StandardError.ReadToEnd());
-            }
+            RunCommand("ln", "-s \"" + target + "\" \"" + modules + "\"");
             try
             {
                 Assert.That(new FileInfo(modules).Attributes & FileAttributes.ReparsePoint, Is.EqualTo(FileAttributes.ReparsePoint));
@@ -710,7 +675,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
         [Test]
         public void ReadsRealSha256GitlinksWhenGitSupportsThatObjectFormat()
         {
-            int exit = ExecuteGit("init --quiet --object-format=sha256", out string error);
+            int exit = ExecuteCommand("git", "init --quiet --object-format=sha256", out string error);
             if (exit != 0 && (error.IndexOf("unknown option", StringComparison.OrdinalIgnoreCase) >= 0 ||
                 error.IndexOf("unknown hash algorithm", StringComparison.OrdinalIgnoreCase) >= 0))
                 Assert.Ignore("This Git installation does not support SHA-256 repositories: " + error.Trim());
@@ -756,12 +721,15 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
         [TestCase("https://github.com/example/package.git", true)]
         [TestCase("https://gitlab.com/example/package.git", false)]
         [TestCase("ssh://git@example.invalid/example/package.git", false)]
-        public void GitHubPageUsesCachedSubmoduleRepositoryHost(string url, bool expected)
+        public void RegisteredSubmoduleSourceDeterminesClassificationAndGitHubMembership(string url, bool expected)
         {
             var data = InstalledSnapshot();
             data.Repositories[RelativePath] = url;
             object native = new { versions = new { primary = NativeVersion() } };
 
+            Assert.That(PackageManagerPackageStatus.TryClassify(root, Name, packagePath, data,
+                out PackageSubmoduleStatus status), Is.True);
+            Assert.That(status.IsGitHub, Is.EqualTo(expected));
             Assert.That(PackageManagerPackageStatus.IsGitHubPackage(root, native, data), Is.EqualTo(expected));
             data.Repositories.Clear();
             Assert.That(PackageManagerPackageStatus.IsGitHubPackage(root, native, data), Is.False);
@@ -771,17 +739,19 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
         [TestCase("unregistered")]
         [TestCase("error")]
         [TestCase("malformed-native")]
-        public void GitHubPageRejectsUnverifiedOrUninstalledSubmodules(string reason)
+        public void UnverifiedOrUninstalledSubmodulesHaveNoMembershipOrRepositoryLink(string reason)
         {
             var data = InstalledSnapshot();
-            object native = new { versions = new { primary = new { name = Name,
+            object version = new { name = Name,
                 isInstalled = reason != "not-installed", localPath = packagePath,
-                packageId = data.Packages[Name].PackageId } } };
+                packageId = data.Packages[Name].PackageId };
             if (reason == "unregistered") data.Packages.Clear();
             if (reason == "error") data.Error = "Local Git status unavailable.";
-            if (reason == "malformed-native") native = new object();
+            if (reason == "malformed-native") version = new object();
 
+            object native = reason == "malformed-native" ? new object() : new { versions = new { primary = version } };
             Assert.That(PackageManagerPackageStatus.IsGitHubPackage(root, native, data), Is.False);
+            Assert.That(PackageManagerPackageStatus.GetRepositoryUrl(root, version, data), Is.Empty);
         }
 
         [TestCase(false, "matching")]
@@ -790,7 +760,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
         [TestCase(true, "matching")]
         [TestCase(true, "missing")]
         [TestCase(true, "different")]
-        public void GitHubPageRequiresTheNativeInstalledPathToMatchCachedRegistration(bool gitDependency, string nativePath)
+        public void MembershipAndRepositoryLinkRequireTheNativeInstalledPath(bool gitDependency, string nativePath)
         {
             var data = InstalledSnapshot();
             if (gitDependency)
@@ -800,13 +770,16 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                 data.Packages[Name] = new PackageManagerPackageStatus.InstalledPackage(packagePath, PackageSource.Git,
                     Name + "@https://github.com/example/package.git");
             }
-            object native = new { versions = new { primary = new { name = Name, isInstalled = true,
+            object version = new { name = Name, isInstalled = true,
                 localPath = nativePath == "different" ? packagePath + "-other" : packagePath,
-                packageId = data.Packages[Name].PackageId } } };
-            if (nativePath == "missing") native = new { versions = new { primary = new { name = Name,
-                isInstalled = true, packageId = data.Packages[Name].PackageId } } };
+                packageId = data.Packages[Name].PackageId };
+            if (nativePath == "missing") version = new { name = Name,
+                isInstalled = true, packageId = data.Packages[Name].PackageId };
 
+            object native = new { versions = new { primary = version } };
             Assert.That(PackageManagerPackageStatus.IsGitHubPackage(root, native, data), Is.EqualTo(nativePath == "matching"));
+            Assert.That(PackageManagerPackageStatus.GetRepositoryUrl(root, version, data),
+                Is.EqualTo(nativePath == "matching" ? "https://github.com/example/package" : string.Empty));
         }
 
         [TestCase(false, "matching")]
@@ -815,7 +788,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
         [TestCase(true, "matching")]
         [TestCase(true, "missing")]
         [TestCase(true, "different")]
-        public void GitHubPageRequiresTheNativeInstalledIdentityToMatchCachedRegistration(bool gitDependency, string identity)
+        public void MembershipAndRepositoryLinkRequireTheNativeInstalledIdentity(bool gitDependency, string identity)
         {
             var data = InstalledSnapshot();
             if (gitDependency)
@@ -827,8 +800,8 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
             }
             string id = identity == "matching" ? data.Packages[Name].PackageId :
                 identity == "missing" ? null : Name + "@https://gitlab.com/example/package.git";
-            object native = new { versions = new { primary = new { name = Name, isInstalled = true,
-                localPath = packagePath, packageId = id } } };
+            object version = new { name = Name, isInstalled = true, localPath = packagePath, packageId = id };
+            object native = new { versions = new { primary = version } };
             var state = new PackageManagerPackageStatus.StatusState();
             state.CompleteRefresh(data);
             state.BeginRefresh();
@@ -836,6 +809,8 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
             Assert.That(PackageManagerPackageStatus.IsGitHubPackage(root, native, state.Snapshot),
                 Is.EqualTo(identity == "matching"),
                 "Pending refresh may retain the published snapshot, but cannot apply its source to another installed identity.");
+            Assert.That(PackageManagerPackageStatus.GetRepositoryUrl(root, version, state.Snapshot),
+                Is.EqualTo(identity == "matching" ? "https://github.com/example/package" : string.Empty));
             Assert.That(state.Snapshot, Is.SameAs(data));
         }
 
@@ -856,50 +831,6 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
 
             Assert.That(PackageManagerPackageStatus.ShouldBlockEmbeddedRemoval(root, Name, path, true, data), Is.True);
             Assert.That(PackageManagerPackageStatus.GetRepositoryUrl(root, NativeVersion(path, Name + "@file:" + path), data), Is.Empty);
-        }
-
-        [Test]
-        public void UnreadableSubmoduleMetadataDoesNotExposeAnUnverifiedRepository()
-        {
-            var data = InstalledSnapshot();
-            data.Error = "Submodule registrations are incomplete or duplicated.";
-
-            Assert.That(PackageManagerPackageStatus.GetRepositoryUrl(root, NativeVersion(), data), Is.Empty);
-            Assert.That(Block(data), Is.True);
-        }
-
-        [Test]
-        public void RepositoryLinkUsesCachedInstalledGitSource()
-        {
-            string id = Name + "@https://github.com/example/package.git?path=/Packages/Child#release";
-            var data = new PackageManagerPackageStatus.StatusSnapshot();
-            data.Packages.Add(Name, new PackageManagerPackageStatus.InstalledPackage(packagePath, PackageSource.Git, id));
-
-            Assert.That(PackageManagerPackageStatus.GetRepositoryUrl(root, NativeVersion(packagePath, id), data),
-                Is.EqualTo("https://github.com/example/package"));
-        }
-
-        [TestCase("path")]
-        [TestCase("package-id")]
-        [TestCase("missing")]
-        public void RepositoryLinkRejectsDifferentInstalledIdentity(string mismatch)
-        {
-            var data = InstalledSnapshot();
-            if (mismatch == "missing") data.Packages.Clear();
-            string path = mismatch == "path" ? packagePath + "-other" : packagePath;
-            string id = Name + "@file:" + packagePath + (mismatch == "package-id" ? "-other" : "");
-
-            Assert.That(PackageManagerPackageStatus.GetRepositoryUrl(root, NativeVersion(path, id), data), Is.Empty);
-        }
-
-        [Test]
-        public void SubmoduleRepositoryRequiresItsRegistration()
-        {
-            var data = InstalledSnapshot();
-            Assert.That(PackageManagerPackageStatus.GetRepositoryUrl(root, NativeVersion(), data),
-                Is.EqualTo("https://github.com/example/package"));
-            data.Repositories.Clear();
-            Assert.That(PackageManagerPackageStatus.GetRepositoryUrl(root, NativeVersion(), data), Is.Empty);
         }
 
         [Test]
@@ -1307,15 +1238,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
             CreateMetadataFixture();
             string path = metadata == "index" ? Path.Combine(root, ".git", "index") : Path.Combine(root, ".gitmodules");
             File.Delete(path);
-            using (var process = Process.Start(new ProcessStartInfo("mkfifo", "\"" + path + "\"")
-            {
-                UseShellExecute = false, CreateNoWindow = true,
-                RedirectStandardOutput = true, RedirectStandardError = true
-            }))
-            {
-                Assert.That(process.WaitForExit(5000), Is.True);
-                Assert.That(process.ExitCode, Is.Zero, process.StandardError.ReadToEnd());
-            }
+            RunCommand("mkfifo", "\"" + path + "\"");
             // Keep both pipe ends open so a regression fails instead of leaving a blocked reader.
             using (var pipe = new FileStream(path, FileMode.Open, FileAccess.ReadWrite, FileShare.ReadWrite | FileShare.Delete))
             {
@@ -1406,15 +1329,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
             string modules = Path.Combine(root, ".gitmodules");
             string target = Path.Combine(root, "original-modules");
             File.Move(modules, target);
-            using (var process = Process.Start(new ProcessStartInfo("ln", "-s \"" + target + "\" \"" + modules + "\"")
-            {
-                UseShellExecute = false, CreateNoWindow = true,
-                RedirectStandardOutput = true, RedirectStandardError = true
-            }))
-            {
-                Assert.That(process.WaitForExit(5000), Is.True);
-                Assert.That(process.ExitCode, Is.Zero, process.StandardError.ReadToEnd());
-            }
+            RunCommand("ln", "-s \"" + target + "\" \"" + modules + "\"");
             try
             {
                 commands.Clear();
@@ -1501,15 +1416,19 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                 "\nurl = https://github.com/example/package.git\n");
         }
 
-        private void RunGit(string arguments, string workingDirectory = null, string input = null)
+        private void RunGit(string arguments, string workingDirectory = null, string input = null) =>
+            RunCommand("git", arguments, workingDirectory, input);
+
+        private void RunCommand(string executable, string arguments, string workingDirectory = null, string input = null)
         {
-            int exit = ExecuteGit(arguments, out string error, workingDirectory, input);
+            int exit = ExecuteCommand(executable, arguments, out string error, workingDirectory, input);
             Assert.That(exit, Is.Zero, error);
         }
 
-        private int ExecuteGit(string arguments, out string error, string workingDirectory = null, string input = null)
+        private int ExecuteCommand(string executable, string arguments, out string error,
+            string workingDirectory = null, string input = null)
         {
-            using (var process = Process.Start(new ProcessStartInfo("git", arguments)
+            using (var process = Process.Start(new ProcessStartInfo(executable, arguments)
             {
                 WorkingDirectory = workingDirectory ?? root, UseShellExecute = false, CreateNoWindow = true,
                 RedirectStandardOutput = true, RedirectStandardError = true, RedirectStandardInput = input != null

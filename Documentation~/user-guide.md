@@ -64,14 +64,48 @@ change its installation source.
 
 ## Changing Packages
 
-Use Unity's Package Manager to add, update, or remove ordinary UPM packages.
-Use Git to add, update, convert, or remove submodules and review the parent
-repository's `.gitmodules` and gitlink changes.
+### Add from a Git Link
 
-The extension blocks Unity's raw embedded-package deletion for submodules.
-That action would delete the package folder without completing Git's submodule
-workflow. Remove a submodule with your Git tools after reviewing its local work.
-The extension does not run removal or conversion on your behalf.
+Choose **+ > Install package as Git submodule...**, paste a repository URL, and
+choose **Install**. The repository must contain a valid `package.json` at its
+root. Its package name determines the destination, `Packages/<package-name>`.
+The project must be the root of a Git repository.
+
+Use HTTPS or SSH, with an optional `#branch` suffix. Without a suffix, the
+repository's default branch is used. Installation checks the root package
+manifest and destination, then adds the submodule. It does not browse an
+account, discover other repositories, or plan dependency installations.
+Repositories with packages only in a subfolder are not supported by this action.
+An existing installation must be removed before adding the same package again.
+
+Unity resolves and imports the package after installation. Review and commit
+the `.gitmodules` and gitlink changes in the parent repository. Gitlinks record
+the installed commit; use Git to update the submodule later.
+
+### Remove a Submodule Package
+
+Select an installed submodule and use **Remove**, then confirm the removal.
+The extension removes the package folder, parent gitlink, submodule
+registration, and any same-name dependency in `Packages/manifest.json` so that
+an old direct dependency cannot reinstall the package. Unity then resolves the
+remaining packages. Review the resulting parent repository changes before
+committing.
+
+Removal verifies the checkout and its remote before changing files. Commit and
+push local work first. Dirty or untracked files, unpublished commits, ambiguous
+Git registration, nested submodules, and installed packages that depend on the
+selected package block removal. The action does not force-delete local work.
+
+Removal also works immediately after installation, before committing the parent
+repository. The checkout is moved to a unique recovery folder under
+`Library/SubmodulePackageOperations`, alongside manifest and registration
+backups. Its `operation.txt` records the retained Git object directory. These
+files are no longer an installed package or a registered submodule. Retain
+them until the operation is reviewed; cleaning the project's Library folder
+also removes these checkout backups.
+
+Ordinary UPM package actions stay with Unity. Use Git for submodule updates and
+source conversion.
 
 Deletion protection also applies to Git checkouts whose embedded folder name
 differs from the package's declared name. The guard rechecks local metadata
@@ -124,7 +158,8 @@ The former remote catalogue, install and conversion actions, dependency planning
 Welcome window, and Preferences page are preserved on
 [`legacy`](https://github.com/martincalander/GitSubmoduleForUnity/tree/legacy).
 Published `0.8.1` artifacts also contain that earlier workflow. On `main`, the
-manager reads installed state and leaves package changes to Unity and Git.
+manager reads installed state and provides direct link installation and safe
+removal. It does not restore the legacy catalogue or conversion workflows.
 Existing package installations remain in the project when you switch.
 
 Finish any operation in the earlier implementation before switching branches.

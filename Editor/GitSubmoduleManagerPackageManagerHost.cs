@@ -56,6 +56,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 PackageManagerPackageStatus.Retain();
                 ScheduleAttachment();
                 PackageRepositoryLink.RefreshInRoot(Root);
+                PackageManagerSubmoduleActions.AttachInRoot(Root);
             }
 
             private void OnDetached(DetachFromPanelEvent evt)
@@ -106,6 +107,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
 
             internal void RefreshViews()
             {
+                PackageManagerSubmoduleActions.AttachInRoot(Root);
                 ScheduleAttachment();
                 if (Page.Refresh())
                     presentationObserved = true;
@@ -169,6 +171,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 return;
             if (Sessions.TryGetValue(root, out Session existing))
             {
+                PackageManagerSubmoduleActions.AttachInRoot(root);
                 existing.ScheduleAttachment();
                 return;
             }
