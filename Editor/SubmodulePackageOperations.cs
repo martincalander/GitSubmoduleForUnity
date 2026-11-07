@@ -639,7 +639,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             }
         }
 
-        private static void DisposeAfterReadersComplete(Process process, Task<string> output, Task<string> error)
+        internal static void DisposeAfterReadersComplete(Process process, Task<string> output, Task<string> error)
         {
             Task[] readers = new Task[] { output, error }.Where(reader => reader != null).ToArray();
             if (readers.All(reader => reader.IsCompleted))

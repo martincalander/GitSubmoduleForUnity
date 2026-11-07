@@ -159,6 +159,10 @@ been published as a new release; existing `0.8.1` artifacts remain unchanged.
   metadata has been read successfully.
 - Keep Cecil and its Mdb, Pdb, and Rocks assemblies at 0.11.6 together so Unity 7
   cold startup does not load incompatible symbol-reader interfaces.
+- Accept package names with underscores, matching Unity's naming rules, and
+  stop unrelated project manifest entries from blocking installation or removal.
+- Release local Git status processes only after their output readers finish, so
+  a stalled status command cannot hang code reload on CoreCLR.
 
 ## [0.8.1] - 2026-08-29
 

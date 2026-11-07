@@ -40,7 +40,6 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         private static readonly string ProjectRoot = Path.GetDirectoryName(Application.dataPath);
         private static readonly StringComparison PathComparison =
             Path.DirectorySeparatorChar == '\\' ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
-        private static readonly Regex PackageName = new Regex(@"\A[a-z0-9][a-z0-9_-]*(\.[a-z0-9][a-z0-9_-]*)+\z");
         private static readonly StatusState State = new StatusState();
         private static StatusSnapshot snapshot => State.Snapshot;
         private static Dictionary<string, InstalledPackage> workerPackages;
@@ -450,7 +449,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         private static bool TryGetInstalledSubmoduleRepository(string projectRoot, string name, InstalledPackage installed,
             StatusSnapshot data, out string url)
         {
-            return TryGetSubmoduleRepository(name, data, out url) && PackageName.IsMatch(name) &&
+            return TryGetSubmoduleRepository(name, data, out url) && PackageManifestDocument.ValidPackageName(name) &&
                    installed.MatchesPath(Path.Combine(projectRoot, "Packages", name));
         }
 
@@ -580,7 +579,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
 
         internal static bool IsDirectPackage(string projectRoot, string name, string resolvedPath)
         {
-            return !string.IsNullOrEmpty(name) && PackageName.IsMatch(name) &&
+            return !string.IsNullOrEmpty(name) && PackageManifestDocument.ValidPackageName(name) &&
                    SamePath(Path.Combine(projectRoot, "Packages", name), resolvedPath);
         }
 
@@ -809,7 +808,10 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         private static string Git(string root, string arguments, CancellationToken token, bool allowNoMatch = false)
         {
             token.ThrowIfCancellationRequested();
-            using (var process = new Process())
+            var process = new Process();
+            Task<string> output = null;
+            Task<string> error = null;
+            try
             {
                 process.StartInfo = new ProcessStartInfo("git", "--no-optional-locks " + arguments)
                 {
@@ -828,8 +830,8 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 process.StartInfo.EnvironmentVariables["GIT_OPTIONAL_LOCKS"] = "0";
                 token.ThrowIfCancellationRequested();
                 process.Start();
-                Task<string> output = Task.Run(() => ReadBounded(process.StandardOutput));
-                Task<string> error = Task.Run(() => ReadBounded(process.StandardError));
+                output = Task.Run(() => ReadBounded(process.StandardOutput));
+                error = Task.Run(() => ReadBounded(process.StandardError));
                 var timer = Stopwatch.StartNew();
                 try
                 {
@@ -854,6 +856,11 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                         catch (Exception) { }
                     }
                 }
+            }
+            finally
+            {
+                // Disposing while a reader is blocked on a pipe can hang on CoreCLR.
+                SubmodulePackageOperations.DisposeAfterReadersComplete(process, output, error);
             }
         }
 

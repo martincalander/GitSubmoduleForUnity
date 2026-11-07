@@ -165,6 +165,21 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
         }
 
         [Test]
+        public void UnrelatedManifestDependencyNamesDoNotBlockLookupOrRemoval()
+        {
+            string before = "{\"dependencies\":{\"com.example.my_pkg\":\"1.0.0\",\"" + Name +
+                "\":\"1.0.0\",\"Legacy.Name\":\"file:../legacy\"}}";
+            var document = new PackageManifestDocument(before);
+
+            Assert.That(document.HasDependency("com.example.my_pkg"), Is.True);
+            Assert.That(document.WithoutDependency(Name),
+                Is.EqualTo("{\"dependencies\":{\"com.example.my_pkg\":\"1.0.0\",\"Legacy.Name\":\"file:../legacy\"}}"));
+            Assert.That(PackageManifestDocument.ValidPackageName("com.example.my_pkg"), Is.True);
+            Assert.That(PackageManifestDocument.ValidPackageName("Legacy.Name"), Is.False);
+            Assert.That(PackageManifestDocument.ValidPackageName("com.example/../outside"), Is.False);
+        }
+
+        [Test]
         public void RemovingDependencyPreservesLineEndingsEscapesAndUnrelatedSettings()
         {
             string removedLine = "    \"" + Name + "\": \"file:../package\",\r\n";

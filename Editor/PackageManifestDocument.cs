@@ -75,8 +75,11 @@ namespace MartinCalander.GitSubmoduleManager.Editor
 
         internal string PackageName => String((Dictionary<string, Node>)root.Value, "name");
 
+        // Unity package names are lowercase reverse-domain identifiers that may contain digits, hyphens, and underscores.
+        private static readonly Regex PackageNamePattern = new(@"\A[a-z0-9][a-z0-9_-]*(?:\.[a-z0-9][a-z0-9_-]*)+\z");
+
         internal static bool ValidPackageName(string name) => name != null && name.Length <= 214 &&
-            Regex.IsMatch(name, @"\A[a-z][a-z0-9-]*(?:\.[a-z0-9][a-z0-9-]*)+\z");
+            PackageNamePattern.IsMatch(name);
 
         internal string ValidatePackage()
         {
@@ -89,9 +92,13 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 throw new InvalidDataException("package.json must declare a valid semantic version, such as 1.0.0.");
             Dictionary<string, Node> dependencies = Dependencies();
             if (dependencies != null)
-                foreach (Node dependency in dependencies.Values)
-                    if (!Regex.IsMatch((string)dependency.Value, SemVer))
+                foreach (var dependency in dependencies)
+                {
+                    if (!ValidPackageName(dependency.Key))
+                        throw new InvalidDataException("Every package dependency must have a valid package name.");
+                    if (!Regex.IsMatch((string)dependency.Value.Value, SemVer))
                         throw new InvalidDataException("Package dependencies must declare semantic versions. Git and local dependency URLs belong in the project manifest.");
+                }
             return name;
         }
 
@@ -122,9 +129,11 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 return null;
             if (!(node.Value is Dictionary<string, Node> dependencies))
                 throw new InvalidDataException("The manifest dependencies field must be an object.");
-            foreach (var dependency in dependencies)
-                if (!ValidPackageName(dependency.Key) || !(dependency.Value.Value is string version) || string.IsNullOrWhiteSpace(version))
-                    throw new InvalidDataException("Every manifest dependency must have a valid package name and a nonempty string value.");
+            // Only the dependency being added or removed needs a validated name. Unrelated entries
+            // that Unity accepts must not block package operations.
+            foreach (Node dependency in dependencies.Values)
+                if (!(dependency.Value is string version) || string.IsNullOrWhiteSpace(version))
+                    throw new InvalidDataException("Every manifest dependency must have a nonempty string value.");
             return dependencies;
         }
 
