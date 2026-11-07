@@ -106,6 +106,61 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
         }
 
         [Test]
+        [Category("PackageManagerCompatibility")]
+        public void NativeGitUpdateActionHostsTheSubmoduleUpdateEntry()
+        {
+            MethodInfo visibility = PackageManagerSubmoduleHarmonyPatch.GetUpdateVisibilityTarget();
+            MethodInfo trigger = PackageManagerSubmoduleHarmonyPatch.GetUpdateTriggerTarget();
+            Assert.That(visibility, Is.Not.Null, "The native Git update visibility contract changed.");
+            Assert.That(trigger, Is.Not.Null, "The native Git update trigger contract changed.");
+            PackageManagerSubmoduleHarmonyPatch.Install();
+            Assert.That(PackageManagerSubmoduleHarmonyPatch.IsPatched(visibility), Is.True);
+            Assert.That(PackageManagerSubmoduleHarmonyPatch.IsPatched(trigger), Is.True);
+        }
+
+        [Test]
+        public void NativeUpdateRoutesOnlyVerifiedSubmodulesAndKeepsUnityGitUpdates()
+        {
+            const BindingFlags Static = BindingFlags.Static | BindingFlags.NonPublic;
+            MethodInfo prefix = typeof(PackageManagerSubmoduleHarmonyPatch).GetMethod("UpdatePrefix", Static);
+            MethodInfo postfix = typeof(PackageManagerSubmoduleHarmonyPatch).GetMethod("UpdateVisiblePostfix", Static);
+            var unverified = new VersionStub
+            {
+                name = "com.example.unverified-package",
+                localPath = "/project/Packages/com.example.unverified-package",
+                isInstalled = true
+            };
+            Assert.That(prefix.Invoke(null, new object[] { unverified, false }), Is.True,
+                "Packages that are not verified submodules keep Unity's own Git update.");
+            object[] hidden = { unverified, false };
+            postfix.Invoke(null, hidden);
+            Assert.That(hidden[1], Is.False);
+            object[] visible = { unverified, true };
+            postfix.Invoke(null, visible);
+            Assert.That(visible[1], Is.True, "Unity's own Git update visibility must be preserved.");
+            Assert.That(PackageManagerSubmoduleActions.RequestUpdate(null), Is.False);
+            Assert.That(PackageManagerSubmoduleActions.RequestUpdate(new VersionStub { isInstalled = true }), Is.False);
+        }
+
+        [Test]
+        public void UpdateSummaryNamesTheBranchRevisionsAndStagedState()
+        {
+            var result = new SubmodulePackageOperations.UpdateResult
+            {
+                Branch = "main",
+                Previous = new string('a', 40),
+                Current = new string('b', 40),
+                Commits = 2
+            };
+            Assert.That(PackageManagerSubmoduleActions.DescribeUpdate("com.example.package", result), Is.EqualTo(
+                "Updated com.example.package on main from aaaaaaaaaaaa to bbbbbbbbbbbb (2 commits). " +
+                "The new revision is staged; commit the project repository to record it."));
+            result.Current = result.Previous;
+            Assert.That(PackageManagerSubmoduleActions.DescribeUpdate("com.example.package", result),
+                Is.EqualTo("com.example.package is already at the latest commit on main."));
+        }
+
+        [Test]
         public void RemovalDetectsInstalledDependentsBeforeChangingGitState()
         {
             PackageInfo Package(string name, string dependency) => JsonUtility.FromJson<PackageInfo>(

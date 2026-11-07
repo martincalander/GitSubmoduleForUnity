@@ -408,6 +408,159 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
             Assert.That(Git(project, "ls-files", "--stage", "--", RelativePath), Is.Empty);
         }
 
+        [Test]
+        public void UpdateMovesToTheLatestBranchCommitAndStagesItsGitlink()
+        {
+            InstallAndCommit();
+            string previous = Git(packagePath, "rev-parse", "HEAD").Trim();
+            File.WriteAllText(Path.Combine(source, "content.txt"), "Updated package content\n");
+            PublishSource();
+            string latest = Git(source, "rev-parse", "HEAD").Trim();
+
+            SubmodulePackageOperations.UpdateResult result = operations.Update(Name, packagePath);
+
+            Assert.That(result.Changed, Is.True);
+            Assert.That(result.Branch, Is.EqualTo("main"));
+            Assert.That(result.Previous, Is.EqualTo(previous));
+            Assert.That(result.Current, Is.EqualTo(latest));
+            Assert.That(result.Commits, Is.EqualTo(1));
+            Assert.That(Git(packagePath, "rev-parse", "HEAD").Trim(), Is.EqualTo(latest));
+            Assert.That(File.ReadAllText(Path.Combine(packagePath, "content.txt")), Is.EqualTo("Updated package content\n"));
+            Assert.That(Git(project, "ls-files", "--stage", "--", RelativePath), Does.StartWith("160000 " + latest + " 0"));
+            Assert.That(Git(project, "diff", "--cached", "--name-only").Trim(), Is.EqualTo(RelativePath));
+            Assert.That(File.ReadAllText(manifestPath), Is.EqualTo(ManifestJson));
+        }
+
+        [Test]
+        public void UpdateWithoutNewCommitsLeavesTheProjectUnchanged()
+        {
+            InstallAndCommit();
+            string head = Git(packagePath, "rev-parse", "HEAD").Trim();
+
+            SubmodulePackageOperations.UpdateResult result = operations.Update(Name, packagePath);
+
+            Assert.That(result.Changed, Is.False);
+            Assert.That(result.Commits, Is.Zero);
+            Assert.That(Git(packagePath, "rev-parse", "HEAD").Trim(), Is.EqualTo(head));
+            Assert.That(Git(project, "status", "--porcelain").Trim(), Is.Empty);
+        }
+
+        [Test]
+        public void UpdateFollowsTheDefaultBranchWhenNoBranchIsRegistered()
+        {
+            InstallAndCommit();
+            string registration = Git(project, "config", "--file", ".gitmodules", "--name-only", "--get-regexp", "^submodule\\..*\\.branch$").Trim();
+            Assert.That(registration, Is.Not.Empty);
+            Git(project, "config", "--file", ".gitmodules", "--unset", registration);
+            CommitAll(project);
+            File.WriteAllText(Path.Combine(source, "content.txt"), "Default branch content\n");
+            PublishSource();
+
+            SubmodulePackageOperations.UpdateResult result = operations.Update(Name, packagePath);
+
+            Assert.That(result.Branch, Is.EqualTo("main"));
+            Assert.That(Git(packagePath, "rev-parse", "HEAD").Trim(), Is.EqualTo(Git(source, "rev-parse", "HEAD").Trim()));
+        }
+
+        [TestCase("modified")]
+        [TestCase("untracked")]
+        [TestCase("diverged")]
+        public void UpdateRefusesLocalWorkWithoutMovingTheCheckout(string kind)
+        {
+            InstallAndCommit();
+            File.WriteAllText(Path.Combine(source, "content.txt"), "Updated package content\n");
+            PublishSource();
+            string expectedContent = "Published package content\n";
+            if (kind == "modified")
+                File.WriteAllText(Path.Combine(packagePath, "content.txt"), expectedContent = "Local work\n");
+            else if (kind == "untracked")
+                File.WriteAllText(Path.Combine(packagePath, "notes.txt"), "Local notes\n");
+            else
+            {
+                File.WriteAllText(Path.Combine(packagePath, "content.txt"), expectedContent = "Local commit\n");
+                CommitAll(packagePath);
+                Git(project, "add", "--", RelativePath);
+            }
+            string head = Git(packagePath, "rev-parse", "HEAD").Trim();
+            string index = Git(project, "ls-files", "--stage", "--", RelativePath);
+
+            Exception failure = Assert.Catch(() => operations.Update(Name, packagePath));
+
+            Assert.That(failure.Message, Does.Contain(kind == "diverged" ? "not on origin/main" : "local changes"));
+            Assert.That(Git(packagePath, "rev-parse", "HEAD").Trim(), Is.EqualTo(head));
+            Assert.That(File.ReadAllText(Path.Combine(packagePath, "content.txt")), Is.EqualTo(expectedContent));
+            Assert.That(Git(project, "ls-files", "--stage", "--", RelativePath), Is.EqualTo(index));
+            if (kind == "untracked")
+                Assert.That(File.ReadAllText(Path.Combine(packagePath, "notes.txt")), Is.EqualTo("Local notes\n"));
+        }
+
+        [TestCase("renamed")]
+        [TestCase("nested")]
+        public void UpdateRefusesARevisionThatChangesPackageIdentityOrAddsNestedSubmodules(string kind)
+        {
+            InstallAndCommit();
+            string head = Git(packagePath, "rev-parse", "HEAD").Trim();
+            if (kind == "renamed")
+            {
+                File.WriteAllText(Path.Combine(source, "package.json"), PackageJson.Replace(Name, "com.example.renamed"));
+                PublishSource();
+            }
+            else
+            {
+                Git(source, "update-index", "--add", "--cacheinfo", "160000," + head + ",nested");
+                Git(source, "-c", "user.name=Package Tests", "-c", "user.email=package-tests@example.invalid",
+                    "-c", "commit.gpgsign=false", "commit", "--quiet", "-m", "Add a nested submodule");
+                Git(source, "push", "--quiet", remote, "main");
+            }
+
+            Exception failure = Assert.Catch(() => operations.Update(Name, packagePath));
+
+            Assert.That(failure.Message, Does.Contain(kind == "renamed" ? "different package name" : "nested submodules"));
+            Assert.That(Git(packagePath, "rev-parse", "HEAD").Trim(), Is.EqualTo(head));
+            Assert.That(Git(project, "ls-files", "--stage", "--", RelativePath), Does.StartWith("160000 " + head + " 0"));
+        }
+
+        [Test]
+        public void FailedUpdateStagingRestoresThePreviousCheckoutRevision()
+        {
+            InstallAndCommit();
+            string head = Git(packagePath, "rev-parse", "HEAD").Trim();
+            File.WriteAllText(Path.Combine(source, "content.txt"), "Updated package content\n");
+            PublishSource();
+            var failing = new SubmodulePackageOperations(project, allowLocalSources: true, beforeStep: step =>
+            {
+                if (step == "update.before-stage")
+                    throw new IOException("Simulated update failure");
+            });
+
+            Exception failure = Assert.Catch(() => failing.Update(Name, packagePath));
+
+            Assert.That(failure.Message, Does.Contain("restored to " + head));
+            Assert.That(Git(packagePath, "rev-parse", "HEAD").Trim(), Is.EqualTo(head));
+            Assert.That(File.ReadAllText(Path.Combine(packagePath, "content.txt")), Is.EqualTo("Published package content\n"));
+            Assert.That(Git(project, "ls-files", "--stage", "--", RelativePath), Does.StartWith("160000 " + head + " 0"));
+        }
+
+        [Test]
+        public void UpdateRefusesAGitlinkChangedBeforeTheCheckoutMoves()
+        {
+            InstallAndCommit();
+            string head = Git(packagePath, "rev-parse", "HEAD").Trim();
+            File.WriteAllText(Path.Combine(source, "content.txt"), "Updated package content\n");
+            PublishSource();
+            string latest = Git(source, "rev-parse", "HEAD").Trim();
+            var changing = new SubmodulePackageOperations(project, allowLocalSources: true, beforeStep: step =>
+            {
+                if (step == "update.before-checkout")
+                    Git(project, "update-index", "--cacheinfo", "160000," + latest + "," + RelativePath);
+            });
+
+            Exception failure = Assert.Catch(() => changing.Update(Name, packagePath));
+
+            Assert.That(failure.Message, Does.Contain("gitlink changed"));
+            Assert.That(Git(packagePath, "rev-parse", "HEAD").Trim(), Is.EqualTo(head));
+        }
+
         [TestCase("remove.before-git-rm", true)]
         [TestCase("remove.after-git-rm", false)]
         public void FailedRemovalPreservesRecoveryEvidenceAndKeepsFallbackDependencyConsistent(string failedStep, bool checkoutRemains)

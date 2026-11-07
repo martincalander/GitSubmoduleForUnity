@@ -32,7 +32,8 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         private static Task<string> operation;
         private static ListRequest resolution;
         private static Exception operationError;
-        private static bool installing;
+        private static OperationKind kind;
+        private static SubmodulePackageOperations.UpdateResult updateResult;
         private static double resolutionDeadline;
         private static int progressId = -1;
         private static bool reloadLocked;
@@ -41,6 +42,13 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         internal static bool HasReloadLock => reloadLocked;
         internal static bool HasRefreshLock => refreshLocked;
         internal static string LastError { get; private set; } = string.Empty;
+
+        private enum OperationKind
+        {
+            Install,
+            Update,
+            Remove
+        }
 
         private sealed class MenuEntry
         {
@@ -277,7 +285,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 return;
             var service = new SubmodulePackageOperations(ProjectRoot, installedPackageNames:
                 PackageInfo.GetAllRegisteredPackages().Select(package => package.name));
-            installing = true;
+            kind = OperationKind.Install;
             StartOperation("Installing submodule package", () => service.Install(source));
         }
 
@@ -303,9 +311,41 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 "Local changes or unpublished commits will block removal.", "Remove", "Cancel"))
                 return true;
             var service = new SubmodulePackageOperations(ProjectRoot);
-            installing = false;
+            kind = OperationKind.Remove;
             StartOperation("Removing " + name, () => { service.Remove(name, path); return name; });
             return true;
+        }
+
+        internal static bool RequestUpdate(object version)
+        {
+            if (PackageManagerSubmoduleHarmonyPatch.Read(version, "isInstalled") is not bool installed || !installed)
+                return false;
+            string name = PackageManagerSubmoduleHarmonyPatch.Read(version, "name") as string;
+            string path = PackageManagerSubmoduleHarmonyPatch.Read(version, "localPath") as string;
+            if (string.IsNullOrEmpty(name) || string.IsNullOrEmpty(path))
+                return false;
+            if (!CanStart())
+                return true;
+            if (!EditorUtility.DisplayDialog("Update submodule package", "Fetch " + name +
+                " from its registered repository and move it to the latest commit on its tracked branch?\n\n" +
+                "Local changes or commits that are not on that branch will block the update. " +
+                "The new revision is staged in the project repository.", "Update", "Cancel"))
+                return true;
+            var service = new SubmodulePackageOperations(ProjectRoot);
+            kind = OperationKind.Update;
+            updateResult = null;
+            StartOperation("Updating " + name, () => { updateResult = service.Update(name, path); return name; });
+            return true;
+        }
+
+        internal static string DescribeUpdate(string name, SubmodulePackageOperations.UpdateResult result)
+        {
+            string Short(string commit) => commit.Length > 12 ? commit.Substring(0, 12) : commit;
+            return result.Changed
+                ? "Updated " + name + " on " + result.Branch + " from " + Short(result.Previous) + " to " + Short(result.Current) +
+                  " (" + result.Commits + (result.Commits == 1 ? " commit" : " commits") +
+                  "). The new revision is staged; commit the project repository to record it."
+                : name + " is already at the latest commit on " + result.Branch + ".";
         }
 
         internal static string[] FindDependents(string name, IEnumerable<PackageInfo> packages) =>
@@ -487,7 +527,8 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             if (resolution.Status == StatusCode.Failure)
                 error ??= new InvalidOperationException("The Git operation finished, but Unity could not resolve packages: " + resolution.Error?.message);
             else if (error == null)
-                error = ValidateResolvedPackage(operation.Result, installing, ProjectRoot, resolution.Result);
+                error = ValidateResolvedPackage(operation.Result, kind != OperationKind.Remove, ProjectRoot, resolution.Result,
+                    kind == OperationKind.Update ? "updated" : "installed");
             FinishOperation(error);
         }
 
@@ -495,17 +536,18 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             ? task.Exception?.InnerException
             : task.IsCanceled ? new OperationCanceledException("The submodule operation was cancelled. Review the repository before retrying.") : null;
 
-        internal static Exception ValidateResolvedPackage(string name, bool install, string projectRoot, IEnumerable<PackageInfo> packages)
+        internal static Exception ValidateResolvedPackage(string name, bool install, string projectRoot, IEnumerable<PackageInfo> packages,
+            string action = "installed")
         {
             PackageInfo installed = packages.FirstOrDefault(package => package.name == name);
             if ((installed != null) != install)
                 return new InvalidOperationException(install
-                    ? "Git installed " + name + ", but Unity did not register the package. Check its package.json and Package Manager errors."
+                    ? "Git " + action + " " + name + ", but Unity did not register the package. Check its package.json and Package Manager errors."
                     : "Git removed the submodule, but Unity still resolves " + name + ". Check whether another package depends on it.");
             if (!install)
                 return null;
             if (installed.errors != null && installed.errors.Length != 0)
-                return new InvalidOperationException("Git installed " + name + ", but Unity reported package errors: " +
+                return new InvalidOperationException("Git " + action + " " + name + ", but Unity reported package errors: " +
                     string.Join("\n", installed.errors.Select(packageError => packageError.message)));
             bool samePath = false;
             try
@@ -515,12 +557,15 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             }
             catch { }
             return installed.source == PackageSource.Embedded && samePath ? null : new InvalidOperationException(
-                "Git installed " + name + ", but Unity resolved another package source. Refresh Package Manager and inspect its resolved path.");
+                "Git " + action + " " + name + ", but Unity resolved another package source. Refresh Package Manager and inspect its resolved path.");
         }
 
         private static void FinishOperation(Exception error)
         {
             bool started = operation != null;
+            string completedName = operation != null && operation.Status == TaskStatus.RanToCompletion ? operation.Result : null;
+            SubmodulePackageOperations.UpdateResult completedUpdate = kind == OperationKind.Update ? updateResult : null;
+            updateResult = null;
             operation = null;
             resolution = null;
             operationError = null;
@@ -539,6 +584,14 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 {
                     PackageManagerPackageStatus.Refresh();
                     AssetDatabase.Refresh();
+                }
+                if (error == null && completedName != null && completedUpdate != null)
+                {
+                    string summary = DescribeUpdate(completedName, completedUpdate);
+                    if (completedUpdate.Changed)
+                        Debug.Log(summary);
+                    else
+                        EditorUtility.DisplayDialog("Git submodule package", summary, "OK");
                 }
             }
             catch (Exception exception)

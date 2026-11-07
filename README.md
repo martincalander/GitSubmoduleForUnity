@@ -15,7 +15,7 @@ come from, directly in Unity's Package Manager.
 </p>
 
 `main` provides **installed package status and sources**, plus direct submodule
-installation and removal in Package Manager. The previous manager, including
+installation, update, and removal in Package Manager. The previous manager, including
 remote discovery and conversion workflows, is preserved on
 [`legacy`](https://github.com/martincalander/GitSubmoduleForUnity/tree/legacy).
 
@@ -27,10 +27,12 @@ remote discovery and conversion workflows, is preserved on
 - **Sources > GitHub** for the project's installed GitHub submodules and UPM Git
   dependencies, using Unity's native package list, search, and selection.
 - **+ > Install package as Git submodule...** to install from a Git repository URL.
+- **Manage > Update** to move a clean submodule package to the latest commit on
+  its tracked branch and stage the new gitlink.
 - Submodule removal that removes the package and its Git registration together,
   while protecting local changes and unpublished commits.
 
-Use Git to update submodules and review the resulting project changes. Status
+Review the resulting project changes in your Git client. Status
 shows how a package is installed; it does not indicate whether local changes
 are committed, pushed, or up to date.
 
@@ -63,7 +65,8 @@ standard UPM installation and no longer builds a separate installer.
 4. Select an installed package and use **Repository** in its links row to open
    the repository when the link is available.
 5. Use **+ > Install package as Git submodule...** with a repository URL to add a
-   package, or select an installed submodule and use **Remove**.
+   package, or select an installed submodule and use **Manage > Update** or
+   **Remove**.
 6. Review the resulting `.gitmodules` and gitlink changes in your Git client.
 
 Package status and the GitHub source read local installed state. They do not

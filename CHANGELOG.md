@@ -16,6 +16,11 @@ been published as a new release; existing `0.8.1` artifacts remain unchanged.
 
 ### Added
 
+- Add **Update** to Unity's native **Manage** menu for verified submodule
+  packages. It fetches the tracked branch, fast-forwards a clean checkout to the
+  latest commit, and stages the new gitlink. Local changes, diverged commits, a
+  changed package name, and new nested submodules block the update, and a
+  failed staging step restores the previous revision.
 - Add **Install package as Git submodule...** to Package Manager's plus menu. A
   repository link is enough for a root UPM package; the action validates its
   manifest and installs it under its declared package name.

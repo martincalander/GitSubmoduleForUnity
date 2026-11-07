@@ -24,7 +24,7 @@ check the project's Git metadata and package paths.
 
 Submodule status describes how the package is installed. It does not report
 whether the checkout is clean, up to date, or pushed. Use your Git client for
-those details.
+those details. **Update** checks for newer commits only when you choose it.
 
 ## GitHub Source
 
@@ -80,7 +80,24 @@ An existing installation must be removed before adding the same package again.
 
 Unity resolves and imports the package after installation. Review and commit
 the `.gitmodules` and gitlink changes in the parent repository. Gitlinks record
-the installed commit; use Git to update the submodule later.
+the installed commit; use **Update** to move it to a newer commit later.
+
+### Update a Submodule Package
+
+Select an installed submodule and choose **Update** from its **Manage** menu,
+then confirm. The extension fetches the tracked branch from the registered
+repository and moves the checkout to that branch's latest commit. The branch is
+the one recorded in `.gitmodules`, or the repository's default branch when none
+is recorded. The new gitlink is staged in the parent repository; commit it to
+record the update. Unity then resolves and imports the changed package.
+
+Only fast-forward updates of clean checkouts are made. Local changes,
+untracked or ignored files, commits that are not on the tracked branch, a
+checkout that differs from the parent gitlink, and ambiguous Git registration
+block the update. A newer revision that declares a different package name or
+adds nested submodules is refused. If staging fails after the checkout moved,
+the checkout is restored to its previous commit. A package that is already
+current is reported without changes.
 
 ### Remove a Submodule Package
 
@@ -104,8 +121,8 @@ files are no longer an installed package or a registered submodule. Retain
 them until the operation is reviewed; cleaning the project's Library folder
 also removes these checkout backups.
 
-Ordinary UPM package actions stay with Unity. Use Git for submodule updates and
-source conversion.
+Ordinary UPM package actions stay with Unity. Use Git for other submodule
+changes, such as switching branches, and for source conversion.
 
 Deletion protection also applies to Git checkouts whose embedded folder name
 differs from the package's declared name. The guard rechecks local metadata
@@ -158,8 +175,8 @@ The former remote catalogue, install and conversion actions, dependency planning
 Welcome window, and Preferences page are preserved on
 [`legacy`](https://github.com/martincalander/GitSubmoduleForUnity/tree/legacy).
 Published `0.8.1` artifacts also contain that earlier workflow. On `main`, the
-manager reads installed state and provides direct link installation and safe
-removal. It does not restore the legacy catalogue or conversion workflows.
+manager reads installed state and provides direct link installation, update,
+and safe removal. It does not restore the legacy catalogue or conversion workflows.
 Existing package installations remain in the project when you switch.
 
 Finish any operation in the earlier implementation before switching branches.

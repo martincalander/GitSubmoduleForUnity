@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Reflection;
@@ -174,6 +175,152 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             }
         }
 
+        internal sealed class UpdateResult
+        {
+            internal string Branch;
+            internal string Previous;
+            internal string Current;
+            internal int Commits;
+            internal bool Changed => !string.Equals(Previous, Current, StringComparison.Ordinal);
+        }
+
+        // Moves a verified submodule package to the latest commit on its tracked branch and stages the gitlink.
+        // Only fast-forward updates of clean checkouts are allowed, so no local commit or file can be lost.
+        internal UpdateResult Update(string packageName, string resolvedPath, CancellationToken token = default)
+        {
+            ValidateProject(token);
+            using (AcquireOperationLock(token))
+            {
+                RequireSingleProjectWorktree(token);
+                ValidateModules(token);
+                string relative = Relative(packageName);
+                string modulesBefore = PackageManifestDocument.ReadText(Path.Combine(root, ".gitmodules"), true);
+                string indexBefore = Git(root, token, "ls-files", "--stage", "-z", "--", relative);
+                string registration = ValidateRegistration(packageName, resolvedPath, token);
+                RequireCleanCheckout(resolvedPath, token);
+                RequireRegisteredOrigin(registration, resolvedPath, token);
+                string branch = ReadTrackedBranch(registration, resolvedPath, token);
+                string previous = Git(resolvedPath, token, "rev-parse", "--verify", "HEAD").Trim();
+                string remoteBranch = "refs/remotes/origin/" + branch;
+                Git(resolvedPath, token, "fetch", "--prune", "--no-tags", "--no-recurse-submodules", "origin",
+                    "+refs/heads/" + branch + ":" + remoteBranch);
+                string target = Git(resolvedPath, token, "rev-parse", "--verify", "--end-of-options", remoteBranch + "^{commit}").Trim();
+                var result = new UpdateResult { Branch = branch, Previous = previous, Current = target };
+                if (!result.Changed)
+                    return result;
+                if (CountCommits(resolvedPath, target, previous, token) != 0)
+                    throw new InvalidOperationException("The checkout has commits that are not on origin/" + branch +
+                        ". Publish or move them with Git before updating.");
+                result.Commits = CountCommits(resolvedPath, previous, target, token);
+                ValidateUpdatedRevision(packageName, resolvedPath, previous, target, token);
+
+                beforeStep?.Invoke("update.before-checkout");
+                token.ThrowIfCancellationRequested();
+                ValidateModules(token);
+                RequireUnchangedText(Path.Combine(root, ".gitmodules"), modulesBefore);
+                RequireUnchangedIndex(relative, indexBefore, token);
+                ValidateRegistration(packageName, resolvedPath, token);
+                RequireCleanCheckout(resolvedPath, token);
+                bool moved = false;
+                try
+                {
+                    Git(resolvedPath, token, "checkout", "--quiet", "--detach", target);
+                    moved = true;
+                    beforeStep?.Invoke("update.before-stage");
+                    if (Git(resolvedPath, token, "rev-parse", "--verify", "HEAD").Trim() != target)
+                        throw new InvalidOperationException("Git did not move the checkout to the updated revision.");
+                    RequireCleanCheckout(resolvedPath, token);
+                    RequireUnchangedIndex(relative, indexBefore, token);
+                    token.ThrowIfCancellationRequested();
+                    Git(root, token, "add", "--", relative);
+                    if (Git(root, token, "ls-files", "--stage", "-z", "--", relative) != "160000 " + target + " 0\t" + relative + "\0")
+                        throw new InvalidOperationException("Git did not stage the updated package revision.");
+                    return result;
+                }
+                catch (Exception exception)
+                {
+                    string state = moved ? RestoreRevision(resolvedPath, relative, indexBefore, previous, target) :
+                        "The checkout was not changed. ";
+                    throw new InvalidOperationException("Submodule update did not finish. " + state + exception.Message, exception);
+                }
+            }
+        }
+
+        private string ReadTrackedBranch(string registration, string path, CancellationToken token)
+        {
+            string branch = GitAllowMissing(root, token, "config", "--no-includes", "--file", ".gitmodules", "--get",
+                "submodule." + registration + ".branch").Trim();
+            if (branch == ".")
+                throw new InvalidOperationException("This submodule follows the project repository's branch. Update it with Git.");
+            if (branch.Length == 0)
+            {
+                // Registrations without a branch follow the repository's default branch.
+                Match head = Regex.Match(Git(path, token, "ls-remote", "--symref", "origin", "HEAD"), @"\Aref: refs/heads/([^\s]+)\tHEAD\n");
+                if (!head.Success)
+                    throw new InvalidOperationException("The repository's default branch could not be determined. Set a branch for this submodule with Git.");
+                branch = head.Groups[1].Value;
+            }
+            Git(root, token, "check-ref-format", "--branch", branch);
+            return branch;
+        }
+
+        private int CountCommits(string path, string from, string to, CancellationToken token)
+        {
+            string count = Git(path, token, "rev-list", "--count", from + ".." + to).Trim();
+            if (!int.TryParse(count, NumberStyles.None, CultureInfo.InvariantCulture, out int value))
+                throw new InvalidDataException("Git returned an invalid commit count.");
+            return value;
+        }
+
+        private void ValidateUpdatedRevision(string name, string path, string previous, string target, CancellationToken token)
+        {
+            // The current checkout has no nested submodules, so only changed entries can introduce one.
+            foreach (string record in Git(path, token, "diff-tree", "-r", "-z", "--no-renames", "--no-commit-id", previous, target)
+                         .Split('\0'))
+            {
+                string[] fields = record.Split(' ');
+                if (record.StartsWith(":", StringComparison.Ordinal) && fields.Length > 1 && fields[1] == "160000")
+                    throw new InvalidOperationException("The updated revision adds nested submodules. Manage this package with Git to preserve their repository data.");
+            }
+            string manifest = Git(path, token, "cat-file", "blob", target + ":package.json");
+            if (new PackageManifestDocument(manifest).ValidatePackage() != name)
+                throw new InvalidOperationException("The updated revision declares a different package name. Review the repository with Git.");
+        }
+
+        private void RequireUnchangedIndex(string relative, string expected, CancellationToken token)
+        {
+            if (Git(root, token, "ls-files", "--stage", "-z", "--", relative) != expected)
+                throw new InvalidOperationException("The package gitlink changed during the operation. Review Git status before retrying.");
+        }
+
+        private string RestoreRevision(string path, string relative, string indexBefore, string previous, string target)
+        {
+            // Restore only the state this operation created: an unstaged, clean move from the verified revision.
+            try
+            {
+                if (Git(root, CancellationToken.None, "ls-files", "--stage", "-z", "--", relative) == indexBefore &&
+                    Git(path, CancellationToken.None, "rev-parse", "--verify", "HEAD").Trim() == target &&
+                    Git(path, CancellationToken.None, "status", "--porcelain=v1", "--untracked-files=all", "--ignored=matching").Length == 0)
+                {
+                    Git(path, CancellationToken.None, "checkout", "--quiet", "--detach", previous);
+                    return "The checkout was restored to " + previous + ". ";
+                }
+            }
+            catch (Exception) { /* Report the retained state below. */ }
+            return "The checkout was left for review; its previous revision was " + previous + ". ";
+        }
+
+        private void RequireRegisteredOrigin(string registration, string path, CancellationToken token)
+        {
+            string repository = Git(root, token, "config", "--no-includes", "--file", ".gitmodules", "--get", "submodule." + registration + ".url").Trim();
+            string origin = Git(path, token, "config", "--get", "remote.origin.url").Trim();
+            if (!string.Equals(repository, origin, StringComparison.Ordinal))
+                throw new InvalidOperationException("The submodule origin does not match .gitmodules. Review its repository identity with Git.");
+            ParseSource(origin, out _, out string revision);
+            if (revision.Length != 0)
+                throw new InvalidOperationException("The registered repository URL must not contain a revision suffix.");
+        }
+
         private static void RequireUnchangedText(string path, string expected)
         {
             CheckPath(path);
@@ -226,13 +373,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             string indexBefore = Git(root, token, "ls-files", "--stage", "-z", "--", Relative(name));
             string registration = ValidateRegistration(name, path, token);
             RequireCleanCheckout(path, token);
-            string repository = Git(root, token, "config", "--no-includes", "--file", ".gitmodules", "--get", "submodule." + registration + ".url").Trim();
-            string origin = Git(path, token, "config", "--get", "remote.origin.url").Trim();
-            if (!string.Equals(repository, origin, StringComparison.Ordinal))
-                throw new InvalidOperationException("The submodule origin does not match .gitmodules. Review its repository identity with Git before removing it.");
-            ParseSource(origin, out _, out string revision);
-            if (revision.Length != 0)
-                throw new InvalidOperationException("The registered repository URL must not contain a revision suffix.");
+            RequireRegisteredOrigin(registration, path, token);
             // Fetch only this repository. A stale local remote-tracking ref cannot prove publication.
             Git(path, token, "fetch", "--prune", "--no-tags", "origin", "+refs/heads/*:refs/remotes/origin/*");
             if (Git(path, token, "rev-list", "--max-count=1", "HEAD", "--all", "--not", "--remotes=origin").Length != 0)
@@ -328,7 +469,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
         {
             string relative = Relative(name);
             if (!SamePath(path, Path.Combine(root, relative)))
-                throw new InvalidOperationException("Only a matching direct Packages/<package-name> submodule can be removed.");
+                throw new InvalidOperationException("Only a matching direct Packages/<package-name> submodule can be changed.");
             CheckPath(path);
             CheckPath(Path.Combine(path, ".git"));
             if (!Directory.Exists(path) || PackageManifestDocument.Read(Path.Combine(path, "package.json")).ValidatePackage() != name)
@@ -344,7 +485,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
                 throw new InvalidOperationException("The package does not have a single verified Git submodule entry in the project index.");
             string commit = entries[0].Split(' ')[1];
             if (!string.Equals(commit, Git(path, token, "rev-parse", "HEAD").Trim(), StringComparison.Ordinal))
-                throw new InvalidOperationException("The submodule commit differs from the parent gitlink. Stage or restore that revision with Git before removing it.");
+                throw new InvalidOperationException("The submodule commit differs from the parent gitlink. Stage or restore that revision with Git before changing this package.");
             string gitDirectory = Git(path, token, "rev-parse", "--absolute-git-dir").Trim();
             CheckPath(gitDirectory);
             string modulesDirectory = Git(root, token, "rev-parse", "--git-path", "modules").Trim();
@@ -390,7 +531,7 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             RejectHiddenIndexEntries(index);
             RejectNestedEntries(index, true);
             if (Git(path, token, "status", "--porcelain=v1", "--untracked-files=all", "--ignored=matching").Length != 0)
-                throw new InvalidOperationException("The submodule has local changes, untracked files, or ignored files. Commit, move, or remove them with Git before uninstalling.");
+                throw new InvalidOperationException("The submodule has local changes, untracked files, or ignored files. Commit, move, or remove them with Git before changing this package.");
         }
 
         private static void RejectHiddenIndexEntries(string index)

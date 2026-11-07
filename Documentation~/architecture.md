@@ -8,8 +8,8 @@ packages, labels submodules, and lists installed GitHub packages in
 Unity's native Package Manager. A Repository link precedes Unity's existing
 package links when a safe repository URL is available. Its scope is status
 and sources, with a small Editor footprint. The native plus menu accepts a
-repository link, and the native removal action removes a verified submodule
-package. It does not discover remote repositories or plan dependencies. The former management implementation is preserved
+repository link, Unity's native Git update action updates a verified submodule
+package, and the native removal action removes one. It does not discover remote repositories or plan dependencies. The former management implementation is preserved
 on [`legacy`](https://github.com/martincalander/GitSubmoduleForUnity/tree/legacy).
 
 ```text
@@ -27,7 +27,7 @@ Editor/
 ├── PackageManagerSubmoduleActions.cs
 │                               native add menu and operation lifetime
 ├── SubmodulePackageOperations.cs
-│                               explicit Git install and removal
+│                               explicit Git install, update, and removal
 ├── PackageManifestDocument.cs
 │                               manifest validation and dependency edits
 └── PackageManagerSubmoduleHarmonyPatch.cs
@@ -167,7 +167,10 @@ it no longer declares or references Newtonsoft. The runtime-specific patching
 libraries and their explicit Editor imports remain unchanged.
 
 Ordinary package actions remain Unity-owned. A Harmony guard prevents Unity's
-raw embedded-package removal from deleting a submodule folder. An explicit
+raw embedded-package removal from deleting a submodule folder. Unity's
+`GitUpdateAction` also hosts **Update** for packages that cached status
+classifies as submodules; other packages keep Unity's Git update. The cached
+classification only routes the click. An explicit
 submodule removal action performs independent, fresh repository and checkout
 validation before modifying Git registration or package files. Cached status
 is never removal authorization.
@@ -204,6 +207,17 @@ helper that outlives Git cannot be safely identified by parentage. In that case
 the operation reports unverified cleanup and retains recovery evidence; reader
 resources are disposed when the helper releases its pipes, without blocking
 the Editor operation.
+
+Update starts from the selected installed package and repeats the removal
+checks for its path, manifest, gitlink, registration, Git directory, origin, and
+clean checkout. It fetches only the tracked branch, recorded in `.gitmodules` or
+read from the remote default branch, and accepts only a fast-forward. The new
+revision must keep the package name and add no nested submodules. The parent
+`.gitmodules`, gitlink, and checkout are rechecked immediately before the
+checkout moves. The update stages only the package gitlink. If a later step
+fails before staging, the operation restores the previous revision when the
+checkout is still clean at the fetched commit; otherwise it reports the previous
+revision for review.
 
 Removal starts from the selected installed package, but independently verifies
 its path, package manifest, parent gitlink, registration, Git directory, local

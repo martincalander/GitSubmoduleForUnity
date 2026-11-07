@@ -96,6 +96,23 @@ The action never converts sources or discards local changes.
 Review the submodule's work and the parent repository's resulting changes in
 your Git client before committing.
 
+## Update Is Missing or Blocked
+
+**Update** appears in the **Manage** menu only for installed packages labelled
+**Submodule**. Wait for the label if Package Manager was just opened.
+
+An update is blocked by the same local checks as removal, and also when the
+checkout has commits that are not on the tracked branch. Commit and publish
+local work, or move it to another branch, before retrying. A submodule
+registered with `branch = .` follows the project repository's branch and must be
+updated with Git. When no branch is recorded, the update uses the repository's
+default branch, so the remote must be reachable to read it. A newer revision
+that renames the package or adds nested submodules must be reviewed with Git.
+
+If the error reports that the checkout was left for review, it names the
+previous commit. Inspect the checkout with `git status` and `git log` before
+moving it back with Git.
+
 ## An Install or Removal Did Not Finish
 
 Read the error's recovery path before retrying. Current operations retain files

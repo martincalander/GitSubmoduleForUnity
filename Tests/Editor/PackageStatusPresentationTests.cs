@@ -253,6 +253,8 @@ namespace MartinCalander.GitSubmoduleManager.Editor.Tests
                 PackageManagerSubmoduleHarmonyPatch.FindMethod("SourceInfoCard", "Refresh", typeof(void), "IPackageVersion"),
                 PackageManagerSubmoduleHarmonyPatch.FindMethod("RemoveCustomAction", "TriggerActionImplementation", typeof(bool), "IPackageVersion"),
                 PackageManagerSubmoduleHarmonyPatch.FindMethod("PackageOperationDispatcher", "RemoveEmbedded", typeof(void), "IPackage"),
+                PackageManagerSubmoduleHarmonyPatch.GetUpdateVisibilityTarget(),
+                PackageManagerSubmoduleHarmonyPatch.GetUpdateTriggerTarget(),
                 PackageManagerSubmoduleNativePage.GetNativeRefreshTarget(),
                 PackageManagerSubmoduleNativePage.GetSidebarRefreshTarget(),
                 PackageRepositoryLink.GetRefreshTarget()

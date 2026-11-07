@@ -69,6 +69,8 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             Patch(PackageManagerSubmoduleActions.GetAddMenuTarget(), nameof(AddMenuPostfix), false);
             Patch(FindMethod("RemoveCustomAction", "TriggerActionImplementation", typeof(bool), "IPackageVersion"), nameof(RemovePrefix), true);
             Patch(FindMethod("PackageOperationDispatcher", "RemoveEmbedded", typeof(void), "IPackage"), nameof(RemoveEmbeddedPrefix), true);
+            Patch(GetUpdateVisibilityTarget(), nameof(UpdateVisiblePostfix), false);
+            Patch(GetUpdateTriggerTarget(), nameof(UpdatePrefix), true);
             Patch(PackageManagerSubmoduleNativePage.GetNativeRefreshTarget(), nameof(RefreshPostfix), false);
             MethodInfo sidebarRefresh = PackageManagerSubmoduleNativePage.GetSidebarRefreshTarget();
             Patch(sidebarRefresh, nameof(SidebarRefreshPostfix), false);
@@ -301,6 +303,25 @@ namespace MartinCalander.GitSubmoduleManager.Editor
             EditorUtility.DisplayDialog("Manage this checkout with Git",
                 "This package is a Git checkout, or its submodule status could not be verified. " +
                 "Remove it with Git after reviewing your local work. Package Manager cannot safely delete it as an embedded folder.", "OK");
+            return false;
+        }
+
+        // Unity's Git update action hosts the native Update entry for verified submodule packages.
+        internal static MethodInfo GetUpdateVisibilityTarget() => FindMethod("GitUpdateAction", "IsVisible", typeof(bool), "IPackageVersion");
+        internal static MethodInfo GetUpdateTriggerTarget() => FindMethod("GitUpdateAction", "TriggerActionImplementation", typeof(bool), "IPackageVersion");
+
+        private static void UpdateVisiblePostfix(object __0, ref bool __result)
+        {
+            if (!__result && TryGetStatus(__0, out _))
+                __result = true;
+        }
+
+        private static bool UpdatePrefix(object __0, ref bool __result)
+        {
+            // Cached status only routes the click; the update operation revalidates everything before mutation.
+            if (!TryGetStatus(__0, out _))
+                return true;
+            __result = PackageManagerSubmoduleActions.RequestUpdate(__0);
             return false;
         }
 
