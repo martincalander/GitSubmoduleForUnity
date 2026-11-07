@@ -1,7 +1,7 @@
 # Installation and Compatibility
 
-`main` contains package status, sources, link-based submodule installation, and
-safe submodule package removal. The former management workflow is preserved on
+`main` contains package status, sources, link-based submodule installation,
+safe fast-forward submodule updates, and safe submodule package removal. The former management workflow is preserved on
 [`legacy`](https://github.com/martincalander/GitSubmoduleForUnity/tree/legacy).
 
 ## Install from Git
@@ -114,7 +114,7 @@ Choose **Sources > GitHub** to view installed GitHub submodules and UPM Git
 dependencies. The source is available even when no package is selected.
 
 There is no Welcome window or Preferences setup. The status view reads local
-installed state. Explicit install and removal actions use Git. See the
+installed state. Explicit install, update, and removal actions use Git. See the
 [user guide](user-guide.md) for details.
 
 ## Team Clone Setup
@@ -156,7 +156,7 @@ are in the [legacy installation guide](https://github.com/martincalander/GitSubm
 
 | Source | Contents |
 | --- | --- |
-| Git URL ending in `#main` or a current checkout | Status, sources, direct install and removal |
+| Git URL ending in `#main` or a current checkout | Status, sources, direct install, update, and removal |
 | Git URL ending in `#legacy` | Former `main` with the fuller management workflow |
 | `v0.8.1` Git tag, OpenUPM `0.8.1`, or signed release `.tgz` | Published earlier workflow |
 | `GitSubmoduleManagerInstaller-0.8.1.unitypackage` | Bootstrap for the earlier OpenUPM release |

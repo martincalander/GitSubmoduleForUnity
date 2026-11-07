@@ -8,7 +8,7 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 `main` now provides installed package status, sources, direct submodule
-installation, and safe removal. The former `main`
+installation, safe fast-forward updates, and safe removal. The former `main`
 with discovery and package-management workflows is preserved on
 [`legacy`](https://github.com/martincalander/GitSubmoduleForUnity/tree/legacy).
 Local validation is recorded in the contribution guide. These changes have not
@@ -19,8 +19,9 @@ been published as a new release; existing `0.8.1` artifacts remain unchanged.
 - Add **Update** to Unity's native **Manage** menu for verified submodule
   packages. It fetches the tracked branch, fast-forwards a clean checkout to the
   latest commit, and stages the new gitlink. Local changes, diverged commits, a
-  changed package name, and new nested submodules block the update, and a
-  failed staging step restores the previous revision.
+  changed package name, and new nested submodules block the update. When a
+  later step fails, a clean checkout is restored to the previous revision;
+  otherwise it is left for review.
 - Add **Install package as Git submodule...** to Package Manager's plus menu. A
   repository link is enough for a root UPM package; the action validates its
   manifest and installs it under its declared package name.
@@ -111,7 +112,7 @@ been published as a new release; existing `0.8.1` artifacts remain unchanged.
   Manager and keep Unity's existing package information.
 - Limit **Sources > GitHub** to installed GitHub submodules and UPM Git
   dependencies using Unity's existing package records.
-- Keep updates and conversion with Unity and Git. Retain a guard against Unity
+- Keep conversion with Unity and Git. Retain a guard against Unity
   deleting submodule folders as ordinary embedded packages; verified submodules
   use the dedicated removal action.
 - Select patching libraries by Editor runtime. Mono preserves the original

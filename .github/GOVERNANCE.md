@@ -17,8 +17,9 @@ Decisions are evaluated in this order:
 4. keep background work and memory use small without compromising correctness;
 5. maintain clear, testable, and reviewable code.
 
-The `main` branch develops this focused design. Installation, conversion,
-updates, dependency resolution, and removal belong to Unity and Git. The former
+The `main` branch develops this focused design. Explicit installation,
+fast-forward updates, and removal of verified submodule packages are its only
+package changes. Conversion and dependency resolution belong to Unity and Git. The former
 management workflows are preserved on
 [`legacy`](https://github.com/martincalander/GitSubmoduleForUnity/tree/legacy);
 published `0.8.1` artifacts still contain that earlier implementation.

@@ -32,9 +32,9 @@ local coverage.
 
 ## Product Boundary
 
-Direct installation from a Git URL and safe submodule package removal live in
-Unity's native Package Manager. Updates, conversion, and dependency planning
-stay with Unity and Git. Remote GitHub discovery, account setup, Welcome and
+Direct installation from a Git URL, safe fast-forward updates, and safe
+submodule package removal live in Unity's native Package Manager. Conversion
+and dependency planning stay with Unity and Git. Remote GitHub discovery, account setup, Welcome and
 Preferences surfaces, and automatic repository operations are outside the
 current product scope. Published `0.8.1` artifacts retain those legacy workflows.
 

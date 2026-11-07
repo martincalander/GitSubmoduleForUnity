@@ -3,7 +3,7 @@
 ## Scope
 
 The `main` branch contains an Editor-only installed-package view and explicit
-submodule package install and removal actions. It classifies
+submodule package install, update, and removal actions. It classifies
 packages, labels submodules, and lists installed GitHub packages in
 Unity's native Package Manager. A Repository link precedes Unity's existing
 package links when a safe repository URL is available. Its scope is status

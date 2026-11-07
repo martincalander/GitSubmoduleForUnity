@@ -46,8 +46,9 @@ changing classification, reflection, Harmony hooks, or lifecycle behavior.
 - Keep all product code under `Editor/` and tests under `Tests/Editor/`.
 - Avoid permanent window polling, background network discovery, and rebuilding
   unchanged views. Measure performance claims against a stated baseline.
-- Keep status discovery read-only. Only explicit install or removal actions may
-  modify package checkouts, Git registration, or the project manifest.
+- Keep status discovery read-only. Only explicit install, update, or removal
+  actions may modify package checkouts, Git registration, or the project
+  manifest.
 - Preserve native Package Manager pages and ordinary package actions.
 - Keep the guard against raw embedded-folder deletion of submodules.
 - Validate reflection seams independently and fail closed when contracts change.

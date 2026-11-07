@@ -38,7 +38,7 @@ body:
       options:
         - label: This keeps the extension focused on installed-package status and sources, with low Editor overhead.
           required: true
-        - label: This leaves installation, updates, conversion, and removal to Unity and Git.
+        - label: This leaves conversion and dependency planning to Unity and Git, and keeps package changes to explicit install, update, and removal actions.
           required: true
         - label: This does not require storing credentials or installing system tools from Unity.
           required: true

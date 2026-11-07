@@ -13,8 +13,9 @@ integer suffix. If a newer alpha is rejected by number alone, check that the
 installed package contains this policy; older revisions use an exact alpha list.
 Passing the version gate still requires the native API checks to succeed.
 
-Check the Unity Console for compilation or compatibility diagnostics and reopen
-Package Manager after scripts finish compiling.
+Check the Unity Console for compilation errors and reopen Package Manager after
+scripts finish compiling. A native contract that no longer matches leaves the
+affected integration off without a Console message.
 
 ## The GitHub Page Is Empty
 
@@ -47,8 +48,9 @@ conditions:
   repository's staged changes and submodule entry.
 - A package folder or metadata path that does not match: compare the folder,
   `package.json` name, `.gitmodules` path, and Git index path, including spelling.
-- A failed metadata read: check the Console and confirm that Git is
-  available and the Unity project is the parent repository's root.
+- A failed metadata read: no submodule labels appear and nothing is logged.
+  Confirm that Git is available and the Unity project is the parent
+  repository's root.
 
 Review the existing state before making changes with your Git client. The
 extension does not create missing registrations or repair paths automatically.
@@ -73,14 +75,17 @@ if the selection no longer matches Unity's installed record.
 
 Relative, local, and unknown SSH sources have no guessed browser destination.
 Unavailable or unverified source metadata also leaves the link absent. The
-extension does not query the network to find a missing repository URL. Check the
-Console for compatibility diagnostics if a supported URL has no link.
+extension does not query the network to find a missing repository URL. If a
+supported URL still has no link, Unity's native links row may no longer match
+the extension's hook. The extension then leaves the row unchanged and does not
+log a Console message.
 
 ## Remove Is Blocked for a Submodule
 
 Package Manager **Remove** handles verified submodules through a Git-aware
-removal action. Commit and push local work, remove untracked files only after
-reviewing them, and resolve any Git registration mismatch before retrying.
+removal action. Commit and push local work, remove untracked or ignored files
+only after reviewing them, and resolve any Git registration mismatch before
+retrying.
 An unavailable remote or nested submodule also blocks removal.
 
 Git's `assume-unchanged` and `skip-worktree` flags can hide modified files.

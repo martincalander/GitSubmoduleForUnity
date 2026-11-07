@@ -43,46 +43,74 @@ This section describes the status and sources extension on `main`.
 
 ### Command execution
 
-The package launches local read-only `git` commands with
-`UseShellExecute = false` and fixed arguments. Repository data is never used as
-a command or evaluated through a shell.
+The package launches `git` with `UseShellExecute = false` and individually
+quoted fixed arguments. Repository data is never used as a command or
+evaluated through a shell.
 
-- commands read the project root, index location, package gitlinks, and local
-  `.gitmodules` registrations;
+- status discovery runs local read-only commands that read the project root,
+  index location, package gitlinks, and local `.gitmodules` registrations;
 - `.gitmodules` includes are disabled, and linked or oversized `.gitmodules`
   files are rejected;
-- inherited `GIT_*` environment variables are cleared, optional Git locks are
-  disabled, and interactive credential prompts are disabled;
+- inherited `GIT_*` environment variables are cleared and interactive
+  credential prompts are disabled; status reads also disable optional Git locks;
 - stdout and stderr are redirected, drained concurrently, bounded, and treated
   as unusable for structural parsing when incomplete;
 - commands have bounded timeouts;
 - missing CLI tools are never installed by the package; it never runs a
   downloaded install script or user-provided command.
 
+### Explicit Package Operations
+
+Install, update, and removal run only when a user requests them in Package
+Manager. They are the only parts of the extension that contact a Git remote or
+change the project:
+
+- install clones a user-supplied HTTPS or SSH repository URL into a staging
+  folder under `Library/`, validates its root `package.json`, and registers it
+  with `git submodule add`; URLs with embedded credentials, queries, or
+  whitespace are rejected;
+- update fetches the tracked branch from the submodule's registered `origin`,
+  fast-forwards a clean checkout, and stages the new gitlink;
+- removal fetches `origin` to confirm that local commits are published, moves
+  the checkout to a recovery folder, and removes the gitlink, submodule
+  registration, and a same-name dependency in `Packages/manifest.json`;
+- Git's local file transport is disabled, SSH runs in batch mode, and each Git
+  command times out after 120 seconds;
+- a lock in the Git directory prevents concurrent operations, and manifest
+  edits are atomic replacements that keep a backup;
+- local changes, untracked or ignored files, unpublished commits, and ambiguous
+  registrations block the operation, and recovery data is retained rather than
+  deleted.
+
 ### Credentials and Network Access
 
-The extension does not collect credentials, contact GitHub, run GitHub CLI, or
-perform remote Git operations. It reads installed package information and
-local Git metadata. A GitHub source label describes a locally recorded source;
-it does not verify a remote repository or authorize a network connection.
-Unity and Git retain ownership of package installation and authentication
-outside this extension.
+The extension does not collect or store credentials, call the GitHub API, or
+run GitHub CLI. Status discovery reads installed package information and local
+Git metadata without network access. A GitHub source label describes a locally
+recorded source; it does not verify a remote repository or authorize a network
+connection. Explicit install, update, and removal actions reach the package
+repository through the user's existing Git configuration and credentials, with
+interactive prompts disabled.
 
 ### Filesystem Access
 
-The package reads the project index and `.gitmodules` through bounded local Git
-commands and compares those records with Unity's registered package paths.
-Classification requires a matching direct `Packages/<package-name>` path,
+Status discovery reads the project index and `.gitmodules` through bounded
+local Git commands and compares those records with Unity's registered package
+paths. Classification requires a matching direct `Packages/<package-name>` path,
 a stage-zero gitlink, and an unambiguous submodule registration. It is not a
 claim that the checkout is clean or safe to delete.
 
-The extension performs no repository or manifest writes. For direct children
-of `Packages/`, it blocks Unity's raw embedded-folder deletion when the path
-has a gitlink, submodule registration, or local `.git` file or directory. It
-also blocks that deletion while status is pending, unavailable, or stale.
-The guard compares normalized paths independently of the package name, so a
-folder with a different name still receives protection. Existing recovery
-files from earlier versions remain outside this extension's ownership.
+Status discovery performs no repository or manifest writes. Explicit operations
+change only the validated `Packages/<package-name>` folder, its gitlink and
+submodule registration, `Packages/manifest.json` during removal, and their own
+staging and recovery folders under `Library/SubmodulePackageOperations`. They
+refuse linked paths. For direct children of `Packages/`, the extension blocks
+Unity's raw embedded-folder deletion when the path has a gitlink, submodule
+registration, or local `.git` file or directory. It also blocks that deletion
+while status is pending, unavailable, or stale. The guard compares normalized
+paths independently of the package name, so a folder with a different name
+still receives protection. Existing recovery files from earlier versions remain
+outside this extension's ownership.
 
 ## User Responsibilities
 

@@ -96,7 +96,8 @@ untracked or ignored files, commits that are not on the tracked branch, a
 checkout that differs from the parent gitlink, and ambiguous Git registration
 block the update. A newer revision that declares a different package name or
 adds nested submodules is refused. If staging fails after the checkout moved,
-the checkout is restored to its previous commit. A package that is already
+a clean checkout is restored to its previous commit; otherwise the checkout is
+left for review and the previous commit is reported. A package that is already
 current is reported without changes.
 
 ### Remove a Submodule Package
@@ -109,9 +110,9 @@ remaining packages. Review the resulting parent repository changes before
 committing.
 
 Removal verifies the checkout and its remote before changing files. Commit and
-push local work first. Dirty or untracked files, unpublished commits, ambiguous
-Git registration, nested submodules, and installed packages that depend on the
-selected package block removal. The action does not force-delete local work.
+push local work first. Dirty, untracked, or ignored files, unpublished
+commits, ambiguous Git registration, nested submodules, and installed packages
+that depend on the selected package block removal. The action does not force-delete local work.
 
 Removal also works immediately after installation, before committing the parent
 repository. The checkout is moved to a unique recovery folder under
